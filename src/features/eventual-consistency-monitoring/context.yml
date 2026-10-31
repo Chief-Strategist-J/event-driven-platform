@@ -1,0 +1,2 @@
+feature: eventual-consistency-monitoring
+mode: stateless_hexagonal

@@ -1,0 +1,2 @@
+feature: dead-letter-handling
+mode: stateless_hexagonal

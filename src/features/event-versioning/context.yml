@@ -1,0 +1,2 @@
+feature: event-versioning
+mode: stateless_hexagonal

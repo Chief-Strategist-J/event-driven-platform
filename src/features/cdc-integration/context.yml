@@ -1,0 +1,2 @@
+feature: cdc-integration
+mode: stateless_hexagonal

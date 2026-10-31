@@ -1,0 +1,2 @@
+feature: event-schema-registry
+mode: stateless_hexagonal

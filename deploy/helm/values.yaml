@@ -1,0 +1,5 @@
+# Base default Helm values
+replicaCount: 1
+image:
+  repository: ghcr.io/scaibu/event-driven-platform
+  tag: latest

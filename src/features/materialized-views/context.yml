@@ -1,0 +1,2 @@
+feature: materialized-views
+mode: stateless_hexagonal

@@ -1,0 +1,2 @@
+feature: schema-evolution
+mode: stateless_hexagonal

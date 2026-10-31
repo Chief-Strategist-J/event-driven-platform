@@ -1,0 +1,2 @@
+feature: cqrs
+mode: stateless_hexagonal

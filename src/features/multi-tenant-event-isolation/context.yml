@@ -1,0 +1,2 @@
+feature: multi-tenant-event-isolation
+mode: stateless_hexagonal

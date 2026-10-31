@@ -1,0 +1,2 @@
+feature: event-ordering-protection
+mode: stateless_hexagonal

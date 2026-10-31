@@ -1,0 +1,2 @@
+feature: partitioning-strategy
+mode: stateless_hexagonal

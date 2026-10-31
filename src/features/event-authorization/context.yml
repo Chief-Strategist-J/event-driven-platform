@@ -1,0 +1,2 @@
+feature: event-authorization
+mode: stateless_hexagonal

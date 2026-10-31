@@ -1,0 +1,2 @@
+feature: retry-topics
+mode: stateless_hexagonal
