@@ -1,5 +1,19 @@
-# Kubernetes Service routing
 apiVersion: v1
 kind: Service
 metadata:
   name: event-driven-platform
+  labels:
+    app.kubernetes.io/name: event-driven-platform
+spec:
+  type: ClusterIP
+  ports:
+    - name: connect-rpc
+      port: 50051
+      targetPort: connect-rpc
+      protocol: TCP
+    - name: http-admin
+      port: 8081
+      targetPort: http-admin
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: event-driven-platform

@@ -1,5 +1,11 @@
-# Pod Disruption Budget
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: event-driven-platform
+  name: event-driven-platform-pdb
+  labels:
+    app.kubernetes.io/name: event-driven-platform
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: event-driven-platform

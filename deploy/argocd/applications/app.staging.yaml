@@ -2,3 +2,19 @@ apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: event-driven-platform-staging
+  namespace: argocd
+spec:
+  project: event-driven-platform
+  source:
+    repoURL: "https://github.com/Chief-Strategist-J/System-Architect.git"
+    targetRevision: HEAD
+    path: event-driven-platform/deploy/k8s/overlays/staging
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: event-platform-staging
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

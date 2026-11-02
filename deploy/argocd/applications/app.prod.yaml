@@ -2,3 +2,16 @@ apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
   name: event-driven-platform-prod
+  namespace: argocd
+spec:
+  project: event-driven-platform
+  source:
+    repoURL: "https://github.com/Chief-Strategist-J/System-Architect.git"
+    targetRevision: main
+    path: event-driven-platform/deploy/k8s/overlays/prod
+  destination:
+    server: "https://kubernetes.default.svc"
+    namespace: event-platform-prod
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true

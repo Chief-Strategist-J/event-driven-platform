@@ -1,1 +1,21 @@
-# Parameterized Ingress template
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "event-driven-platform.fullname" . }}
+  labels:
+    {{- include "event-driven-platform.labels" . | nindent 4 }}
+  annotations:
+    kubernetes.io/ingress.class: envoy
+    envoy.ingress.kubernetes.io/protocol: "grpc"
+spec:
+  rules:
+    - host: api.events.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "event-driven-platform.fullname" . }}
+                port:
+                  number: {{ .Values.service.connectRpcPort }}

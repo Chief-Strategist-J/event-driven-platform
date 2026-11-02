@@ -1,2 +1,327 @@
-# Local backing dependencies (Postgres, Redis, Kafka)
-version: '3.8'
+name: ${COMPOSE_PROJECT_NAME:-event_platform}
+
+x-hardening: &hardening
+  read_only: false
+  cap_drop: [ALL]
+  security_opt: []
+  init: false
+  deploy:
+    resources:
+      limits:
+        pids: 256
+  restart: unless-stopped
+  logging: &logging
+    driver: local
+    options: { max-size: "10m", max-file: "5" }
+
+services:
+  db:
+    image: postgres:16-bookworm@sha256:5c4783a8cc3f0074912164f94dfa1be4e043438f0f707cf968d7af9a0d31a2c8
+    restart: unless-stopped
+    command: ["postgres", "-c", "wal_level=logical", "-c", "max_wal_senders=10", "-c", "max_replication_slots=10"]
+    security_opt: []
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]
+    networks: [backend]
+    ports:
+      - "127.0.0.1:5432:5432"
+    environment:
+      POSTGRES_DB: event_store
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/db_password
+    secrets: [db_password]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    shm_size: 256m
+    stop_grace_period: 60s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d event_store"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 1G }
+    logging: *logging
+
+  cache:
+    <<: *hardening
+    cap_drop: []
+    image: redis:7.4-bookworm@sha256:b6b6e3dc0c0952737748e55d5d885272840c7e42ba41ab1d5489f693419882f5
+    command: ["redis-server", "--maxmemory", "200mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+    networks: [backend]
+    ports:
+      - "127.0.0.1:6379:6379"
+    tmpfs: [/data]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits: { memory: 256M }
+
+  kafka:
+    image: apache/kafka:3.8.0@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f
+    restart: unless-stopped
+    security_opt: []
+    cap_drop: []
+    networks: [backend]
+    ports:
+      - "127.0.0.1:9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_LISTENERS: "PLAINTEXT://:9092,CONTROLLER://:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://kafka:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+      KAFKA_LOG_DIRS: "/var/lib/kafka/data"
+      CLUSTER_ID: "5L622nShTUiT8NYvQvGh3x"
+    volumes: [kafkadata:/var/lib/kafka/data]
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server 127.0.0.1:9092 >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 1G }
+    logging: *logging
+
+  apicurio:
+    image: apicurio/apicurio-registry-mem:2.6.5.Final@sha256:6e033230a1e06fa99e900cfa7be9381cbb46755ec56133a8b274c5ef3fc7b3cb
+    restart: unless-stopped
+    networks: [backend]
+    ports:
+      - "127.0.0.1:8082:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8080/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  debezium:
+    profiles: [cdc]
+    image: debezium/connect:2.7.3.Final@sha256:92f58fc542cfb8fbdd82f07d2c3e1c6670868f0cb620027f3c4c954a37b38d33
+    restart: unless-stopped
+    networks: [backend]
+    ports:
+      - "127.0.0.1:8083:8083"
+    environment:
+      BOOTSTRAP_SERVERS: "kafka:9092"
+      GROUP_ID: "1"
+      CONFIG_STORAGE_TOPIC: "my_connect_configs"
+      OFFSET_STORAGE_TOPIC: "my_connect_offsets"
+      STATUS_STORAGE_TOPIC: "my_connect_statuses"
+    depends_on:
+      kafka: { condition: service_healthy }
+      db:    { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:8083/connectors || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+    deploy:
+      resources:
+        limits: { memory: 768M }
+
+  opensearch:
+    profiles: [cdc-search]
+    image: opensearchproject/opensearch:2.17.1@sha256:9f4007bbf5194ea746ef717462faebf156d028b031448b1aa1c7201c1f516a70
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m
+    networks: [backend]
+    ports:
+      - "127.0.0.1:9200:9200"
+    volumes: [opensearch_data:/usr/share/opensearch/data]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:9200/_cluster/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits: { memory: 1G }
+
+  minio:
+    profiles: [cdc-search]
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z@sha256:22fa45e3dcf6fe34267e8913b482200a7fae5e656d0d21a22497ec09e7c10b78
+    command: ["server", "/data", "--console-address", ":9001"]
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadminpassword
+    networks: [backend]
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes: [minio_data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://127.0.0.1:9000/minio/health/live || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  tempo:
+    profiles: [observability]
+    <<: *hardening
+    cap_drop: []
+    image: grafana/tempo:2.6.0@sha256:f55a8a1937fff0af3a760d376b476c8327fb30e432d5e7630d7938b67691e822
+    command: ["-config.file=/etc/tempo.yaml"]
+    networks: [backend, frontend]
+    ports: ["127.0.0.1:3200:3200"]
+    tmpfs: [/tmp]
+    volumes:
+      - ./tempo-config.yaml:/etc/tempo.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3200/ready || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  loki:
+    profiles: [observability]
+    <<: *hardening
+    cap_drop: []
+    image: grafana/loki:3.1.1@sha256:e689cc634841c937de4d7ea6157f17e29cf257d6a320f1c293ab18d46cfea986
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    networks: [backend, frontend]
+    ports: ["127.0.0.1:3100:3100"]
+    tmpfs: [/tmp]
+    volumes:
+      - ./loki-config.yaml:/etc/loki/local-config.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3100/ready || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  prometheus:
+    profiles: [observability]
+    <<: *hardening
+    cap_drop: []
+    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/tmp/prometheus"
+      - "--web.enable-lifecycle"
+    networks: [backend, frontend]
+    ports: ["127.0.0.1:9090:9090"]
+    tmpfs: [/tmp]
+    volumes:
+      - ./prometheus.yaml:/etc/prometheus/prometheus.yml:ro
+    healthcheck:
+      test: ["CMD", "/bin/sh", "-c", "wget -qO- http://127.0.0.1:9090/-/ready || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  otel-collector:
+    profiles: [observability]
+    <<: *hardening
+    cap_drop: []
+    image: otel/opentelemetry-collector-contrib:0.108.0@sha256:923eb1cfae32fe09676cfd74762b2b237349f2273888529594f6c6ffe1fb3d7e
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    networks: [backend, frontend]
+    ports:
+      - "127.0.0.1:4317:4317"
+      - "127.0.0.1:4318:4318"
+    tmpfs: [/tmp]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    deploy:
+      resources:
+        limits: { memory: 256M }
+
+  grafana:
+    profiles: [observability]
+    <<: *hardening
+    cap_drop: []
+    image: grafana/grafana:11.2.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
+    ports: ["127.0.0.1:3000:3000"]
+    networks: [frontend, backend]
+    tmpfs: [/tmp]
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./grafana-datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { memory: 512M }
+
+  envoy:
+    image: envoyproxy/envoy:v1.31.2@sha256:bf2385ee7f1fbc7c01a2fca8f43c3325c754d90f23a67d021c38fa80425712e0
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "127.0.0.1:9901:9901"
+    networks: [frontend]
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    command: ["-c", "/etc/envoy/envoy.yaml"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9901/ready || exit 1"]
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits: { memory: 256M }
+
+networks:
+  frontend: {}
+  backend: {}
+  egress: {}
+
+volumes:
+  pgdata:
+    name: ${COMPOSE_PROJECT_NAME:-event_platform}_pgdata
+  kafkadata:
+    name: ${COMPOSE_PROJECT_NAME:-event_platform}_kafkadata
+  opensearch_data:
+    name: ${COMPOSE_PROJECT_NAME:-event_platform}_opensearch_data
+  minio_data:
+    name: ${COMPOSE_PROJECT_NAME:-event_platform}_minio_data
+
+secrets:
+  db_password:
+    file: ${SECRETS_DIR:-./secrets}/db_password.txt

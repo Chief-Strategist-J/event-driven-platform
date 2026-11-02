@@ -1,5 +1,31 @@
-# Base default Helm values
-replicaCount: 1
+replicaCount: 2
+
 image:
   repository: ghcr.io/scaibu/event-driven-platform
-  tag: latest
+  pullPolicy: IfNotPresent
+  tag: "1.0.0"
+
+service:
+  type: ClusterIP
+  connectRpcPort: 50051
+  adminPort: 8081
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 250m
+    memory: 256Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 75
+
+env:
+  KAFKA_BROKERS: "kafka:9092"
+  SCHEMA_REGISTRY_URL: "http://apicurio:8080/apis/registry/v2"
+  DB_HOST: "db"
+  CACHE_HOST: "cache"

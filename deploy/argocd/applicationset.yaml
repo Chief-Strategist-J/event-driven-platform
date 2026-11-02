@@ -1,4 +1,30 @@
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
-  name: event-driven-platform-set
+  name: event-driven-platform-apps
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - env: dev
+            cluster: https://kubernetes.default.svc
+          - env: staging
+            cluster: https://kubernetes.default.svc
+          - env: prod
+            cluster: https://kubernetes.default.svc
+  template:
+    metadata:
+      name: "event-driven-platform-{{env}}"
+    spec:
+      project: event-driven-platform
+      source:
+        repoURL: "https://github.com/Chief-Strategist-J/System-Architect.git"
+        targetRevision: HEAD
+        path: "event-driven-platform/deploy/k8s/overlays/{{env}}"
+      destination:
+        server: "{{cluster}}"
+        namespace: "event-platform-{{env}}"
+      syncPolicy:
+        syncOptions:
+          - CreateNamespace=true

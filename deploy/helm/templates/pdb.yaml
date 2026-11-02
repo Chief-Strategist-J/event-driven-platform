@@ -1,1 +1,11 @@
-# Parameterized PDB template
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "event-driven-platform.fullname" . }}-pdb
+  labels:
+    {{- include "event-driven-platform.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "event-driven-platform.selectorLabels" . | nindent 6 }}

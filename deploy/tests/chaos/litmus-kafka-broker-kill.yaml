@@ -1,0 +1,25 @@
+apiVersion: litmuschaos.io/v1alpha1
+kind: ChaosEngine
+metadata:
+  name: kafka-broker-kill
+  namespace: event-platform-dev
+spec:
+  engineState: "active"
+  appinfo:
+    appns: "event-platform-dev"
+    applabel: "app.kubernetes.io/name=kafka"
+    appkind: "statefulset"
+  chaosServiceAccount: "litmus-admin"
+  experiments:
+    - name: pod-delete
+      spec:
+        components:
+          env:
+            - name: TOTAL_CHAOS_DURATION
+              value: "60"
+            - name: CHAOS_INTERVAL
+              value: "10"
+            - name: FORCE
+              value: "true"
+            - name: PODS_AFFECTED_PERC
+              value: "33"

@@ -1,3 +1,62 @@
-# Container registry endpoints and credentials
-registry:
-  url: "ghcr.io/scaibu"
+version: 1
+mirror: ghcr.io/scaibu/mirror
+bases:
+  go-builder:
+    upstream: golang:1.23.1-bookworm
+    digest: sha256:d824d528994a5c92c813be5bfb3a58eeb06f190a07e868a83ee07ff5b3f11467
+    output: ghcr.io/scaibu/base-go-builder
+    healthcheck_style: binary-subcommand
+  runtime:
+    upstream: debian:bookworm-slim
+    digest: sha256:49195b098197775ce087dd46c7bc3a670f5e1f0217ec5e1bce9f6b5791dfae40
+    output: ghcr.io/scaibu/base-runtime
+    healthcheck_style: exec-probe
+  envoy:
+    upstream: envoyproxy/envoy:v1.31.2
+    digest: sha256:bf2385ee7f1fbc7c01a2fca8f43c3325c754d90f23a67d021c38fa80425712e0
+    output: ghcr.io/scaibu/envoy
+    healthcheck_style: http-admin
+  kafka:
+    upstream: apache/kafka:3.8.0
+    digest: sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f
+    output: ghcr.io/scaibu/kafka
+    healthcheck_style: broker-api
+  apicurio:
+    upstream: apicurio/apicurio-registry-mem:2.6.5.Final
+    digest: sha256:6e033230a1e06fa99e900cfa7be9381cbb46755ec56133a8b274c5ef3fc7b3cb
+    output: ghcr.io/scaibu/apicurio-registry
+    healthcheck_style: http-health
+  debezium:
+    upstream: debezium/connect:2.7.3.Final
+    digest: sha256:92f58fc542cfb8fbdd82f07d2c3e1c6670868f0cb620027f3c4c954a37b38d33
+    output: ghcr.io/scaibu/debezium-connect
+    healthcheck_style: http-rest
+  postgres:
+    upstream: postgres:16-bookworm
+    digest: sha256:5c4783a8cc3f0074912164f94dfa1be4e043438f0f707cf968d7af9a0d31a2c8
+    output: ghcr.io/scaibu/postgres
+    healthcheck_style: pg-isready
+  redis:
+    upstream: redis:7.4-bookworm
+    digest: sha256:b6b6e3dc0c0952737748e55d5d885272840c7e42ba41ab1d5489f693419882f5
+    output: ghcr.io/scaibu/redis
+    healthcheck_style: redis-ping
+  opensearch:
+    upstream: opensearchproject/opensearch:2.17.1
+    digest: sha256:9f4007bbf5194ea746ef717462faebf156d028b031448b1aa1c7201c1f516a70
+    output: ghcr.io/scaibu/opensearch
+    healthcheck_style: http-health
+  minio:
+    upstream: minio/minio:RELEASE.2024-10-13T13-34-11Z
+    digest: sha256:22fa45e3dcf6fe34267e8913b482200a7fae5e656d0d21a22497ec09e7c10b78
+    output: ghcr.io/scaibu/minio
+    healthcheck_style: http-live
+policy:
+  max_base_age_days: 30
+  scan:
+    tool: trivy
+    fail_on:
+      - HIGH
+      - CRITICAL
+    ignore_unfixed: true
+  sign: cosign

@@ -1,5 +1,21 @@
-# Ingress routing rules
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: event-driven-platform
+  name: event-driven-platform-ingress
+  labels:
+    app.kubernetes.io/name: event-driven-platform
+  annotations:
+    kubernetes.io/ingress.class: envoy
+    envoy.ingress.kubernetes.io/protocol: "grpc"
+spec:
+  rules:
+    - host: api.events.internal
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: event-driven-platform
+                port:
+                  number: 50051

@@ -1,5 +1,34 @@
-# Injected environment configurations
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: event-driven-platform-config
+  name: event-platform-config
+  labels:
+    app.kubernetes.io/name: event-driven-platform
+data:
+  default.yaml: |
+    server:
+      name: "event-driven-platform"
+      connect_rpc_address: "0.0.0.0:50051"
+      admin_bind_address: "0.0.0.0:8081"
+      idle_timeout_seconds: 60
+      shutdown_deadline_seconds: 30
+    messaging:
+      kafka_brokers:
+        - "kafka:9092"
+      schema_registry_url: "http://apicurio:8080/apis/registry/v2"
+      producer:
+        acks: "all"
+        idempotence: true
+        linger_ms: 5
+        compression: "zstd"
+      consumer:
+        group_id: "event-platform-group"
+        enable_auto_commit: false
+        auto_offset_reset: "earliest"
+    cqrs:
+      read_model:
+        opensearch_url: "http://opensearch:9200"
+      write_model:
+        postgres_host: "db"
+        postgres_port: 5432
+        postgres_db: "event_store"

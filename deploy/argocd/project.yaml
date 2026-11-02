@@ -2,3 +2,16 @@ apiVersion: argoproj.io/v1alpha1
 kind: AppProject
 metadata:
   name: event-driven-platform
+  namespace: argocd
+spec:
+  description: "Event Driven Platform GitOps Project"
+  sourceRepos:
+    - "https://github.com/Chief-Strategist-J/System-Architect.git"
+  destinations:
+    - namespace: "event-platform-*"
+      server: "https://kubernetes.default.svc"
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: "external-secrets.io"
+      kind: ClusterSecretStore

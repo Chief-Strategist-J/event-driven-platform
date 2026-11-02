@@ -1,8 +1,63 @@
-# Declares hostnames, ports & protocols for sibling services
-services:
-  - name: py-service-1
-    port: 8001
-  - name: py-service-2
-    port: 8002
-  - name: node-service-1
+version: 1
+service:
+  name: event-driven-platform
+  internal_hostname: platform.internal
+  connect_rpc_port: 50051
+  admin_port: 8081
+  protocol: gRPC/HTTP2
+dependencies:
+  api_gateway:
+    hostname: envoy
+    port: 8080
+    admin_port: 9901
+    protocol: HTTP/2
+  schema_registry:
+    hostname: apicurio
+    port: 8080
+    protocol: HTTP/1.1
+  database:
+    hostname: db
+    port: 5432
+    protocol: TCP/PostgreSQL
+  cdc:
+    hostname: debezium
+    port: 8083
+    protocol: HTTP/REST
+  cache:
+    hostname: cache
+    port: 6379
+    protocol: TCP/Redis
+  messaging:
+    hostname: kafka
+    port: 9092
+    protocol: TCP/Kafka
+  search:
+    hostname: opensearch
+    port: 9200
+    protocol: HTTP
+  object_storage:
+    hostname: minio
+    api_port: 9000
+    console_port: 9001
+    protocol: HTTP/S3
+  telemetry:
+    hostname: otel-collector
+    grpc_port: 4317
+    http_port: 4318
+    protocol: gRPC/OTLP
+  tracing_backend:
+    hostname: tempo
+    port: 3200
+    protocol: HTTP
+  log_storage:
+    hostname: loki
+    port: 3100
+    protocol: HTTP
+  metrics:
+    hostname: prometheus
+    port: 9090
+    protocol: HTTP
+  dashboards:
+    hostname: grafana
     port: 3000
+    protocol: HTTP
