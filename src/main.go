@@ -118,7 +118,7 @@ func describeService() chassis.ServiceSpec {
 			orderingSvc := orderingService.NewEventOrderingService(orderingRepo)
 			retrySvc := retryService.NewRetryTopicsService(retryRepo)
 			groupSvc := groupService.NewConsumerGroupsService(groupRepo)
-			offsetRepo := offsetAdapters.NewMemoryOffsetManagementAdapter()
+			offsetRepo := offsetAdapters.NewPostgresOffsetManagementAdapter(db)
 			offsetSvc := offsetService.NewOffsetManagementService(offsetRepo)
 
 			return chassis.Services{
