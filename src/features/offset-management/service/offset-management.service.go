@@ -76,6 +76,7 @@ func (s *OffsetManagementService) CommitOffset(ctx context.Context, input contra
 		StoredOffset:  input.Offset,
 		LogEndOffset:  input.LogEndOffset,
 		Lag:           lag,
+		CommitEpoch:   1,
 		Metadata:      input.Metadata,
 	}
 
@@ -170,6 +171,7 @@ func (s *OffsetManagementService) RewindOffset(ctx context.Context, input contra
 		StoredOffset:  input.TargetOffset,
 		LogEndOffset:  logEndOffset,
 		Lag:           lag,
+		CommitEpoch:   1,
 	}
 
 	res, err := s.repo.UpsertStoredOffset(ctx, rec)
@@ -260,6 +262,7 @@ func (s *OffsetManagementService) FastForwardOffset(ctx context.Context, input c
 		StoredOffset:  targetOffset,
 		LogEndOffset:  existing.LogEndOffset,
 		Lag:           lag,
+		CommitEpoch:   1,
 	}
 
 	res, err := s.repo.UpsertStoredOffset(ctx, rec)
