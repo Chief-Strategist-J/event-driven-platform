@@ -1,0 +1,6 @@
+DROP TRIGGER IF EXISTS trg_prevent_consumer_offset_audit_log_modification ON consumer_offset_audit_log;
+DROP FUNCTION IF EXISTS fn_prevent_consumer_offset_audit_log_modification();
+DROP TRIGGER IF EXISTS trg_prevent_consumer_stored_offset_immutable_update ON consumer_stored_offset;
+DROP FUNCTION IF EXISTS fn_prevent_consumer_stored_offset_immutable_update();
+DROP TABLE IF EXISTS consumer_offset_audit_log CASCADE;
+DROP TABLE IF EXISTS consumer_stored_offset CASCADE;

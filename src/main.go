@@ -28,6 +28,9 @@ import (
 	retryService "event-driven-platform/src/features/retry-topics/service"
 	groupAdapters "event-driven-platform/src/features/consumer-groups/infrastructure/adapters"
 	groupService "event-driven-platform/src/features/consumer-groups/service"
+	offsetAdapters "event-driven-platform/src/features/offset-management/infrastructure/adapters"
+	offsetPorts "event-driven-platform/src/features/offset-management/infrastructure/ports"
+	offsetService "event-driven-platform/src/features/offset-management/service"
 	consumerAdapters "event-driven-platform/src/features/idempotent-consumers/infrastructure/adapters"
 	consumerService "event-driven-platform/src/features/idempotent-consumers/service"
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
@@ -115,6 +118,8 @@ func describeService() chassis.ServiceSpec {
 			orderingSvc := orderingService.NewEventOrderingService(orderingRepo)
 			retrySvc := retryService.NewRetryTopicsService(retryRepo)
 			groupSvc := groupService.NewConsumerGroupsService(groupRepo)
+			offsetRepo := offsetAdapters.NewMemoryOffsetManagementAdapter()
+			offsetSvc := offsetService.NewOffsetManagementService(offsetRepo)
 
 			return chassis.Services{
 				Registry: map[string]any{
@@ -126,6 +131,8 @@ func describeService() chassis.ServiceSpec {
 					"orderingService":   orderingSvc,
 					"retryService":      retrySvc,
 					"groupService":      groupSvc,
+					"offsetRepo":        offsetRepo,
+					"offsetService":     offsetSvc,
 				},
 			}, nil
 		},
@@ -176,6 +183,9 @@ func describeService() chassis.ServiceSpec {
 				groupHandler := handlers.NewConsumerGroupsHandler(groupSvc)
 				groupRouter := routers.NewConsumerGroupsRouter(groupHandler)
 				groupRouter.RegisterRoutes(router)
+			}
+			if offsetRepo, exists := instances["offsetRepo"].(offsetPorts.OffsetManagementRepositoryPort); exists && offsetRepo != nil {
+				routers.RegisterOffsetManagementRoutes(router, offsetRepo)
 			}
 		},
 		RegisterDaemons: func(lifecycle *chassis.Lifecycle, services chassis.Services) {
