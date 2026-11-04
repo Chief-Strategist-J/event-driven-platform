@@ -49,7 +49,7 @@ ON consumer_stored_offset (tenant_id, lag DESC);
 
 CREATE TABLE IF NOT EXISTS consumer_offset_audit_log (
     id UUID NOT NULL,
-    public_id VARCHAR(30) NOT NULL,
+    public_id VARCHAR(32) NOT NULL,
     tenant_id VARCHAR(64) NOT NULL,
     source_service VARCHAR(64) NOT NULL,
     external_id VARCHAR(128) NOT NULL,
