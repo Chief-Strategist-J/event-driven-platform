@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"sync/atomic"
+
+	"event-driven-platform/src/shared/constants"
 )
 
 type HealthCoordinator struct {
@@ -28,7 +30,7 @@ func (h *HealthCoordinator) SetReady(val bool) {
 
 func (h *HealthCoordinator) LiveHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		if !h.isLive.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "down"})
@@ -40,8 +42,8 @@ func (h *HealthCoordinator) LiveHandler() http.HandlerFunc {
 }
 
 func (h *HealthCoordinator) ReadyHandler() http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 		if !h.isReady.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			_ = json.NewEncoder(w).Encode(map[string]string{"status": "not_ready"})

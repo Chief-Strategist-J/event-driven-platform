@@ -26,12 +26,15 @@ const (
 	ContentTypeJSON = "application/json"
 	APIVersionV1    = "v1"
 	PrefixOutbox    = "otb"
+	PrefixCanary    = "canary"
 )
 
 const (
-	ValidationRuleRequired  = "required"
-	ValidationRuleMinValue  = "min_value"
-	ValidationRuleSizeLimit = "size_limit"
+	ValidationRuleRequired       = "required"
+	ValidationRuleMinValue       = "min_value"
+	ValidationRuleSizeLimit      = "size_limit"
+	ValidationRuleNoFloats       = "no_floats_allowed"
+	ValidationRuleMalformedJSON  = "malformed_json"
 )
 
 const (
@@ -42,6 +45,7 @@ const (
 	FieldAggregateVersion = "aggregate_version"
 	FieldEventType        = "event_type"
 	FieldPayload          = "payload"
+	FieldIdempotencyKey   = "idempotency_key"
 )
 
 const (

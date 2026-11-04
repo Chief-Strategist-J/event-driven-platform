@@ -8,34 +8,59 @@ invariants:
   - INV-04: Monotonic versioning (aggregate_version = previous + 1 under row lock)
   - INV-05: Event ID is an immutable RFC 9562 UUIDv7
   - INV-06: Single writer per aggregate type enforced via source_service
+  - INV-09: Business command idempotency key claim in outbox_idempotency_keys table
   - INV-12: Payload fidelity (zero float for currency, string 64-bit IDs, claim-check for > 1MB)
 
 failure_cases:
   F1.1:
     scenario: Direct dual-write attempt to Kafka and DB simultaneously
     mitigation: Forbidden by architecture rule. Zero Kafka client imports in business domains.
+  F1.2:
+    scenario: Ambiguous commit / connection drops during COMMIT
+    mitigation: Step 1 idempotency claim in outbox_idempotency_keys returns existing record_id, making retries a safe no-op.
   F1.5:
     scenario: Concurrent mutations on same aggregate causing race conditions
     mitigation: Enforced via DB unique constraint UNIQUE(tenant_id, aggregate_type, aggregate_id, aggregate_version).
   F1.7:
     scenario: Oversized payload exceeds broker limits causing permanent partition stalls
     mitigation: Strict write-time boundary check rejecting payloads > 1MB (rules.IsPayloadSizeValid).
+  F1.9:
+    scenario: Floating point numbers in JSON payload cause precision loss in financial totals
+    mitigation: rules.HasFloatingPointNumbers scans all numeric values and rejects floats.
   F1.14:
     scenario: Null or empty aggregate identifier, type, or tenant
     mitigation: Pre-staging validation rejecting invalid records with 400 ValidationError.
+  F4.0:
+    scenario: Distributed relay workers claiming batches concurrently without lock holding
+    mitigation: Lease-based worker claiming (status=IN_FLIGHT, worker_id, lease_expires_at) with atomic ownership verification upon broker ack.
   F4.2:
     scenario: Concurrent relay workers reordering versions of an aggregate
     mitigation: Query sorts by aggregate_version ASC with FOR UPDATE SKIP LOCKED; partition key affinity on aggregate_id.
+  F4.6:
+    scenario: Lease expires while original worker still sending
+    mitigation: MarkPublishedByWorker fences completion on worker ownership and active lease validity.
   F4.7:
     scenario: Poison event payload blocking relay indefinitely
     mitigation: Attempt counter moves aggregate to PARKED status after 5 failures, blocking subsequent versions until triaged.
+  F9.1:
+    scenario: Silent loss or relay halt unnoticed
+    mitigation: EmitCanaryHeartbeat produces synthetic heartbeats on aggregate_type=canary every ~30s.
 
 state_machine:
   transitions:
     - from: PENDING
+      to: IN_FLIGHT
+      trigger: Worker lease claim
+    - from: IN_FLIGHT
       to: PUBLISHED
-      trigger: Broker ACK confirmed
-    - from: PENDING
+      trigger: Broker ACK confirmed and worker ownership verified
+    - from: IN_FLIGHT
+      to: FAILED
+      trigger: Broker publish error
+    - from: FAILED
+      to: PENDING
+      trigger: Retry under backoff (retry_count < 5)
+    - from: FAILED
       to: PARKED
       trigger: Retries >= 5 (poison event detected)
     - from: PARKED
@@ -44,12 +69,14 @@ state_machine:
 
 ports:
   driving:
-    - TransactionalOutboxRouter: POST /api/v1/outbox/relay
+    - TransactionalOutboxRouter:
+        - POST /api/v1/outbox: Stage outbox record in business tx with x-idempotency-key
+        - POST /api/v1/outbox/relay: Trigger poller batch relay
   driven:
-    - OutboxRepositoryPort: Database persistence and pending claim operations
+    - OutboxRepositoryPort: Database persistence, idempotency claims, lease claiming, and worker confirmation
     - ProducerPort: Streaming broker publication interface
 
 adapters:
   outbound:
-    - MemoryOutboxRepositoryAdapter: In-memory test repository
+    - MemoryOutboxRepositoryAdapter: In-memory test repository supporting idempotency claims, worker leases, and parking
     - MemoryProducerAdapter: In-memory broker publisher

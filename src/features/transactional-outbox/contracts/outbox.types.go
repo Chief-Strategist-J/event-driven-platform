@@ -50,4 +50,12 @@ type CreateOutboxRecordInput struct {
 	SchemaVersion    string            `json:"schema_version"`
 	Payload          []byte            `json:"payload"`
 	Headers          map[string]string `json:"headers"`
+	CDCMode          bool              `json:"cdc_mode,omitempty"`
+}
+
+type IdempotencyRecord struct {
+	TenantID       string    `json:"tenant_id"`
+	IdempotencyKey string    `json:"idempotency_key"`
+	RecordID       string    `json:"record_id"`
+	CreatedAt      time.Time `json:"created_at"`
 }

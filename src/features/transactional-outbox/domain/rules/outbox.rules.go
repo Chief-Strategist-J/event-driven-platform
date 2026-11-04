@@ -1,6 +1,8 @@
 package rules
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 
 	"event-driven-platform/src/features/transactional-outbox/contracts"
@@ -26,6 +28,41 @@ func CanTransitionOutboxStatus(from contracts.OutboxStatus, to contracts.OutboxS
 
 func IsPayloadSizeValid(payload []byte) bool {
 	return len(payload) > 0 && len(payload) <= MaxOutboxPayloadBytes
+}
+
+func HasFloatingPointNumbers(payload []byte) (bool, error) {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+
+	var obj any
+	if err := decoder.Decode(&obj); err != nil {
+		return false, err
+	}
+
+	return containsFloat(obj), nil
+}
+
+func containsFloat(val any) bool {
+	switch v := val.(type) {
+	case json.Number:
+		str := v.String()
+		if strings.Contains(str, ".") || strings.Contains(str, "e") || strings.Contains(str, "E") {
+			return true
+		}
+	case map[string]any:
+		for _, child := range v {
+			if containsFloat(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range v {
+			if containsFloat(child) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func ValidateOutboxInput(input contracts.CreateOutboxRecordInput) *errors.ApplicationError {
@@ -85,6 +122,21 @@ func ValidateOutboxInput(input contracts.CreateOutboxRecordInput) *errors.Applic
 			Issue: "payload must be non-empty and <= 1MB (claim-check required)",
 			Rule:  constants.ValidationRuleSizeLimit,
 		})
+	} else {
+		hasFloat, err := HasFloatingPointNumbers(input.Payload)
+		if err != nil {
+			details = append(details, types.ResponseErrorDetail{
+				Field: constants.FieldPayload,
+				Issue: "payload is not valid JSON",
+				Rule:  constants.ValidationRuleMalformedJSON,
+			})
+		} else if hasFloat {
+			details = append(details, types.ResponseErrorDetail{
+				Field: constants.FieldPayload,
+				Issue: "floating-point numbers forbidden in contract (use integer minor units or decimal strings)",
+				Rule:  constants.ValidationRuleNoFloats,
+			})
+		}
 	}
 
 	if len(details) > 0 {

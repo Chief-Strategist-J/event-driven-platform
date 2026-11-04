@@ -13,6 +13,81 @@ paths:
           description: Schema successfully registered
         "400":
           description: Validation failed
+  /api/v1/outbox:
+    post:
+      summary: Stage Transactional Outbox Record
+      operationId: createOutboxRecord
+      parameters:
+        - name: x-idempotency-key
+          in: header
+          required: false
+          schema:
+            type: string
+            description: Unique business command idempotency key preventing duplicate aggregates
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - aggregateType
+                - aggregateId
+                - aggregateVersion
+                - eventType
+                - schemaVersion
+                - payload
+              properties:
+                tenantId:
+                  type: string
+                sourceService:
+                  type: string
+                externalId:
+                  type: string
+                aggregateType:
+                  type: string
+                aggregateId:
+                  type: string
+                aggregateVersion:
+                  type: integer
+                  minimum: 1
+                eventType:
+                  type: string
+                schemaVersion:
+                  type: string
+                payload:
+                  type: object
+                  description: Event body strictly without floating-point numbers
+                headers:
+                  type: object
+                  additionalProperties:
+                    type: string
+                cdcMode:
+                  type: boolean
+                  description: When true executes write path step 5 (insert and immediate delete in same tx for WAL CDC)
+      responses:
+        "201":
+          description: Outbox record successfully staged
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, statusCode, data, meta]
+                properties:
+                  success: { type: boolean }
+                  statusCode: { type: integer }
+                  data:
+                    type: object
+                  meta:
+                    type: object
+        "400":
+          description: Validation failed
+        "500":
+          description: Internal server error
   /api/v1/outbox/relay:
     post:
       summary: Trigger Outbox Relay Batch

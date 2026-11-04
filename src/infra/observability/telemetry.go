@@ -15,13 +15,10 @@ import (
 
 var defaultTracer = otel.Tracer("event-driven-platform")
 
-// StartSpan creates a named child span following the 4-tier hierarchy.
 func StartSpan(ctx context.Context, spanName string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	return defaultTracer.Start(ctx, spanName, opts...)
 }
 
-// RecordError implements Step 1 of the 3-step failure invariant:
-// marks active span as ERROR and attaches error description and stack.
 func RecordError(span trace.Span, err error, attrs ...attribute.KeyValue) {
 	if span == nil || err == nil {
 		return
@@ -33,7 +30,6 @@ func RecordError(span trace.Span, err error, attrs ...attribute.KeyValue) {
 	}
 }
 
-// StructuredLog represents the canonical log-to-trace JSON schema mandated by 10-tracing-writing.md.
 type StructuredLog struct {
 	Timestamp  string         `json:"timestamp"`
 	Level      string         `json:"level"`
@@ -45,7 +41,6 @@ type StructuredLog struct {
 	Attributes map[string]any `json:"attributes,omitempty"`
 }
 
-// Log emits structured JSON logs with active context correlation (Step 2 of failure invariant).
 func Log(ctx context.Context, level, service, message string, tenantID string, attrs map[string]any) {
 	entry := StructuredLog{
 		Timestamp:  time.Now().UTC().Format(time.RFC3339Nano),

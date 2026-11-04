@@ -57,8 +57,8 @@ func describeService() chassis.ServiceSpec {
 				return
 			}
 			if schemaSvc, exists := instances["schemaService"].(*schemaService.SchemaRegistryService); exists && schemaSvc != nil {
-				schemaHandler := handlers.NewSchemaRegistryHandler(schemaSvc)
-				schemaRouter := routers.NewSchemaRegistryRouter(schemaHandler)
+				schemaHandler := handlers.NewEventSchemaRegistryHandler(schemaSvc)
+				schemaRouter := routers.NewEventSchemaRegistryRouter(schemaHandler)
 				schemaRouter.RegisterRoutes(router)
 			}
 			if outboxSvc, exists := instances["outboxService"].(*outboxService.OutboxService); exists && outboxSvc != nil {

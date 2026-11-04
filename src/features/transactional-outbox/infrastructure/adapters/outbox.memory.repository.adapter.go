@@ -16,14 +16,28 @@ var ErrRecordNotFound = errors.New("outbox record not found")
 var ErrWorkerOwnershipLost = errors.New("outbox record worker ownership lost or lease expired")
 
 type MemoryOutboxRepositoryAdapter struct {
-	mu      sync.Mutex
-	records map[string]contracts.OutboxRecord
+	mu            sync.Mutex
+	records       map[string]contracts.OutboxRecord
+	idempotencies map[string]string
 }
 
 func NewMemoryOutboxRepositoryAdapter() ports.OutboxRepositoryPort {
 	return &MemoryOutboxRepositoryAdapter{
-		records: make(map[string]contracts.OutboxRecord),
+		records:       make(map[string]contracts.OutboxRecord),
+		idempotencies: make(map[string]string),
 	}
+}
+
+func (m *MemoryOutboxRepositoryAdapter) ClaimIdempotency(_ context.Context, tenantID, idempotencyKey, recordID string) (bool, string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	key := tenantID + ":" + idempotencyKey
+	if existingID, exists := m.idempotencies[key]; exists {
+		return false, existingID, nil
+	}
+	m.idempotencies[key] = recordID
+	return true, recordID, nil
 }
 
 func (m *MemoryOutboxRepositoryAdapter) Save(_ context.Context, record contracts.OutboxRecord) error {
@@ -31,6 +45,12 @@ func (m *MemoryOutboxRepositoryAdapter) Save(_ context.Context, record contracts
 	defer m.mu.Unlock()
 	key := record.TenantID + ":" + record.ID
 	m.records[key] = record
+	return nil
+}
+
+func (m *MemoryOutboxRepositoryAdapter) SaveAndImmediateDelete(_ context.Context, record contracts.OutboxRecord) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return nil
 }
 

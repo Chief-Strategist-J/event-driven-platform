@@ -16,6 +16,7 @@ import (
 	"event-driven-platform/src/shared/constants"
 	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
+	"event-driven-platform/src/shared/utils"
 )
 
 type contextKey string
@@ -67,8 +68,8 @@ func TraceAndContextMiddleware(next http.Handler) http.Handler {
 		w.Header().Set(constants.HeaderXCorrelationID, corrID)
 
 		if span.SpanContext().IsValid() {
-			w.Header().Set("X-Trace-Id", span.SpanContext().TraceID().String())
-			w.Header().Set("X-Span-Id", span.SpanContext().SpanID().String())
+			w.Header().Set(constants.HeaderXTraceID, span.SpanContext().TraceID().String())
+			w.Header().Set(constants.HeaderXSpanID, span.SpanContext().SpanID().String())
 			propagator.Inject(ctx, propagation.HeaderCarrier(w.Header()))
 		}
 
@@ -98,7 +99,7 @@ func ErrorRecoveryMiddleware(next http.Handler) http.Handler {
 }
 
 func writeErrorEnvelope(w http.ResponseWriter, statusCode int, canonicalCode, message string, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	w.WriteHeader(statusCode)
 
 	reqID, _ := r.Context().Value(ContextKeyRequestID).(string)
@@ -118,8 +119,8 @@ func writeErrorEnvelope(w http.ResponseWriter, statusCode int, canonicalCode, me
 			RequestID:     reqID,
 			CorrelationID: corrID,
 			CausationID:   causationID,
-			Timestamp:     time.Now().UTC().Format(time.RFC3339Nano),
-			APIVersion:    "v1",
+			Timestamp:     utils.FormatRFC3339UTC(time.Now()),
+			APIVersion:    constants.APIVersionV1,
 		},
 	}
 

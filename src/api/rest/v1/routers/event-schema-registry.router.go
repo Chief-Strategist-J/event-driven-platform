@@ -6,15 +6,15 @@ import (
 	"event-driven-platform/src/api/rest/v1/handlers"
 )
 
-type SchemaRegistryRouter struct {
-	handler *handlers.SchemaRegistryHandler
+type EventSchemaRegistryRouter struct {
+	handler *handlers.EventSchemaRegistryHandler
 }
 
-func NewSchemaRegistryRouter(h *handlers.SchemaRegistryHandler) *SchemaRegistryRouter {
-	return &SchemaRegistryRouter{handler: h}
+func NewEventSchemaRegistryRouter(h *handlers.EventSchemaRegistryHandler) *EventSchemaRegistryRouter {
+	return &EventSchemaRegistryRouter{handler: h}
 }
 
-func (r *SchemaRegistryRouter) RegisterRoutes(mux *http.ServeMux) {
+func (r *EventSchemaRegistryRouter) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/v1/schemas", func(w http.ResponseWriter, req *http.Request) {
 		switch req.Method {
 		case http.MethodPost:

@@ -15,6 +15,6 @@ func NewTransactionalOutboxRouter(h *handlers.TransactionalOutboxHandler) *Trans
 }
 
 func (rt *TransactionalOutboxRouter) RegisterRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST /api/v1/outbox", rt.handler.CreateOutboxRecord)
 	mux.HandleFunc("POST /api/v1/outbox/relay", rt.handler.RelayBatch)
 }
-

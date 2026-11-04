@@ -6,7 +6,15 @@
 -- reversible:     YES
 -- lock_risk:      LOW
 -- rows_affected:  schema only
--- reason:         initial schema for transactional-outbox feature enforcing at-least-once delivery and monotonic version ordering
+-- reason:         initial schema for transactional-outbox feature enforcing at-least-once delivery, poller leases, idempotency, and monotonic version ordering
+
+CREATE TABLE IF NOT EXISTS outbox_idempotency_keys (
+    tenant_id VARCHAR(64) NOT NULL,
+    idempotency_key VARCHAR(128) NOT NULL,
+    record_id UUID NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT pk_outbox_idempotency PRIMARY KEY (tenant_id, idempotency_key)
+);
 
 CREATE TABLE IF NOT EXISTS outbox (
     id UUID NOT NULL,
@@ -24,6 +32,8 @@ CREATE TABLE IF NOT EXISTS outbox (
     payload JSONB NOT NULL,
     headers JSONB NOT NULL DEFAULT '{}'::jsonb,
     status VARCHAR(16) NOT NULL DEFAULT 'PENDING',
+    worker_id VARCHAR(64),
+    lease_expires_at TIMESTAMPTZ,
     retry_count INT NOT NULL DEFAULT 0,
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -42,7 +52,7 @@ CREATE TABLE IF NOT EXISTS outbox (
     CONSTRAINT outbox_aggregate_version_ck CHECK (aggregate_version >= 1),
     CONSTRAINT outbox_event_type_ck CHECK (event_type = btrim(event_type) AND event_type <> ''),
     CONSTRAINT outbox_schema_version_ck CHECK (schema_version = btrim(schema_version) AND schema_version <> ''),
-    CONSTRAINT outbox_status_ck CHECK (status IN ('PENDING', 'PUBLISHED', 'FAILED', 'PARKED')),
+    CONSTRAINT outbox_status_ck CHECK (status IN ('PENDING', 'IN_FLIGHT', 'PUBLISHED', 'FAILED', 'PARKED')),
     CONSTRAINT outbox_retry_count_ck CHECK (retry_count >= 0),
     CONSTRAINT outbox_payload_is_object_ck CHECK (jsonb_typeof(payload) = 'object'),
     CONSTRAINT outbox_headers_is_object_ck CHECK (jsonb_typeof(headers) = 'object'),
@@ -54,7 +64,7 @@ CREATE TABLE IF NOT EXISTS outbox (
 
 CREATE INDEX IF NOT EXISTS idx_outbox_pending_relay 
     ON outbox (tenant_id, aggregate_type, status, aggregate_version ASC)
-    WHERE status = 'PENDING';
+    WHERE status IN ('PENDING', 'IN_FLIGHT');
 
 CREATE INDEX IF NOT EXISTS idx_outbox_correlation 
     ON outbox (tenant_id, correlation_id);

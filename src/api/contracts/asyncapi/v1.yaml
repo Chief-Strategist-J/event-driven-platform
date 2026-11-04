@@ -1,6 +1,38 @@
-# AsyncAPI 2.6 Event Specification
 asyncapi: 2.6.0
 info:
   title: event-driven-platform Events
   version: 1.0.0
-channels: {}
+  description: Event streaming architecture utilizing transactional outbox and strict per-aggregate topic routing.
+
+channels:
+  '{aggregate_type}':
+    parameters:
+      aggregate_type:
+        description: The domain aggregate type (e.g. order, payment, inventory).
+        schema:
+          type: string
+    publish:
+      summary: Events published by Transactional Outbox Relay
+      description: Strictly ordered per aggregate using aggregate_id as message key.
+      message:
+        $ref: '#/components/messages/OutboxEvent'
+
+components:
+  messages:
+    OutboxEvent:
+      headers:
+        type: object
+        required: [event_type, schema_version, source_service]
+        properties:
+          event_type:
+            type: string
+            description: Specific domain event name (e.g. OrderCreated).
+          schema_version:
+            type: string
+            description: Semantic version of the payload schema.
+          source_service:
+            type: string
+            description: Producer service identifier.
+      payload:
+        type: object
+        description: Domain payload matching schema_version.

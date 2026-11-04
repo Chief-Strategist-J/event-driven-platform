@@ -5,37 +5,38 @@ import (
 	"net/http"
 	"time"
 
-	registryContracts "event-driven-platform/src/features/event-schema-registry/contracts"
-	registryService "event-driven-platform/src/features/event-schema-registry/service"
+	eventschemaregistry "event-driven-platform/src/features/event-schema-registry/contracts"
+	"event-driven-platform/src/features/event-schema-registry/service"
 	"event-driven-platform/src/shared/constants"
 	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
+	"event-driven-platform/src/shared/utils"
 )
 
-type SchemaRegistryHandler struct {
-	service *registryService.SchemaRegistryService
+type EventSchemaRegistryHandler struct {
+	service *service.SchemaRegistryService
 }
 
-func NewSchemaRegistryHandler(s *registryService.SchemaRegistryService) *SchemaRegistryHandler {
-	return &SchemaRegistryHandler{service: s}
+func NewEventSchemaRegistryHandler(s *service.SchemaRegistryService) *EventSchemaRegistryHandler {
+	return &EventSchemaRegistryHandler{service: s}
 }
 
-func (h *SchemaRegistryHandler) RegisterSchema(w http.ResponseWriter, r *http.Request) {
+func (h *EventSchemaRegistryHandler) RegisterSchema(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	traceparent := r.Header.Get(constants.HeaderTraceparent)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 
-	var input registryContracts.RegisterSchemaInput
+	var req eventschemaregistry.RegisterSchemaInput
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&input); err != nil {
+	if err := decoder.Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID)
 		return
 	}
 
-	result, err := h.service.RegisterSchema(r.Context(), input)
+	res, err := h.service.RegisterSchema(r.Context(), req)
 	if err != nil {
 		if appErr, ok := err.(*appErrors.ApplicationError); ok {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID)
@@ -46,39 +47,41 @@ func (h *SchemaRegistryHandler) RegisterSchema(w http.ResponseWriter, r *http.Re
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	w.Header().Set(constants.HeaderTraceparent, traceparent)
 	resp := types.ApiResponse{
 		Success:    true,
 		StatusCode: http.StatusCreated,
-		Data:       result,
+		Data:       res,
+		Error:      nil,
 		Meta: types.ResponseMeta{
 			RequestID:       reqID,
 			CorrelationID:   corrID,
-			Timestamp:       time.Now().UTC().Format(time.RFC3339),
+			CausationID:     traceparent,
+			Timestamp:       utils.FormatRFC3339UTC(time.Now()),
 			ExecutionTimeMs: time.Since(start).Milliseconds(),
-			APIVersion:      "v1",
+			APIVersion:      constants.APIVersionV1,
 		},
 	}
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
-func (h *SchemaRegistryHandler) writeError(w http.ResponseWriter, code int, errCode string, msg string, start time.Time, reqID string, corrID string) {
+func (h *EventSchemaRegistryHandler) writeError(w http.ResponseWriter, code int, canonical, msg string, start time.Time, reqID, corrID string) {
 	w.WriteHeader(code)
 	resp := types.ApiResponse{
 		Success:    false,
 		StatusCode: code,
+		Data:       nil,
 		Error: &types.ResponseError{
-			Code:      errCode,
+			Code:      canonical,
 			Message:   msg,
 			Retryable: code == http.StatusTooManyRequests || code == http.StatusServiceUnavailable,
 		},
 		Meta: types.ResponseMeta{
 			RequestID:       reqID,
 			CorrelationID:   corrID,
-			Timestamp:       time.Now().UTC().Format(time.RFC3339),
+			Timestamp:       utils.FormatRFC3339UTC(time.Now()),
 			ExecutionTimeMs: time.Since(start).Milliseconds(),
-			APIVersion:      "v1",
+			APIVersion:      constants.APIVersionV1,
 		},
 	}
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }

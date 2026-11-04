@@ -58,7 +58,6 @@ func TestEventSchemaRegistry_Tier0_Validation(t *testing.T) {
 	repo := adapters.NewMemorySchemaRegistryAdapter()
 	svc := service.NewSchemaRegistryService(repo)
 
-	// Missing tenant ID should trigger 4xx validation error
 	_, err := svc.RegisterSchema(ctx, registryContracts.RegisterSchemaInput{
 		TenantID: "",
 		Subject:  "orders.created",
@@ -68,7 +67,6 @@ func TestEventSchemaRegistry_Tier0_Validation(t *testing.T) {
 		t.Fatal("expected error on empty tenant_id, got nil")
 	}
 
-	// Successful registration
 	schema, err := svc.RegisterSchema(ctx, registryContracts.RegisterSchemaInput{
 		ID:       "sch_ord_created_01",
 		TenantID: "tenant_corp_01",
@@ -82,7 +80,6 @@ func TestEventSchemaRegistry_Tier0_Validation(t *testing.T) {
 		t.Errorf("expected subject orders.created, got %s", schema.Subject)
 	}
 
-	// Query registered schema
 	fetched, err := svc.GetSchema(ctx, "tenant_corp_01", schema.ID)
 	if err != nil {
 		t.Fatalf("unexpected error fetching schema: %v", err)
