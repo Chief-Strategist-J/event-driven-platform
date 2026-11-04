@@ -5,8 +5,12 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"event-driven-platform/src/features/event-versioning/contracts"
 	"event-driven-platform/src/features/event-versioning/service"
+	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
@@ -22,6 +26,9 @@ func NewEventVersioningHandler(svc *service.EventVersioningService) *EventVersio
 
 func (h *EventVersioningHandler) RegisterSchema(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/schemas/versions", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
@@ -32,24 +39,52 @@ func (h *EventVersioningHandler) RegisterSchema(w http.ResponseWriter, r *http.R
 		corrID = newUUID
 	}
 
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/schemas/versions"),
+		attribute.String("correlation_id", corrID),
+	)
+
 	var req contracts.RegisterSchemaVersionInput
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&req); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "event-versioning", "malformed request payload", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
 
-	record, err := h.svc.RegisterSchemaVersion(r.Context(), req)
+	span.SetAttributes(
+		attribute.String("tenant_id", req.TenantID),
+		attribute.String("event_type", req.EventType),
+		attribute.Int("schema_version", req.SchemaVersion),
+	)
+
+	record, err := h.svc.RegisterSchemaVersion(ctx, req)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		observability.LogWarn(ctx, "event-versioning", "schema registration rejected", req.TenantID, map[string]any{
+			"error":         err.Error(),
+			"event_type":    req.EventType,
+			"schema_version": req.SchemaVersion,
+		})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
 
+	observability.LogInfo(ctx, "event-versioning", "schema registered successfully", req.TenantID, map[string]any{
+		"public_id":      record.PublicID,
+		"event_type":     record.EventType,
+		"schema_version": record.SchemaVersion,
+	})
 	h.writeSuccess(w, http.StatusCreated, record, start, reqID, corrID, causationID)
 }
 
 func (h *EventVersioningHandler) CheckCompatibility(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/schemas/compatibility/check", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
@@ -60,15 +95,31 @@ func (h *EventVersioningHandler) CheckCompatibility(w http.ResponseWriter, r *ht
 		corrID = newUUID
 	}
 
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/schemas/compatibility/check"),
+		attribute.String("correlation_id", corrID),
+	)
+
 	var req contracts.CheckCompatibilityInput
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&req); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "event-versioning", "malformed compatibility request payload", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
 
-	result, err := h.svc.CheckCompatibility(r.Context(), req)
+	span.SetAttributes(
+		attribute.String("tenant_id", req.TenantID),
+		attribute.String("event_type", req.EventType),
+		attribute.Int("target_version", req.TargetVersion),
+	)
+
+	result, err := h.svc.CheckCompatibility(ctx, req)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "INTERNAL_ERROR"))
+		observability.LogError(ctx, "event-versioning", "compatibility check failed", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
@@ -78,6 +129,9 @@ func (h *EventVersioningHandler) CheckCompatibility(w http.ResponseWriter, r *ht
 
 func (h *EventVersioningHandler) Upcast(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/schemas/upcast", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
@@ -88,19 +142,42 @@ func (h *EventVersioningHandler) Upcast(w http.ResponseWriter, r *http.Request) 
 		corrID = newUUID
 	}
 
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/schemas/upcast"),
+		attribute.String("correlation_id", corrID),
+	)
+
 	var req contracts.UpcastStepInput
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&req); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "event-versioning", "malformed upcast request payload", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
 
-	result, err := h.svc.UpcastEvent(r.Context(), req)
+	span.SetAttributes(
+		attribute.String("tenant_id", req.TenantID),
+		attribute.String("event_type", req.EventType),
+		attribute.Int("source_version", req.SourceVersion),
+		attribute.Int("target_version", req.TargetVersion),
+	)
+
+	result, err := h.svc.UpcastEvent(ctx, req)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "UPCAST_FAILED"))
+		observability.LogWarn(ctx, "event-versioning", "upcast transformation failed", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
 
+	observability.LogInfo(ctx, "event-versioning", "event upcast successful", req.TenantID, map[string]any{
+		"event_type":     result.EventType,
+		"initial_version": result.InitialVersion,
+		"final_version":   result.FinalVersion,
+		"steps_applied":   result.StepsApplied,
+	})
 	h.writeSuccess(w, http.StatusOK, result, start, reqID, corrID, causationID)
 }
 

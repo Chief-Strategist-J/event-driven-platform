@@ -6,8 +6,12 @@ import (
 	"strconv"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"event-driven-platform/src/features/event-ordering-protection/contracts"
 	"event-driven-platform/src/features/event-ordering-protection/service"
+	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
@@ -23,6 +27,9 @@ func NewEventOrderingHandler(svc *service.EventOrderingService) *EventOrderingHa
 
 func (h *EventOrderingHandler) EvaluateSequence(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/ordering/sequence", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
@@ -33,24 +40,50 @@ func (h *EventOrderingHandler) EvaluateSequence(w http.ResponseWriter, r *http.R
 		corrID = newUUID
 	}
 
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/ordering/sequence"),
+		attribute.String("correlation_id", corrID),
+	)
+
 	var req contracts.IngestEventSequenceInput
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&req); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "event-ordering-protection", "malformed sequence request payload", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
 
-	result, err := h.svc.EvaluateAndApply(r.Context(), req)
+	span.SetAttributes(
+		attribute.String("tenant_id", req.TenantID),
+		attribute.String("aggregate_type", req.AggregateType),
+		attribute.String("aggregate_id", req.AggregateID),
+		attribute.Int64("aggregate_version", req.AggregateVersion),
+	)
+
+	result, err := h.svc.EvaluateAndApply(ctx, req)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		observability.LogWarn(ctx, "event-ordering-protection", "sequence progression rejected", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
 
+	observability.LogInfo(ctx, "event-ordering-protection", "sequence evaluated", req.TenantID, map[string]any{
+		"action":           result.Action,
+		"current_version":  result.CurrentVersion,
+		"incoming_version": result.IncomingVersion,
+		"is_held":          result.IsHeld,
+	})
 	h.writeSuccess(w, http.StatusOK, result, start, reqID, corrID, causationID)
 }
 
 func (h *EventOrderingHandler) DrainHeld(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/ordering/drain", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
@@ -61,19 +94,40 @@ func (h *EventOrderingHandler) DrainHeld(w http.ResponseWriter, r *http.Request)
 		corrID = newUUID
 	}
 
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/ordering/drain"),
+		attribute.String("correlation_id", corrID),
+	)
+
 	var req contracts.DrainHeldEventsInput
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&req); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "event-ordering-protection", "malformed drain request payload", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
 
-	result, err := h.svc.DrainHeldEvents(r.Context(), req)
+	span.SetAttributes(
+		attribute.String("tenant_id", req.TenantID),
+		attribute.String("aggregate_type", req.AggregateType),
+		attribute.String("aggregate_id", req.AggregateID),
+	)
+
+	result, err := h.svc.DrainHeldEvents(ctx, req)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "DRAIN_FAILED"))
+		observability.LogWarn(ctx, "event-ordering-protection", "drain held events failed", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
 
+	observability.LogInfo(ctx, "event-ordering-protection", "events drained successfully", req.TenantID, map[string]any{
+		"events_drained": result.EventsDrained,
+		"new_version":    result.NewVersion,
+		"is_unheld":      result.IsUnheld,
+	})
 	h.writeSuccess(w, http.StatusOK, result, start, reqID, corrID, causationID)
 }
 

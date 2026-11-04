@@ -48,10 +48,15 @@ func (p *PostgresEventOrderingAdapter) GetSequenceTracker(ctx context.Context, t
 }
 
 func (p *PostgresEventOrderingAdapter) ApplyEventSequence(ctx context.Context, r contracts.AggregateSequenceTrackerRecord) error {
+	var holdReason sql.NullString
+	if r.HoldReason != "" {
+		holdReason = sql.NullString{String: string(r.HoldReason), Valid: true}
+	}
 	_, err := p.db.ExecContext(ctx, queries.FlowUpsertSequenceTrackerApplied,
 		r.ID, r.PublicID, r.TenantID, r.SourceService, r.ExternalID, r.CorrelationID,
 		r.ConsumerGroup, r.HandlerID, r.AggregateType, r.AggregateID,
 		r.LastAppliedVersion, r.LastPayloadHash, r.OwnerEpoch,
+		r.IsHeld, holdReason,
 	)
 	if err != nil {
 		return database.MapDatabaseError(err)

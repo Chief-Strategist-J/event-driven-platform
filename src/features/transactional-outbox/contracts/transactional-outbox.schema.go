@@ -42,3 +42,4 @@ func ValidateCreateOutboxRecord(input CreateOutboxRecordInput) error {
 	}
 	return nil
 }
+

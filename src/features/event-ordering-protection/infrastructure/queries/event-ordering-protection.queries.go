@@ -15,13 +15,13 @@ INSERT INTO aggregate_sequence_tracker (
     id, public_id, tenant_id, source_service, external_id, correlation_id,
     consumer_group, handler_id, aggregate_type, aggregate_id,
     last_applied_version, last_payload_hash, owner_epoch, is_held, hold_reason, blocking_version, updated_at
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, FALSE, NULL, NULL, NOW())
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NULL, NOW())
 ON CONFLICT (tenant_id, consumer_group, handler_id, aggregate_type, aggregate_id)
 DO UPDATE SET last_applied_version = EXCLUDED.last_applied_version,
               last_payload_hash = EXCLUDED.last_payload_hash,
               owner_epoch = EXCLUDED.owner_epoch,
-              is_held = FALSE,
-              hold_reason = NULL,
+              is_held = EXCLUDED.is_held,
+              hold_reason = EXCLUDED.hold_reason,
               blocking_version = NULL,
               updated_at = NOW()
 WHERE aggregate_sequence_tracker.owner_epoch <= EXCLUDED.owner_epoch;`
