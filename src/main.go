@@ -1,113 +1,53 @@
 package main
 
 import (
-	"context"
-	"flag"
-	"fmt"
-	"log"
 	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
 
 	"event-driven-platform/src/api/rest/v1/handlers"
 	"event-driven-platform/src/api/rest/v1/routers"
 	schemaAdapters "event-driven-platform/src/features/event-schema-registry/infrastructure/adapters"
 	schemaService "event-driven-platform/src/features/event-schema-registry/service"
+	"event-driven-platform/src/infra/chassis"
 )
 
-type Config struct {
-	PublicAddr string
-	AdminAddr  string
+func main() {
+	os.Exit(chassis.Run(describeService(), os.Args[1:], os.Environ()))
 }
 
-func main() {
-	var configPath string
-	var validateOnly bool
-	flag.StringVar(&configPath, "config", "config/default.yaml", "path to configuration file")
-	flag.BoolVar(&validateOnly, "validate-only", false, "validate configuration and desired state without starting")
-	flag.Parse()
-
-	if validateOnly {
-		fmt.Println("Configuration and desired state valid")
-		os.Exit(0)
+func describeService() chassis.ServiceSpec {
+	return chassis.ServiceSpec{
+		Identity: chassis.Identity{
+			Name: "event-driven-platform",
+			Team: "platform-core",
+			Tier: "tier-1",
+		},
+		Needs: chassis.Needs{
+			Database: false,
+			Cache:    false,
+			Broker:   false,
+		},
+		DependsOn: []chassis.DownstreamDependency{},
+		Contracts: chassis.Contracts{
+			APISchemas:     []string{"contracts/openapi/v1.yml"},
+			ProducedTopics: []string{},
+			ConsumedTopics: []string{},
+		},
+		BuildServices: func(deps chassis.Dependencies) (chassis.Services, error) {
+			schemaRepo := schemaAdapters.NewMemorySchemaRegistryAdapter()
+			schemaSvc := schemaService.NewSchemaRegistryService(schemaRepo)
+			return chassis.Services{
+				Registry: schemaSvc,
+			}, nil
+		},
+		RegisterAPIRoutes: func(router *http.ServeMux, services chassis.Services) {
+			schemaSvc, ok := services.Registry.(*schemaService.SchemaRegistryService)
+			if !ok {
+				return
+			}
+			schemaHandler := handlers.NewSchemaRegistryHandler(schemaSvc)
+			schemaRouter := routers.NewSchemaRegistryRouter(schemaHandler)
+			schemaRouter.RegisterRoutes(router)
+		},
 	}
-
-	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	cfg := Config{
-		PublicAddr: ":8080",
-		AdminAddr:  "127.0.0.1:8081",
-	}
-
-	schemaRepo := schemaAdapters.NewMemorySchemaRegistryAdapter()
-	schemaSvc := schemaService.NewSchemaRegistryService(schemaRepo)
-	schemaHandler := handlers.NewSchemaRegistryHandler(schemaSvc)
-	schemaRouter := routers.NewSchemaRegistryRouter(schemaHandler)
-
-	adminMux := http.NewServeMux()
-	adminMux.HandleFunc("/health/live", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"alive"}`))
-	})
-	adminMux.HandleFunc("/health/ready", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ready"}`))
-	})
-
-	adminServer := &http.Server{
-		Addr:         cfg.AdminAddr,
-		Handler:      adminMux,
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 5 * time.Second,
-	}
-
-	publicMux := http.NewServeMux()
-	schemaRouter.RegisterRoutes(publicMux)
-
-	publicServer := &http.Server{
-		Addr:         cfg.PublicAddr,
-		Handler:      publicMux,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  75 * time.Second,
-	}
-
-	fatalChan := make(chan error, 2)
-
-	go func() {
-		if err := adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fatalChan <- fmt.Errorf("admin listener failed: %w", err)
-		}
-	}()
-
-	go func() {
-		if err := publicServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			fatalChan <- fmt.Errorf("public listener failed: %w", err)
-		}
-	}()
-
-	log.Println("Server running (Phase 7: Run)")
-
-	select {
-	case <-rootCtx.Done():
-		log.Println("Termination signal received, beginning Phase 8: Shutdown")
-	case err := <-fatalChan:
-		log.Printf("Fatal runtime error: %v, shutting down\n", err)
-	}
-
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	if err := publicServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Public server shutdown error: %v\n", err)
-	}
-	if err := adminServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Admin server shutdown error: %v\n", err)
-	}
-
-	log.Println("Shutdown complete, exiting with code 0")
-	os.Exit(0)
 }

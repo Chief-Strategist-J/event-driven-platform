@@ -16,7 +16,7 @@ x-hardening: &hardening
 
 services:
   db:
-    image: postgres:16-bookworm@sha256:5c4783a8cc3f0074912164f94dfa1be4e043438f0f707cf968d7af9a0d31a2c8
+    image: postgres:16-bookworm
     restart: unless-stopped
     command: ["postgres", "-c", "wal_level=logical", "-c", "max_wal_senders=10", "-c", "max_replication_slots=10"]
     security_opt: []
@@ -47,7 +47,7 @@ services:
   cache:
     <<: *hardening
     cap_drop: []
-    image: redis:7.4-bookworm@sha256:b6b6e3dc0c0952737748e55d5d885272840c7e42ba41ab1d5489f693419882f5
+    image: redis:7.4-bookworm
     command: ["redis-server", "--maxmemory", "200mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
     networks: [backend]
     ports:
@@ -64,7 +64,7 @@ services:
         limits: { memory: 256M }
 
   kafka:
-    image: apache/kafka:3.8.0@sha256:833b867a9585a141da455dc2b57431c65cbccb27f11c91f694444cca9f777e0f
+    image: apache/kafka:3.8.0
     restart: unless-stopped
     security_opt: []
     cap_drop: []
@@ -95,7 +95,7 @@ services:
     logging: *logging
 
   apicurio:
-    image: apicurio/apicurio-registry-mem:2.6.5.Final@sha256:6e033230a1e06fa99e900cfa7be9381cbb46755ec56133a8b274c5ef3fc7b3cb
+    image: apicurio/apicurio-registry-mem:2.6.5.Final
     restart: unless-stopped
     networks: [backend]
     ports:
@@ -112,7 +112,7 @@ services:
 
   debezium:
     profiles: [cdc]
-    image: debezium/connect:2.7.3.Final@sha256:92f58fc542cfb8fbdd82f07d2c3e1c6670868f0cb620027f3c4c954a37b38d33
+    image: debezium/connect:2.7.3.Final
     restart: unless-stopped
     networks: [backend]
     ports:
@@ -138,7 +138,7 @@ services:
 
   opensearch:
     profiles: [cdc-search]
-    image: opensearchproject/opensearch:2.17.1@sha256:9f4007bbf5194ea746ef717462faebf156d028b031448b1aa1c7201c1f516a70
+    image: opensearchproject/opensearch:2.17.1
     restart: unless-stopped
     environment:
       - discovery.type=single-node
@@ -160,7 +160,7 @@ services:
 
   minio:
     profiles: [cdc-search]
-    image: minio/minio:RELEASE.2024-10-13T13-34-11Z@sha256:22fa45e3dcf6fe34267e8913b482200a7fae5e656d0d21a22497ec09e7c10b78
+    image: minio/minio:RELEASE.2024-10-13T13-34-11Z
     command: ["server", "/data", "--console-address", ":9001"]
     restart: unless-stopped
     environment:
@@ -185,7 +185,7 @@ services:
     profiles: [observability]
     <<: *hardening
     cap_drop: []
-    image: grafana/tempo:2.6.0@sha256:f55a8a1937fff0af3a760d376b476c8327fb30e432d5e7630d7938b67691e822
+    image: grafana/tempo:2.6.0
     command: ["-config.file=/etc/tempo.yaml"]
     networks: [backend, frontend]
     ports: ["127.0.0.1:3200:3200"]
@@ -206,7 +206,7 @@ services:
     profiles: [observability]
     <<: *hardening
     cap_drop: []
-    image: grafana/loki:3.1.1@sha256:e689cc634841c937de4d7ea6157f17e29cf257d6a320f1c293ab18d46cfea986
+    image: grafana/loki:3.1.1
     command: ["-config.file=/etc/loki/local-config.yaml"]
     networks: [backend, frontend]
     ports: ["127.0.0.1:3100:3100"]
@@ -227,7 +227,7 @@ services:
     profiles: [observability]
     <<: *hardening
     cap_drop: []
-    image: prom/prometheus:v2.54.1@sha256:f6639335d34a77d9d9db382b92eeb7fc00934be8eae81dbc03b31cfe90411a94
+    image: prom/prometheus:v2.54.1
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/tmp/prometheus"
@@ -251,7 +251,7 @@ services:
     profiles: [observability]
     <<: *hardening
     cap_drop: []
-    image: otel/opentelemetry-collector-contrib:0.108.0@sha256:923eb1cfae32fe09676cfd74762b2b237349f2273888529594f6c6ffe1fb3d7e
+    image: otel/opentelemetry-collector-contrib:0.108.0
     command: ["--config=/etc/otelcol-contrib/config.yaml"]
     networks: [backend, frontend]
     ports:
@@ -268,7 +268,7 @@ services:
     profiles: [observability]
     <<: *hardening
     cap_drop: []
-    image: grafana/grafana:11.2.0@sha256:488984b716c0862639f91a698adbe2862677a5a07bad42da5f03f3030883b205
+    image: grafana/grafana:11.2.0
     ports: ["127.0.0.1:3000:3000"]
     networks: [frontend, backend]
     tmpfs: [/tmp]
@@ -288,7 +288,7 @@ services:
         limits: { memory: 512M }
 
   envoy:
-    image: envoyproxy/envoy:v1.31.2@sha256:bf2385ee7f1fbc7c01a2fca8f43c3325c754d90f23a67d021c38fa80425712e0
+    image: envoyproxy/envoy:v1.31.2
     restart: unless-stopped
     ports:
       - "8080:8080"

@@ -1,0 +1,160 @@
+package chassis
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+)
+
+type Config struct {
+	PublicAddr      string
+	AdminAddr       string
+	ShutdownTimeout time.Duration
+}
+
+func DefaultConfig() Config {
+	return Config{
+		PublicAddr:      ":8080",
+		AdminAddr:       "127.0.0.1:8081",
+		ShutdownTimeout: 15 * time.Second,
+	}
+}
+
+type App struct {
+	Config   Config
+	Services Services
+	Health   *HealthCoordinator
+	Spec     ServiceSpec
+}
+
+func Run(spec ServiceSpec, args []string, env []string) int {
+	bootCtx, exitCode, err := Preflight(args, env, os.Stdout)
+	if err != nil {
+		log.Printf("Preflight error: %v\n", err)
+		return exitCode
+	}
+
+	if bootCtx.ValidateOnly {
+		fmt.Println("Configuration and desired state valid")
+		return ExitSuccess
+	}
+
+	cfg := DefaultConfig()
+	health := NewHealthCoordinator()
+	deps := Dependencies{Context: context.Background()}
+
+	services, err := spec.BuildServices(deps)
+	if err != nil {
+		log.Printf("Dependency composition failed: %v\n", err)
+		return ExitDependency
+	}
+
+	app := &App{
+		Config:   cfg,
+		Services: services,
+		Health:   health,
+		Spec:     spec,
+	}
+
+	lifecycle := NewLifecycle()
+
+	switch bootCtx.Command {
+	case "serve":
+		wireServe(app, lifecycle)
+	case "migrate":
+		if spec.Migrations != nil {
+			mig := spec.Migrations()
+			if mig.Apply != nil {
+				if err := mig.Apply(context.Background()); err != nil {
+					log.Printf("Migration failed: %v\n", err)
+					return ExitDependency
+				}
+			}
+		}
+		return ExitSuccess
+	default:
+		log.Printf("Unsupported command mode: %s\n", bootCtx.Command)
+		return ExitUsage
+	}
+
+	return runLongLived(app, lifecycle)
+}
+
+func wireServe(app *App, lifecycle *Lifecycle) {
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("/health/live", app.Health.LiveHandler())
+	adminMux.HandleFunc("/health/ready", app.Health.ReadyHandler())
+
+	adminServer := &http.Server{
+		Addr:         app.Config.AdminAddr,
+		Handler:      adminMux,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 5 * time.Second,
+	}
+
+	lifecycle.AddComponent("admin-server", func(_ context.Context) error {
+		if err := adminServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("admin listener failed: %w", err)
+		}
+		return nil
+	}, func(ctx context.Context) error {
+		return adminServer.Shutdown(ctx)
+	})
+
+	publicMux := http.NewServeMux()
+	if app.Spec.RegisterAPIRoutes != nil {
+		app.Spec.RegisterAPIRoutes(publicMux, app.Services)
+	}
+
+	publicServer := &http.Server{
+		Addr:         app.Config.PublicAddr,
+		Handler:      publicMux,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  75 * time.Second,
+	}
+
+	lifecycle.AddComponent("public-server", func(_ context.Context) error {
+		if err := publicServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			return fmt.Errorf("public listener failed: %w", err)
+		}
+		return nil
+	}, func(ctx context.Context) error {
+		return publicServer.Shutdown(ctx)
+	})
+}
+
+func runLongLived(app *App, lifecycle *Lifecycle) int {
+	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	fatalChan := make(chan error, 2)
+	lifecycle.StartAll(rootCtx, fatalChan)
+
+	app.Health.SetReady(true)
+	log.Printf("Service %s running (tier: %s, team: %s)\n", app.Spec.Identity.Name, app.Spec.Identity.Tier, app.Spec.Identity.Team)
+
+	var exitCode = ExitSuccess
+	select {
+	case <-rootCtx.Done():
+		log.Println("Termination signal received, beginning shutdown")
+	case err := <-fatalChan:
+		log.Printf("Fatal runtime error: %v, shutting down\n", err)
+		exitCode = ExitRuntime
+	}
+
+	app.Health.SetReady(false)
+
+	if err := lifecycle.StopAll(app.Config.ShutdownTimeout); err != nil {
+		log.Printf("Shutdown finished with errors: %v\n", err)
+	} else {
+		log.Println("Shutdown complete, exiting cleanly")
+	}
+
+	return exitCode
+}
