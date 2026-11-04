@@ -1,2 +1,33 @@
-feature: retry-topics
-mode: stateless_hexagonal
+name: retry-topics
+version: 1.0.0
+description: Production-grade failure classification, jittered exponential backoff, circuit-breaker awareness, and held-key retry scheduling engine.
+entities:
+  retry_attempt_ledger:
+    primary_key: [tenant_id, id]
+    foreign_keys: []
+    identifiers:
+      id: UUIDv7
+      public_id: String (try_...)
+      tenant_id: String
+      source_service: String
+      external_id: String
+      correlation_id: UUIDv7
+    fields:
+      consumer_group: String
+      handler_id: String
+      event_id: String
+      aggregate_type: String
+      aggregate_id: String
+      aggregate_version: Int64
+      attempt_number: Int32
+      max_attempts: Int32
+      backoff_ms: Int64
+      due_at: TimestampUTC
+      status: String (SCHEDULED, RETRYING, EXHAUSTED, EXPIRED, RESOLVED)
+      failure_classification: String (ENVIRONMENTAL, CONTENTION, RATE_LIMITED, MESSAGE_TRANSIENT, PERMANENT_DATA, BUSINESS_REJECT)
+      idempotency_key: String
+      error_message: String
+      error_code: String
+      valid_until: TimestampUTC
+      created_at: TimestampUTC
+      updated_at: TimestampUTC

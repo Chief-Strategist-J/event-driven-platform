@@ -24,6 +24,8 @@ import (
 	versioningService "event-driven-platform/src/features/event-versioning/service"
 	orderingAdapters "event-driven-platform/src/features/event-ordering-protection/infrastructure/adapters"
 	orderingService "event-driven-platform/src/features/event-ordering-protection/service"
+	retryAdapters "event-driven-platform/src/features/retry-topics/infrastructure/adapters"
+	retryService "event-driven-platform/src/features/retry-topics/service"
 	consumerAdapters "event-driven-platform/src/features/idempotent-consumers/infrastructure/adapters"
 	consumerService "event-driven-platform/src/features/idempotent-consumers/service"
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
@@ -93,6 +95,7 @@ func describeService() chassis.ServiceSpec {
 			dlqRepo := dlqAdapters.NewPostgresDeadLetterRepositoryAdapter(db)
 			versioningRepo := versioningAdapters.NewPostgresEventVersioningAdapter(db)
 			orderingRepo := orderingAdapters.NewPostgresEventOrderingAdapter(db)
+			retryRepo := retryAdapters.NewPostgresRetryTopicsAdapter(db)
 
 			var producer producers.ProducerPort
 			kafkaBrokersEnv := os.Getenv("KAFKA_BROKERS")
@@ -107,6 +110,7 @@ func describeService() chassis.ServiceSpec {
 			dlqSvc := dlqService.NewDeadLetterService(dlqRepo)
 			versioningSvc := versioningService.NewEventVersioningService(versioningRepo, nil)
 			orderingSvc := orderingService.NewEventOrderingService(orderingRepo)
+			retrySvc := retryService.NewRetryTopicsService(retryRepo)
 
 			return chassis.Services{
 				Registry: map[string]any{
@@ -116,6 +120,7 @@ func describeService() chassis.ServiceSpec {
 					"dlqService":        dlqSvc,
 					"versioningService": versioningSvc,
 					"orderingService":   orderingSvc,
+					"retryService":      retrySvc,
 				},
 			}, nil
 		},
@@ -156,6 +161,11 @@ func describeService() chassis.ServiceSpec {
 				orderingHandler := handlers.NewEventOrderingHandler(orderingSvc)
 				orderingRouter := routers.NewEventOrderingRouter(orderingHandler)
 				orderingRouter.RegisterRoutes(router)
+			}
+			if retrySvc, exists := instances["retryService"].(*retryService.RetryTopicsService); exists && retrySvc != nil {
+				retryHandler := handlers.NewRetryTopicsHandler(retrySvc)
+				retryRouter := routers.NewRetryTopicsRouter(retryHandler)
+				retryRouter.RegisterRoutes(router)
 			}
 		},
 		RegisterDaemons: func(lifecycle *chassis.Lifecycle, services chassis.Services) {
