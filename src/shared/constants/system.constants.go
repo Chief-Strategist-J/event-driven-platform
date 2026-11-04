@@ -13,6 +13,35 @@ const (
 	HeaderIfMatch         = "if-match"
 	HeaderETag            = "etag"
 	HeaderRetryAfter      = "retry-after"
+	HeaderContentType     = "Content-Type"
+	HeaderXTraceID        = "X-Trace-Id"
+	HeaderXSpanID         = "X-Span-Id"
+
+	HeaderEventType     = "event_type"
+	HeaderSchemaVersion = "schema_version"
+	HeaderSourceService = "source_service"
+)
+
+const (
+	ContentTypeJSON = "application/json"
+	APIVersionV1    = "v1"
+	PrefixOutbox    = "otb"
+)
+
+const (
+	ValidationRuleRequired  = "required"
+	ValidationRuleMinValue  = "min_value"
+	ValidationRuleSizeLimit = "size_limit"
+)
+
+const (
+	FieldTenantID         = "tenant_id"
+	FieldSourceService    = "source_service"
+	FieldAggregateType    = "aggregate_type"
+	FieldAggregateID      = "aggregate_id"
+	FieldAggregateVersion = "aggregate_version"
+	FieldEventType        = "event_type"
+	FieldPayload          = "payload"
 )
 
 const (
@@ -21,4 +50,20 @@ const (
 	ErrCodeNotFound           = "RESOURCE_NOT_FOUND"
 	ErrCodePreconditionFailed = "PRECONDITION_FAILED"
 	ErrCodeInternalError      = "INTERNAL_SERVER_ERROR"
+)
+
+const (
+	StatusPending   = "PENDING"
+	StatusInFlight  = "IN_FLIGHT"
+	StatusPublished = "PUBLISHED"
+	StatusFailed    = "FAILED"
+	StatusParked    = "PARKED"
+)
+
+const (
+	MaxOutboxPayloadBytes = 1048576
+	DefaultRelayBatchSize = 50
+	MaxWorkerRetries      = 5
+	DefaultLeaseSeconds   = 30
+	PurgeIntervalHours    = 48
 )

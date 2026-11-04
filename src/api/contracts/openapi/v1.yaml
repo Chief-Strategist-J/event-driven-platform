@@ -3,4 +3,58 @@ openapi: 3.1.0
 info:
   title: event-driven-platform API
   version: 1.0.0
-paths: {}
+paths:
+  /api/v1/schemas:
+    post:
+      summary: Register Event Schema
+      operationId: registerSchema
+      responses:
+        "201":
+          description: Schema successfully registered
+        "400":
+          description: Validation failed
+  /api/v1/outbox/relay:
+    post:
+      summary: Trigger Outbox Relay Batch
+      operationId: relayOutboxBatch
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                batchSize:
+                  type: integer
+                  minimum: 1
+                  default: 50
+      responses:
+        "200":
+          description: Batch successfully relayed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [success, statusCode, data, meta]
+                properties:
+                  success: { type: boolean }
+                  statusCode: { type: integer }
+                  data:
+                    type: object
+                    required: [publishedCount]
+                    properties:
+                      publishedCount: { type: integer }
+                  meta:
+                    type: object
+                    required: [requestId, correlationId, timestamp, executionTimeMs, apiVersion]
+                    properties:
+                      requestId: { type: string }
+                      correlationId: { type: string }
+                      timestamp: { type: string }
+                      executionTimeMs: { type: integer }
+                      apiVersion: { type: string }
+        "400":
+          description: Validation failed
+        "500":
+          description: Internal server error
