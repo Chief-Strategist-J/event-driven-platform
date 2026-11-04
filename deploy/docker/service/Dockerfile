@@ -55,5 +55,5 @@ ENV PORT=8080 \
 
 USER ${UID}:${GID}
 EXPOSE 8080 8081
-ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/app/bin/platform-service", "serve"]
+ENTRYPOINT ["/usr/bin/tini", "--", "/app/bin/platform-service"]
+CMD ["serve"]

@@ -1,2 +1,212 @@
 feature: dead-letter-handling
 mode: stateless_hexagonal
+
+entities:
+  - entity: dead_letter_quarantine
+    owner: event-driven-platform
+    description: Lossless durable quarantine storage for failed event messages with terminal disposition audit
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        default: uuidv7()
+        constraint: PK(tenant_id, id), immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE(tenant_id, public_id), format 'dlq_' + 26 chars, immutable
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (tenant_id = btrim(tenant_id) AND tenant_id <> ''), immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (source_service = btrim(source_service) AND source_service <> '')
+      - name: external_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (external_id = btrim(external_id) AND external_id <> '')
+      - name: correlation_id
+        type: uuid
+        null: no
+        constraint: immutable
+      - name: topic
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (topic = btrim(topic) AND topic <> '')
+      - name: partition
+        type: int
+        null: no
+        constraint: CHECK (partition >= 0)
+      - name: source_offset
+        type: bigint
+        null: no
+        constraint: CHECK (source_offset >= 0)
+      - name: consumer_group
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (consumer_group = btrim(consumer_group) AND consumer_group <> '')
+      - name: handler_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (handler_id = btrim(handler_id) AND handler_id <> '')
+      - name: event_id
+        type: uuid
+        null: no
+        constraint: immutable
+      - name: aggregate_type
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (aggregate_type = btrim(aggregate_type) AND aggregate_type <> '')
+      - name: aggregate_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (aggregate_id = btrim(aggregate_id) AND aggregate_id <> '')
+      - name: aggregate_version
+        type: bigint
+        null: no
+        constraint: CHECK (aggregate_version >= 1)
+      - name: event_type
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (event_type = btrim(event_type) AND event_type <> '')
+      - name: payload
+        type: jsonb
+        null: no
+        constraint: CHECK (jsonb_typeof(payload) = 'object')
+      - name: headers
+        type: jsonb
+        null: no
+        default: '{}'::jsonb
+        constraint: CHECK (jsonb_typeof(headers) = 'object')
+      - name: failure_reason
+        type: text
+        null: no
+        normalize: trim
+        constraint: CHECK (failure_reason = btrim(failure_reason) AND failure_reason <> '')
+      - name: error_code
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (error_code = btrim(error_code) AND error_code <> '')
+      - name: error_fingerprint
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (error_fingerprint ~ '^[0-9a-f]{64}$')
+      - name: status
+        type: varchar(32)
+        null: no
+        default: 'QUARANTINED'
+        constraint: CHECK (status IN ('QUARANTINED', 'REDRIVING', 'REDRIVEN_SUCCESS', 'COMPENSATED', 'DISCARDED'))
+      - name: redrive_count
+        type: int
+        null: no
+        default: 0
+        constraint: CHECK (redrive_count >= 0)
+      - name: max_redrive_attempts
+        type: int
+        null: no
+        default: 3
+        constraint: CHECK (max_redrive_attempts >= 1)
+      - name: quarantined_at
+        type: timestamptz
+        null: no
+        default: now()
+        constraint: immutable
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: now()
+    constraints:
+      - pk_dead_letter_quarantine: PRIMARY KEY (tenant_id, id)
+      - dlq_public_id_uk: UNIQUE (tenant_id, public_id)
+      - dlq_external_uk: UNIQUE (tenant_id, source_service, external_id)
+    invariants:
+      - byte-for-byte fidelity of payload and headers
+      - terminal disposition must be recorded (DL-01)
+    pii: []
+    source_of_truth: db
+
+  - entity: aggregate_parking_store
+    owner: event-driven-platform
+    description: Durable per-aggregate key parking preserving ordering invariants
+    fields:
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: PK, CHECK (tenant_id = btrim(tenant_id) AND tenant_id <> '')
+      - name: handler_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: PK, CHECK (handler_id = btrim(handler_id) AND handler_id <> '')
+      - name: aggregate_type
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: PK, CHECK (aggregate_type = btrim(aggregate_type) AND aggregate_type <> '')
+      - name: aggregate_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: PK, CHECK (aggregate_id = btrim(aggregate_id) AND aggregate_id <> '')
+      - name: is_parked
+        type: boolean
+        null: no
+        default: true
+      - name: parked_reason
+        type: text
+        null: no
+        normalize: trim
+        constraint: CHECK (parked_reason = btrim(parked_reason) AND parked_reason <> '')
+      - name: quarantine_id
+        type: uuid
+        null: no
+      - name: parked_at
+        type: timestamptz
+        null: no
+        default: now()
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: now()
+    constraints:
+      - pk_aggregate_parking_store: PRIMARY KEY (tenant_id, handler_id, aggregate_type, aggregate_id)
+    invariants:
+      - while an aggregate is parked, no newer versions of that aggregate may be applied (DL-02)
+    pii: []
+    source_of_truth: db
+
+invariants:
+  - DL-01: No silent disposition (every event ends in REDRIVEN_SUCCESS, COMPENSATED, or DISCARDED)
+  - DL-02: Ordering preservation (while an event is quarantined, subsequent versions are parked)
+  - DL-03: Handler scope (DLQ scoped to topic, group, handler)
+  - DL-04: Lossless capture (original keys, values, and headers preserved)
+  - DL-05: Commit only after durable quarantine write
+  - DL-06: Identity preserved (redriven event carries original event_id and version)
+  - DL-07: Redrive goes through standard consumer guards
+  - DL-08: DLQ is for message defects, not infrastructure outages
+  - DL-11: Bounded redrive attempts (max 3)
+
+ports:
+  driving:
+    - DeadLetterRouter: Ingress and triage endpoints for DLQ management
+  driven:
+    - DeadLetterRepositoryPort: Durable quarantine and parking store persistence
+
+adapters:
+  outbound:
+    - MemoryDeadLetterRepositoryAdapter: In-memory adapter for hermetic unit testing
+    - PostgresDeadLetterRepositoryAdapter: Production PostgreSQL adapter
