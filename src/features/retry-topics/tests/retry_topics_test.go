@@ -240,4 +240,35 @@ func TestRetryTopicsEngine(t *testing.T) {
 		}
 	})
 
+	t.Run("handler bug and crash poison route immediately to dead letter", func(t *testing.T) {
+		resBug, err := svc.EvaluateRetry(ctx, contracts.EvaluateRetryInput{
+			StreamOrdering: contracts.OrderingStrict,
+			Classification: contracts.ClassHandlerBug,
+			AttemptNumber:  1,
+			MaxAttempts:    3,
+			BaseBackoffMs:  1000,
+			MaxBackoffMs:   10000,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resBug.Disposition != contracts.DispositionDeadLetter {
+			t.Fatalf("expected DispositionDeadLetter for handler bug, got %s", resBug.Disposition)
+		}
+
+		resPoison, err := svc.EvaluateRetry(ctx, contracts.EvaluateRetryInput{
+			StreamOrdering: contracts.OrderingStrict,
+			Classification: contracts.ClassCrashPoison,
+			AttemptNumber:  1,
+			MaxAttempts:    3,
+			BaseBackoffMs:  1000,
+			MaxBackoffMs:   10000,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resPoison.Disposition != contracts.DispositionDeadLetter {
+			t.Fatalf("expected DispositionDeadLetter for crash poison, got %s", resPoison.Disposition)
+		}
+	})
 }

@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS retry_attempt_ledger (
     CONSTRAINT ck_retry_attempt_ledger_attempts CHECK (attempt_number >= 1 AND attempt_number <= max_attempts),
     CONSTRAINT ck_retry_attempt_ledger_version CHECK (aggregate_version >= 1),
     CONSTRAINT ck_retry_attempt_ledger_status CHECK (status IN ('SCHEDULED', 'RETRYING', 'EXHAUSTED', 'EXPIRED', 'RESOLVED')),
-    CONSTRAINT ck_retry_attempt_ledger_class CHECK (failure_classification IN ('ENVIRONMENTAL', 'CONTENTION', 'RATE_LIMITED', 'MESSAGE_TRANSIENT', 'AMBIGUOUS_EFFECT', 'CAUSAL_WAIT', 'PERMANENT_DATA', 'BUSINESS_REJECT', 'REFERENCE_DATA_MISSING'))
+    CONSTRAINT ck_retry_attempt_ledger_class CHECK (failure_classification IN ('ENVIRONMENTAL', 'CONTENTION', 'RATE_LIMITED', 'MESSAGE_TRANSIENT', 'AMBIGUOUS_EFFECT', 'CAUSAL_WAIT', 'PERMANENT_DATA', 'BUSINESS_REJECT', 'HANDLER_BUG', 'CRASH_POISON', 'REFERENCE_DATA_MISSING'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_retry_attempt_ledger_due 

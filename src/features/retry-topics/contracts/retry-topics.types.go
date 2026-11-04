@@ -23,6 +23,8 @@ const (
 	ClassCausalWait          FailureClassification = "CAUSAL_WAIT"
 	ClassPermanentData       FailureClassification = "PERMANENT_DATA"
 	ClassBusinessReject      FailureClassification = "BUSINESS_REJECT"
+	ClassHandlerBug          FailureClassification = "HANDLER_BUG"
+	ClassCrashPoison         FailureClassification = "CRASH_POISON"
 	ClassReferenceDataMiss   FailureClassification = "REFERENCE_DATA_MISSING"
 )
 

@@ -51,7 +51,7 @@ func ValidateScheduleRetry(input ScheduleRetryInput) error {
 		return ErrInvalidAttempts
 	}
 	switch input.Classification {
-	case ClassEnvironmental, ClassContention, ClassRateLimited, ClassMessageTransient, ClassAmbiguousEffect, ClassCausalWait, ClassPermanentData, ClassBusinessReject, ClassReferenceDataMiss:
+	case ClassEnvironmental, ClassContention, ClassRateLimited, ClassMessageTransient, ClassAmbiguousEffect, ClassCausalWait, ClassPermanentData, ClassBusinessReject, ClassHandlerBug, ClassCrashPoison, ClassReferenceDataMiss:
 	default:
 		return ErrInvalidClass
 	}
@@ -65,7 +65,7 @@ func ValidateEvaluateRetry(input EvaluateRetryInput) error {
 		return ErrInvalidOrderingClass
 	}
 	switch input.Classification {
-	case ClassEnvironmental, ClassContention, ClassRateLimited, ClassMessageTransient, ClassAmbiguousEffect, ClassCausalWait, ClassPermanentData, ClassBusinessReject, ClassReferenceDataMiss:
+	case ClassEnvironmental, ClassContention, ClassRateLimited, ClassMessageTransient, ClassAmbiguousEffect, ClassCausalWait, ClassPermanentData, ClassBusinessReject, ClassHandlerBug, ClassCrashPoison, ClassReferenceDataMiss:
 	default:
 		return ErrInvalidClass
 	}

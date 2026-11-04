@@ -576,7 +576,7 @@ paths:
                   enum: [O_STRICT, O_STATE, O_NONE]
                 classification:
                   type: string
-                  enum: [ENVIRONMENTAL, CONTENTION, RATE_LIMITED, MESSAGE_TRANSIENT, AMBIGUOUS_EFFECT, CAUSAL_WAIT, PERMANENT_DATA, BUSINESS_REJECT, REFERENCE_DATA_MISSING]
+                  enum: [ENVIRONMENTAL, CONTENTION, RATE_LIMITED, MESSAGE_TRANSIENT, AMBIGUOUS_EFFECT, CAUSAL_WAIT, PERMANENT_DATA, BUSINESS_REJECT, HANDLER_BUG, CRASH_POISON, REFERENCE_DATA_MISSING]
                 attemptNumber:
                   type: integer
                   minimum: 1
@@ -645,7 +645,7 @@ paths:
                 dueAt: { type: string, format: date-time }
                 classification:
                   type: string
-                  enum: [ENVIRONMENTAL, CONTENTION, RATE_LIMITED, MESSAGE_TRANSIENT, AMBIGUOUS_EFFECT, CAUSAL_WAIT, PERMANENT_DATA, BUSINESS_REJECT, REFERENCE_DATA_MISSING]
+                  enum: [ENVIRONMENTAL, CONTENTION, RATE_LIMITED, MESSAGE_TRANSIENT, AMBIGUOUS_EFFECT, CAUSAL_WAIT, PERMANENT_DATA, BUSINESS_REJECT, HANDLER_BUG, CRASH_POISON, REFERENCE_DATA_MISSING]
                 errorMessage: { type: string }
                 errorCode: { type: string }
                 validUntil: { type: string, format: date-time }

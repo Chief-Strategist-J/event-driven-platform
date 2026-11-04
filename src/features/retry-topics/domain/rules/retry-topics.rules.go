@@ -118,12 +118,12 @@ func EvaluateRetryDecision(input contracts.EvaluateRetryInput, now time.Time) co
 		}
 	}
 
-	if input.Classification == contracts.ClassPermanentData || input.Classification == contracts.ClassBusinessReject {
+	if input.Classification == contracts.ClassPermanentData || input.Classification == contracts.ClassBusinessReject || input.Classification == contracts.ClassHandlerBug || input.Classification == contracts.ClassCrashPoison {
 		return contracts.EvaluateRetryResult{
 			Disposition: contracts.DispositionDeadLetter,
 			BackoffMs:   0,
 			DueAt:       now,
-			Reason:      "permanent schema invalidity or domain rejection cannot succeed upon retry and routes directly to DLQ",
+			Reason:      "non-retryable failure, handler bug, or crash poison routes directly to dead letter quarantine",
 		}
 	}
 
