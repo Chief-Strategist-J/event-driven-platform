@@ -3,7 +3,6 @@ package adapters
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -32,21 +31,13 @@ func NewApicurioSchemaRegistryAdapter(baseURL string) ports.SchemaRegistryReposi
 	}
 }
 
-type apicurioArtifactMetadata struct {
-	ID          string `json:"id"`
-	Name        string `json:"name,omitempty"`
-	Description string `json:"description,omitempty"`
-	Type        string `json:"type"`
-	Version     string `json:"version"`
-}
-
 func (a *ApicurioSchemaRegistryAdapter) RegisterSchema(ctx context.Context, schema *registryContracts.SchemaDefinition) error {
 	group := schema.TenantID
 	artifactID := schema.ID
 
 	url := fmt.Sprintf("%s/groups/%s/artifacts", a.baseURL, group)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte(schema.Content)))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader([]byte(schema.Schema)))
 	if err != nil {
 		return fmt.Errorf("failed to create Apicurio request: %w", err)
 	}
@@ -104,14 +95,16 @@ func (a *ApicurioSchemaRegistryAdapter) GetSchemaByID(ctx context.Context, tenan
 		return nil, fmt.Errorf("failed reading schema content: %w", err)
 	}
 
+	now := time.Now().UTC().Format(time.RFC3339)
+
 	return &registryContracts.SchemaDefinition{
 		ID:        artifactID,
 		TenantID:  tenantID,
 		Subject:   artifactID,
-		Type:      "json",
-		Content:   string(contentBytes),
-		Status:    registryContracts.StatusActive,
-		CreatedAt: time.Now().UTC(),
-		UpdatedAt: time.Now().UTC(),
+		Format:    "json",
+		Schema:    string(contentBytes),
+		Status:    registryContracts.SchemaStatusActive,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}, nil
 }

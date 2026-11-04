@@ -27,6 +27,41 @@ func NewDeadLetterService(repo ports.DeadLetterRepositoryPort) *DeadLetterServic
 	}
 }
 
+func (s *DeadLetterService) CheckAttemptPreflight(ctx context.Context, tenantID, group, handlerID, eventID, fingerprint, errClass string, budget int) (bool, int, error) {
+	record := contracts.AttemptRecord{
+		TenantID:             tenantID,
+		ConsumerGroup:        group,
+		HandlerID:            handlerID,
+		EventID:              eventID,
+		LastErrorFingerprint: fingerprint,
+		LastErrorClass:       errClass,
+	}
+
+	count, err := s.repo.RecordAttempt(ctx, record)
+	if err != nil {
+		return false, 0, fmt.Errorf("failed recording attempt: %w", err)
+	}
+
+	if count > budget {
+		return false, count, nil
+	}
+	return true, count, nil
+}
+
+func (s *DeadLetterService) ClearAttempt(ctx context.Context, tenantID, group, handlerID, eventID string) error {
+	return s.repo.DeleteAttempt(ctx, tenantID, group, handlerID, eventID)
+}
+
+func (s *DeadLetterService) BufferParkedEvent(ctx context.Context, event contracts.ParkedEventRecord) error {
+	id, err := utils.GenerateUUIDv7()
+	if err != nil {
+		return err
+	}
+	event.ID = id
+	event.ArrivedAt = time.Now().UTC()
+	return s.repo.BufferParkedEvent(ctx, event)
+}
+
 func (s *DeadLetterService) QuarantineEvent(ctx context.Context, input contracts.QuarantineEventInput) (*contracts.DeadLetterQuarantineRecord, error) {
 	if validationErr := contracts.ValidateQuarantineInput(input); validationErr != nil {
 		return nil, validationErr
@@ -80,16 +115,23 @@ func (s *DeadLetterService) QuarantineEvent(ctx context.Context, input contracts
 		return nil, fmt.Errorf("failed persisting dead letter record: %w", err)
 	}
 
+	epoch := input.OwnerEpoch
+	if epoch <= 0 {
+		epoch = 1
+	}
+
 	park := contracts.AggregateParkingState{
-		TenantID:      input.TenantID,
-		HandlerID:     input.HandlerID,
-		AggregateType: input.AggregateType,
-		AggregateID:   input.AggregateID,
-		IsParked:      true,
-		ParkedReason:  input.FailureReason,
-		QuarantineID:  id,
-		ParkedAt:      time.Now().UTC(),
-		UpdatedAt:     time.Now().UTC(),
+		TenantID:         input.TenantID,
+		HandlerID:        input.HandlerID,
+		AggregateType:    input.AggregateType,
+		AggregateID:      input.AggregateID,
+		IsParked:         true,
+		ParkedReason:     input.FailureReason,
+		QuarantineID:     id,
+		OwnerEpoch:       epoch,
+		ParkedEventCount: 0,
+		ParkedAt:         time.Now().UTC(),
+		UpdatedAt:        time.Now().UTC(),
 	}
 	_ = s.repo.ParkKey(ctx, park)
 
@@ -131,14 +173,45 @@ func (s *DeadLetterService) RedriveEvent(ctx context.Context, tenantID, id strin
 	}
 
 	_ = s.repo.UpdateDisposition(ctx, tenantID, id, contracts.StatusRedrivenSuccess, nextCount)
-	_ = s.repo.UnparkKey(ctx, tenantID, record.HandlerID, record.AggregateType, record.AggregateID)
+
+	buffered, _ := s.repo.GetParkedEventsForDrain(ctx, tenantID, record.ConsumerGroup, record.HandlerID, record.AggregateType, record.AggregateID)
+	drainedCount := 0
+
+	for _, pe := range buffered {
+		peRecord := contracts.DeadLetterQuarantineRecord{
+			ID:               pe.ID,
+			TenantID:         pe.TenantID,
+			HandlerID:        pe.HandlerID,
+			EventID:          pe.EventID,
+			AggregateType:    pe.AggregateType,
+			AggregateID:      pe.AggregateID,
+			AggregateVersion: pe.AggregateVersion,
+			EventType:        pe.EventType,
+			Payload:          pe.Payload,
+			Headers:          pe.Headers,
+		}
+
+		peSuccess, peErr := invoker(ctx, peRecord)
+		if peErr != nil || !peSuccess {
+			break
+		}
+
+		_ = s.repo.DeleteParkedEvent(ctx, tenantID, pe.ConsumerGroup, pe.HandlerID, pe.AggregateType, pe.AggregateID, pe.AggregateVersion)
+		drainedCount++
+	}
+
+	remaining, _ := s.repo.GetParkedEventsForDrain(ctx, tenantID, record.ConsumerGroup, record.HandlerID, record.AggregateType, record.AggregateID)
+	if len(remaining) == 0 {
+		_ = s.repo.UnparkKey(ctx, tenantID, record.HandlerID, record.AggregateType, record.AggregateID, 0)
+	}
 
 	return &contracts.RedriveResult{
 		QuarantineID: id,
 		Status:       contracts.StatusRedrivenSuccess,
 		RedriveCount: nextCount,
+		DrainedCount: drainedCount,
 		Success:      true,
-		Reason:       "event redriven successfully and aggregate unparked",
+		Reason:       "blocking event redriven successfully and buffered events drained",
 	}, nil
 }
 
@@ -159,7 +232,7 @@ func (s *DeadLetterService) DiscardEvent(ctx context.Context, tenantID, id, reas
 		return err
 	}
 
-	_ = s.repo.UnparkKey(ctx, tenantID, record.HandlerID, record.AggregateType, record.AggregateID)
+	_ = s.repo.UnparkKey(ctx, tenantID, record.HandlerID, record.AggregateType, record.AggregateID, 0)
 	return nil
 }
 
@@ -170,4 +243,3 @@ func (s *DeadLetterService) IsKeyParked(ctx context.Context, tenantID, handlerID
 func (s *DeadLetterService) ListQuarantined(ctx context.Context, tenantID, handlerID string, status contracts.QuarantineStatus, limit, offset int) ([]contracts.DeadLetterQuarantineRecord, error) {
 	return s.repo.ListQuarantined(ctx, tenantID, handlerID, status, limit, offset)
 }
-

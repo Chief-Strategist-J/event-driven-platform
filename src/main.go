@@ -15,6 +15,7 @@ import (
 	"event-driven-platform/src/api/rest/v1/handlers"
 	"event-driven-platform/src/api/rest/v1/routers"
 	schemaAdapters "event-driven-platform/src/features/event-schema-registry/infrastructure/adapters"
+	schemaPorts "event-driven-platform/src/features/event-schema-registry/infrastructure/ports"
 	schemaService "event-driven-platform/src/features/event-schema-registry/service"
 	consumerAdapters "event-driven-platform/src/features/idempotent-consumers/infrastructure/adapters"
 	consumerPorts "event-driven-platform/src/features/idempotent-consumers/infrastructure/ports"
@@ -66,7 +67,13 @@ func describeService() chassis.ServiceSpec {
 			}
 		},
 		BuildServices: func(deps chassis.Dependencies) (chassis.Services, error) {
-			schemaRepo := schemaAdapters.NewMemorySchemaRegistryAdapter()
+			schemaRegistryURL := os.Getenv("SCHEMA_REGISTRY_URL")
+			var schemaRepo schemaPorts.SchemaRegistryRepositoryPort
+			if schemaRegistryURL != "" {
+				schemaRepo = schemaAdapters.NewApicurioSchemaRegistryAdapter(schemaRegistryURL)
+			} else {
+				schemaRepo = schemaAdapters.NewMemorySchemaRegistryAdapter()
+			}
 			schemaSvc := schemaService.NewSchemaRegistryService(schemaRepo)
 
 			var outboxRepo outboxPorts.OutboxRepositoryPort

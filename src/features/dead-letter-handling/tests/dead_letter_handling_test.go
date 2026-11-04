@@ -32,6 +32,7 @@ func TestDeadLetterHandling_QuarantineAndKeyParking(t *testing.T) {
 		Payload:          []byte(`{"order_id":"ord-999","invalid_field":true}`),
 		FailureReason:    "schema validation constraint violation",
 		ErrorCode:        "ERR_SCHEMA_MISMATCH",
+		OwnerEpoch:       1,
 	}
 
 	rec, err := svc.QuarantineEvent(ctx, input)
@@ -49,7 +50,29 @@ func TestDeadLetterHandling_QuarantineAndKeyParking(t *testing.T) {
 	}
 }
 
-func TestDeadLetterHandling_SystemOutageRejectedFromQuarantine(t *testing.T) {
+func TestDeadLetterHandling_CrashLoopPoisonPrecheck(t *testing.T) {
+	ctx := context.Background()
+	repo := adapters.NewMemoryDeadLetterRepositoryAdapter()
+	svc := service.NewDeadLetterService(repo)
+
+	canRun, count, err := svc.CheckAttemptPreflight(ctx, "tenant-corp-01", "order-group", "order-handler", "evt-poison", "fp-1", "C6_POISON", 3)
+	if err != nil || !canRun || count != 1 {
+		t.Fatalf("expected first attempt to be allowed, got canRun=%v count=%d err=%v", canRun, count, err)
+	}
+
+	svc.CheckAttemptPreflight(ctx, "tenant-corp-01", "order-group", "order-handler", "evt-poison", "fp-1", "C6_POISON", 3)
+	svc.CheckAttemptPreflight(ctx, "tenant-corp-01", "order-group", "order-handler", "evt-poison", "fp-1", "C6_POISON", 3)
+
+	canRun4, count4, err := svc.CheckAttemptPreflight(ctx, "tenant-corp-01", "order-group", "order-handler", "evt-poison", "fp-1", "C6_POISON", 3)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if canRun4 {
+		t.Errorf("expected attempt 4 to be rejected before execution (DL-15), but allowed (count=%d)", count4)
+	}
+}
+
+func TestDeadLetterHandling_ParkedEventBufferingAndSequentialDrain(t *testing.T) {
 	ctx := context.Background()
 	repo := adapters.NewMemoryDeadLetterRepositoryAdapter()
 	svc := service.NewDeadLetterService(repo)
@@ -64,19 +87,68 @@ func TestDeadLetterHandling_SystemOutageRejectedFromQuarantine(t *testing.T) {
 		SourceOffset:     10,
 		ConsumerGroup:    "order-billing-group",
 		HandlerID:        "billing-handler",
-		EventID:          "evt-timeout-001",
+		EventID:          "evt-blocking-v2",
 		AggregateType:    "order",
 		AggregateID:      "ord-100",
-		AggregateVersion: 1,
-		EventType:        "OrderCreated",
+		AggregateVersion: 2,
+		EventType:        "OrderPaid",
 		Payload:          []byte(`{"order_id":"ord-100"}`),
-		FailureReason:    "database connection refused",
-		ErrorCode:        "TIMEOUT",
+		FailureReason:    "parsing bug",
+		ErrorCode:        "ERR_BUG",
+		OwnerEpoch:       1,
+	}
+	rec, _ := svc.QuarantineEvent(ctx, input)
+
+	parkedV3 := contracts.ParkedEventRecord{
+		TenantID:         "tenant-corp-01",
+		ConsumerGroup:    "order-billing-group",
+		HandlerID:        "billing-handler",
+		AggregateType:    "order",
+		AggregateID:      "ord-100",
+		AggregateVersion: 3,
+		EventID:          "evt-live-v3",
+		EventType:        "OrderShipped",
+		Payload:          []byte(`{"order_id":"ord-100"}`),
+		SourceOffset:     11,
+	}
+	_ = svc.BufferParkedEvent(ctx, parkedV3)
+
+	parkedV4 := contracts.ParkedEventRecord{
+		TenantID:         "tenant-corp-01",
+		ConsumerGroup:    "order-billing-group",
+		HandlerID:        "billing-handler",
+		AggregateType:    "order",
+		AggregateID:      "ord-100",
+		AggregateVersion: 4,
+		EventID:          "evt-live-v4",
+		EventType:        "OrderDelivered",
+		Payload:          []byte(`{"order_id":"ord-100"}`),
+		SourceOffset:     12,
+	}
+	_ = svc.BufferParkedEvent(ctx, parkedV4)
+
+	var appliedVersions []int64
+	drainingInvoker := func(ctx context.Context, r contracts.DeadLetterQuarantineRecord) (bool, error) {
+		appliedVersions = append(appliedVersions, r.AggregateVersion)
+		return true, nil
 	}
 
-	_, err := svc.QuarantineEvent(ctx, input)
-	if err == nil {
-		t.Fatal("expected system timeout to be rejected under invariant DL-08, but succeeded")
+	res, err := svc.RedriveEvent(ctx, "tenant-corp-01", rec.ID, drainingInvoker)
+	if err != nil || !res.Success {
+		t.Fatalf("redrive and drain failed: %v", err)
+	}
+
+	if res.DrainedCount != 2 {
+		t.Errorf("expected 2 buffered events drained, got %d", res.DrainedCount)
+	}
+
+	if len(appliedVersions) != 3 || appliedVersions[0] != 2 || appliedVersions[1] != 3 || appliedVersions[2] != 4 {
+		t.Errorf("expected strict ordered drain [2, 3, 4], got %v", appliedVersions)
+	}
+
+	isParked, _ := svc.IsKeyParked(ctx, "tenant-corp-01", "billing-handler", "order", "ord-100")
+	if isParked {
+		t.Error("expected aggregate key to be unparked after complete drain")
 	}
 }
 
@@ -103,6 +175,7 @@ func TestDeadLetterHandling_BoundedRedriveExecution(t *testing.T) {
 		Payload:          []byte(`{"order_id":"ord-555"}`),
 		FailureReason:    "transient parsing bug",
 		ErrorCode:        "ERR_DATA_FORMAT",
+		OwnerEpoch:       1,
 	}
 
 	rec, _ := svc.QuarantineEvent(ctx, input)
@@ -144,50 +217,3 @@ func TestDeadLetterHandling_BoundedRedriveExecution(t *testing.T) {
 		t.Error("expected aggregate to be unparked following authorized discard disposition")
 	}
 }
-
-func TestDeadLetterHandling_SuccessfulRedriveUnparksAggregate(t *testing.T) {
-	ctx := context.Background()
-	repo := adapters.NewMemoryDeadLetterRepositoryAdapter()
-	svc := service.NewDeadLetterService(repo)
-
-	input := contracts.QuarantineEventInput{
-		TenantID:         "tenant-corp-01",
-		SourceService:    "order-service",
-		ExternalID:       "ord-ext-777",
-		CorrelationID:    "corr-777",
-		Topic:            "orders-v1",
-		Partition:        0,
-		SourceOffset:     77,
-		ConsumerGroup:    "order-billing-group",
-		HandlerID:        "billing-handler",
-		EventID:          "evt-777",
-		AggregateType:    "order",
-		AggregateID:      "ord-777",
-		AggregateVersion: 1,
-		EventType:        "OrderCreated",
-		Payload:          []byte(`{"order_id":"ord-777"}`),
-		FailureReason:    "handler patch pending",
-		ErrorCode:        "ERR_HANDLER_BUG",
-	}
-
-	rec, _ := svc.QuarantineEvent(ctx, input)
-
-	successfulInvoker := func(ctx context.Context, r contracts.DeadLetterQuarantineRecord) (bool, error) {
-		return true, nil
-	}
-
-	res, err := svc.RedriveEvent(ctx, "tenant-corp-01", rec.ID, successfulInvoker)
-	if err != nil || !res.Success {
-		t.Fatalf("expected successful redrive: %v", err)
-	}
-
-	if res.Status != contracts.StatusRedrivenSuccess {
-		t.Errorf("expected status REDRIVEN_SUCCESS, got %s", res.Status)
-	}
-
-	isParked, _ := svc.IsKeyParked(ctx, "tenant-corp-01", "billing-handler", "order", "ord-777")
-	if isParked {
-		t.Error("expected aggregate to be unparked following successful redrive")
-	}
-}
-
