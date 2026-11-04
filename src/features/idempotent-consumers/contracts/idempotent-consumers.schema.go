@@ -102,3 +102,4 @@ func ValidateInboundConsumerEvent(event InboundConsumerEvent) *errors.Applicatio
 
 	return nil
 }
+

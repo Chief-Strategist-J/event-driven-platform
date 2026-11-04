@@ -9,9 +9,18 @@ ENV CGO_ENABLED=0 \
     GOOS=linux \
     GOARCH=amd64
 
-COPY ${SERVICE_PATH}/go.mod ./
+COPY ${SERVICE_PATH}/go.mod ${SERVICE_PATH}/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
-EXPOSE 50051 8081
-CMD ["go", "run", "./src/main.go", "--config", "config/default.yaml"]
+COPY ${SERVICE_PATH}/src/ ./src/
+COPY ${SERVICE_PATH}/messaging/ ./messaging/
+COPY ${SERVICE_PATH}/database/ ./database/
+COPY ${SERVICE_PATH}/config/ ./config/
+
+ENV PORT=8080 \
+    ADMIN_PORT=8081 \
+    ADMIN_HOST=0.0.0.0
+
+EXPOSE 8080 8081
+CMD ["go", "run", "./src/main.go", "serve"]

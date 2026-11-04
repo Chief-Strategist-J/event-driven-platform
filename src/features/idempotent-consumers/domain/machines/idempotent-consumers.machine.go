@@ -29,3 +29,4 @@ func (m *ConsumerStateMachine) DecideAction(
 	action := rules.EvaluateVersionRule(currentVersion, event.AggregateVersion, event.SemanticClass)
 	return action, nil
 }
+

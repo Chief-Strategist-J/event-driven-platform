@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
-ARG BUILDER_IMAGE=golang:1.23.1-bookworm@sha256:d824d528994a5c92c813be5bfb3a58eeb06f190a07e868a83ee07ff5b3f11467
-ARG BASE_IMAGE=debian:bookworm-slim@sha256:49195b098197775ce087dd46c7bc3a670f5e1f0217ec5e1bce9f6b5791dfae40
+ARG BUILDER_IMAGE=golang:1.23-bookworm
+ARG BASE_IMAGE=debian:bookworm-slim
 
 # ---------- Stage 1: Go Application Builder ----------
 FROM ${BUILDER_IMAGE} AS builder
@@ -12,11 +12,13 @@ ENV CGO_ENABLED=0 \
     GOARCH=amd64 \
     GOPROXY=https://proxy.golang.org,direct
 
-COPY ${SERVICE_PATH}/go.mod ./
+COPY ${SERVICE_PATH}/go.mod ${SERVICE_PATH}/go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY ${SERVICE_PATH}/src/ ./src/
+COPY ${SERVICE_PATH}/messaging/ ./messaging/
+COPY ${SERVICE_PATH}/database/ ./database/
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     go build -trimpath -ldflags="-s -w" -o /build/platform-service ./src/main.go
@@ -37,6 +39,7 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=builder --chown=${UID}:${GID} /build/platform-service /app/bin/platform-service
+COPY --from=builder --chown=${UID}:${GID} /build/database/ /app/database/
 COPY --chown=${UID}:${GID} ${SERVICE_PATH}/config/ /app/config/
 
 ARG GIT_SHA=unknown
@@ -46,7 +49,11 @@ LABEL org.opencontainers.image.source="https://github.com/Chief-Strategist-J/Sys
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.title="event-driven-platform"
 
+ENV PORT=8080 \
+    ADMIN_PORT=8081 \
+    ADMIN_HOST=0.0.0.0
+
 USER ${UID}:${GID}
-EXPOSE 50051 8081
+EXPOSE 8080 8081
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["/app/bin/platform-service", "--config", "/app/config/default.yaml"]
+CMD ["/app/bin/platform-service", "serve"]

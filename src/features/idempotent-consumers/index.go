@@ -19,3 +19,4 @@ func NewService(repo ports.ConsumerRepositoryPort) *ConsumerService {
 func NewMemoryRepositoryAdapter() ports.ConsumerRepositoryPort {
 	return adapters.NewMemoryConsumerRepositoryAdapter()
 }
+

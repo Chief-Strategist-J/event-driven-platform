@@ -17,3 +17,4 @@ func NewIdempotentConsumerRouter(h *handlers.IdempotentConsumerHandler) *Idempot
 func (rt *IdempotentConsumerRouter) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/consumers/inbox", rt.handler.Consume)
 }
+

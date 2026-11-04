@@ -12,19 +12,36 @@ x-hardening: &hardening
 services:
   app:
     <<: *hardening
-    image: ${REGISTRY:-ghcr.io/scaibu}/event-driven-platform@${APP_DIGEST:-sha256:d824d528994a5c92c813be5bfb3a58eeb06f190a07e868a83ee07ff5b3f11467}
+    build:
+      context: ../../..
+      dockerfile: deploy/docker/service/Dockerfile
+      args:
+        SERVICE_PATH: .
+    image: ${REGISTRY:-ghcr.io/scaibu}/event-driven-platform:latest
     depends_on:
       db:       { condition: service_healthy, restart: true }
       cache:    { condition: service_healthy, restart: true }
       kafka:    { condition: service_healthy, restart: true }
       apicurio: { condition: service_healthy, restart: true }
+      otel-collector: { condition: service_started }
     networks: [frontend, backend]
-    expose: ["50051", "8081"]
+    expose: ["8080", "8081"]
     environment:
+      PORT: "8080"
+      ADMIN_PORT: "8081"
+      ADMIN_HOST: "0.0.0.0"
+      ENVIRONMENT: production
       DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_NAME: event_store
+      DB_SSLMODE: disable
+      DATABASE_URL: postgres://postgres:postgres@db:5432/event_store?sslmode=disable
       CACHE_HOST: cache
       KAFKA_BROKERS: kafka:9092
       SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v2
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SERVICE_NAME: event-driven-platform
       DB_PASSWORD_FILE: /run/secrets/db_password
     secrets: [db_password]
     tmpfs: [/tmp]
@@ -54,13 +71,25 @@ services:
       cache:    { condition: service_healthy }
       kafka:    { condition: service_healthy }
       apicurio: { condition: service_healthy }
+      otel-collector: { condition: service_started }
     networks: [frontend, backend]
-    ports: ["127.0.0.1:50051:50051", "127.0.0.1:8081:8081"]
+    ports: ["127.0.0.1:8080:8080", "127.0.0.1:8081:8081"]
     environment:
+      PORT: "8080"
+      ADMIN_PORT: "8081"
+      ADMIN_HOST: "0.0.0.0"
+      ENVIRONMENT: local
       DB_HOST: db
+      DB_PORT: "5432"
+      DB_USER: postgres
+      DB_NAME: event_store
+      DB_SSLMODE: disable
+      DATABASE_URL: postgres://postgres:postgres@db:5432/event_store?sslmode=disable
       CACHE_HOST: cache
       KAFKA_BROKERS: kafka:9092
       SCHEMA_REGISTRY_URL: http://apicurio:8080/apis/registry/v2
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_SERVICE_NAME: event-driven-platform
       DB_PASSWORD_FILE: /run/secrets/db_password
     secrets: [db_password]
     develop:

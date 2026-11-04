@@ -211,3 +211,133 @@ func TestIdempotentConsumer_SplitBrainSameVersionDivergentContentParks(t *testin
 		t.Errorf("expected ActionParkPoison for same version with divergent content, got %s", resB.Action)
 	}
 }
+
+func TestIdempotentConsumer_OutOfOrderInitialEventHeld(t *testing.T) {
+	ctx := context.Background()
+	repo := adapters.NewMemoryConsumerRepositoryAdapter()
+	svc := service.NewConsumerService(repo)
+
+	eventV2 := contracts.InboundConsumerEvent{
+		EventID:          "evt-unseen-v2",
+		TenantID:         "tenant-corp-01",
+		HandlerID:        "order-projection-handler",
+		AggregateType:    "order",
+		AggregateID:      "ord-first-time-seen",
+		AggregateVersion: 2,
+		EventType:        "OrderUpdated",
+		SchemaVersion:    "1.0.0",
+		SemanticClass:    contracts.SemanticDelta,
+		Payload:          []byte(`{"order_id":"ord-first-time-seen","status":"SHIPPED"}`),
+	}
+
+	res, err := svc.ConsumeEvent(ctx, eventV2)
+	if err != nil {
+		t.Fatalf("unexpected error on initial v2: %v", err)
+	}
+	if res.Action != contracts.ActionHoldGap {
+		t.Errorf("expected ActionHoldGap when first seen event version is > 1 on DELTA stream, got %s", res.Action)
+	}
+}
+
+func TestIdempotentConsumer_DifferentHandlersProcessSameEventID(t *testing.T) {
+	ctx := context.Background()
+	repo := adapters.NewMemoryConsumerRepositoryAdapter()
+	svc := service.NewConsumerService(repo)
+
+	eventForHandlerA := contracts.InboundConsumerEvent{
+		EventID:          "shared-evt-uuid-001",
+		TenantID:         "tenant-corp-01",
+		HandlerID:        "order-email-notification-handler",
+		AggregateType:    "order",
+		AggregateID:      "ord-multi-handler",
+		AggregateVersion: 1,
+		EventType:        "OrderPlaced",
+		SchemaVersion:    "1.0.0",
+		SemanticClass:    contracts.SemanticDelta,
+		Payload:          []byte(`{"order_id":"ord-multi-handler","total":150}`),
+	}
+
+	resA, err := svc.ConsumeEvent(ctx, eventForHandlerA)
+	if err != nil || resA.Action != contracts.ActionApply {
+		t.Fatalf("handler A failed to process: %v", err)
+	}
+
+	eventForHandlerB := contracts.InboundConsumerEvent{
+		EventID:          "shared-evt-uuid-001",
+		TenantID:         "tenant-corp-01",
+		HandlerID:        "inventory-reservation-handler",
+		AggregateType:    "order",
+		AggregateID:      "ord-multi-handler",
+		AggregateVersion: 1,
+		EventType:        "OrderPlaced",
+		SchemaVersion:    "1.0.0",
+		SemanticClass:    contracts.SemanticDelta,
+		Payload:          []byte(`{"order_id":"ord-multi-handler","total":150}`),
+	}
+
+	resB, err := svc.ConsumeEvent(ctx, eventForHandlerB)
+	if err != nil {
+		t.Fatalf("handler B unexpected error: %v", err)
+	}
+	if resB.Action != contracts.ActionApply {
+		t.Errorf("expected ActionApply for handler B because dedupe scope is (handler_id, event_id), got %s", resB.Action)
+	}
+}
+
+func TestIdempotentConsumer_SubsequentEventsParkedOnPoisonedAggregate(t *testing.T) {
+	ctx := context.Background()
+	repo := adapters.NewMemoryConsumerRepositoryAdapter()
+	svc := service.NewConsumerService(repo)
+
+	eventInitial := contracts.InboundConsumerEvent{
+		EventID:          "poison-test-evt-1",
+		TenantID:         "tenant-corp-01",
+		HandlerID:        "payment-handler",
+		AggregateType:    "payment",
+		AggregateID:      "pay-900",
+		AggregateVersion: 1,
+		EventType:        "PaymentAuthorized",
+		SchemaVersion:    "1.0.0",
+		SemanticClass:    contracts.SemanticDelta,
+		Payload:          []byte(`{"payment_id":"pay-900","amount":50}`),
+	}
+	_, _ = svc.ConsumeEvent(ctx, eventInitial)
+
+	eventCollision := contracts.InboundConsumerEvent{
+		EventID:          "poison-test-evt-1-collision",
+		TenantID:         "tenant-corp-01",
+		HandlerID:        "payment-handler",
+		AggregateType:    "payment",
+		AggregateID:      "pay-900",
+		AggregateVersion: 1,
+		EventType:        "PaymentAuthorized",
+		SchemaVersion:    "1.0.0",
+		SemanticClass:    contracts.SemanticDelta,
+		Payload:          []byte(`{"payment_id":"pay-900","amount":9999}`),
+	}
+	resCollision, _ := svc.ConsumeEvent(ctx, eventCollision)
+	if resCollision.Action != contracts.ActionParkPoison {
+		t.Fatalf("expected initial collision to park, got %s", resCollision.Action)
+	}
+
+	eventSubsequent := contracts.InboundConsumerEvent{
+		EventID:          "poison-test-evt-2",
+		TenantID:         "tenant-corp-01",
+		HandlerID:        "payment-handler",
+		AggregateType:    "payment",
+		AggregateID:      "pay-900",
+		AggregateVersion: 2,
+		EventType:        "PaymentCaptured",
+		SchemaVersion:    "1.0.0",
+		SemanticClass:    contracts.SemanticDelta,
+		Payload:          []byte(`{"payment_id":"pay-900","captured":true}`),
+	}
+
+	resSubsequent, err := svc.ConsumeEvent(ctx, eventSubsequent)
+	if err != nil {
+		t.Fatalf("unexpected error on subsequent event: %v", err)
+	}
+	if resSubsequent.Action != contracts.ActionParkPoison {
+		t.Errorf("expected ActionParkPoison on subsequent version for already parked aggregate, got %s", resSubsequent.Action)
+	}
+}

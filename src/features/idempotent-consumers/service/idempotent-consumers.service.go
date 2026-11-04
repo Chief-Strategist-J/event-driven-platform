@@ -64,7 +64,7 @@ func (s *ConsumerService) ConsumeEvent(ctx context.Context, event contracts.Inbo
 		}, nil
 	}
 
-	proj, err := s.repo.GetProjection(ctx, event.TenantID, event.AggregateType, event.AggregateID)
+	proj, err := s.repo.GetProjection(ctx, event.TenantID, event.HandlerID, event.AggregateType, event.AggregateID)
 	if err != nil {
 		return nil, fmt.Errorf("projection read failed: %w", err)
 	}
@@ -84,7 +84,7 @@ func (s *ConsumerService) ConsumeEvent(ctx context.Context, event contracts.Inbo
 		}
 
 		if event.AggregateVersion == proj.LastVersion && !rules.IsContentHashConsistent(proj.LastPayloadHash, payloadHash) {
-			_ = s.repo.ParkAggregate(ctx, event.TenantID, event.AggregateType, event.AggregateID, "split-brain content collision")
+			_ = s.repo.ParkAggregate(ctx, event.TenantID, event.HandlerID, event.AggregateType, event.AggregateID, "split-brain content collision")
 			return &contracts.ConsumeResult{
 				EventID:        event.EventID,
 				AggregateID:    event.AggregateID,
@@ -119,7 +119,7 @@ func (s *ConsumerService) ConsumeEvent(ctx context.Context, event contracts.Inbo
 		}, nil
 
 	case contracts.ActionApply:
-		if err := s.repo.ApplyProjectionEffect(ctx, event.TenantID, event.AggregateType, event.AggregateID, event.AggregateVersion, event.EventID, payloadHash); err != nil {
+		if err := s.repo.ApplyProjectionEffect(ctx, event.TenantID, event.HandlerID, event.AggregateType, event.AggregateID, event.AggregateVersion, event.EventID, payloadHash); err != nil {
 			return nil, fmt.Errorf("failed applying projection effect: %w", err)
 		}
 

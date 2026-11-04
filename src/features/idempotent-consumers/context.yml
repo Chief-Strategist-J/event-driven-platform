@@ -1,6 +1,148 @@
 feature: idempotent-consumers
 mode: stateless_hexagonal
 
+entities:
+  - entity: consumer_inbox
+    owner: event-driven-platform
+    description: Operational deduplication ledger recording processed event IDs per tenant and handler
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        default: uuidv7()
+        constraint: PK(tenant_id, id), immutable
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (tenant_id = btrim(tenant_id) AND tenant_id <> ''), immutable
+      - name: handler_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (handler_id = btrim(handler_id) AND handler_id <> ''), immutable
+      - name: event_id
+        type: uuid
+        null: no
+        constraint: immutable
+      - name: aggregate_type
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (aggregate_type = btrim(aggregate_type) AND aggregate_type <> '')
+      - name: aggregate_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (aggregate_id = btrim(aggregate_id) AND aggregate_id <> '')
+      - name: aggregate_version
+        type: bigint
+        null: no
+        constraint: CHECK (aggregate_version >= 1)
+      - name: event_type
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (event_type = btrim(event_type) AND event_type <> '')
+      - name: payload_hash
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (payload_hash ~ '^[0-9a-f]{64}$')
+      - name: processed_at
+        type: timestamptz
+        null: no
+        default: now()
+        constraint: immutable
+    constraints:
+      - consumer_inbox_dedupe_uk: UNIQUE (tenant_id, handler_id, event_id)
+    invariants:
+      - inbox records are append-only and strictly immutable
+      - deduplication scope is strictly (tenant_id, handler_id, event_id)
+    pii: []
+    source_of_truth: db
+
+  - entity: consumer_projections
+    owner: event-driven-platform
+    description: Monotonic aggregate version progression and split-brain poison pill guard scoped per handler
+    fields:
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: PK, CHECK (tenant_id = btrim(tenant_id) AND tenant_id <> '')
+      - name: handler_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: PK, CHECK (handler_id = btrim(handler_id) AND handler_id <> '')
+      - name: aggregate_type
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: PK, CHECK (aggregate_type = btrim(aggregate_type) AND aggregate_type <> '')
+      - name: aggregate_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: PK, CHECK (aggregate_id = btrim(aggregate_id) AND aggregate_id <> '')
+      - name: last_version
+        type: bigint
+        null: no
+        default: 0
+        constraint: CHECK (last_version >= 0)
+      - name: last_event_id
+        type: uuid
+        null: no
+      - name: last_payload_hash
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (last_payload_hash ~ '^[0-9a-f]{64}$' OR last_payload_hash = '')
+      - name: is_parked
+        type: boolean
+        null: no
+        default: false
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: now()
+    constraints:
+      - pk_consumer_projections: PRIMARY KEY (tenant_id, handler_id, aggregate_type, aggregate_id)
+    invariants:
+      - last_version monotonically advances per handler
+      - divergent payload hash on same version forces is_parked = true
+    pii: []
+    source_of_truth: db
+
+  - entity: consumer_partition_offsets
+    owner: event-driven-platform
+    description: Partition-level offset tracking for transactional consumer checkpointing
+    fields:
+      - name: topic
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: PK, CHECK (topic = btrim(topic) AND topic <> '')
+      - name: partition
+        type: int
+        null: no
+        constraint: PK, CHECK (partition >= 0)
+      - name: offset_val
+        type: bigint
+        null: no
+        constraint: CHECK (offset_val >= 0)
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: now()
+    constraints:
+      - pk_consumer_partition_offsets: PRIMARY KEY (topic, partition)
+    invariants:
+      - offset values can only increase monotonically per topic and partition
+    pii: []
+    source_of_truth: db
+
 invariants:
   - IC-01: Atomic effect (inbox record + business projection + offset in ONE transaction)
   - IC-02: Effect-once semantics (transport is at-least-once forever)

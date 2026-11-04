@@ -119,3 +119,4 @@ func (h *IdempotentConsumerHandler) writeError(w http.ResponseWriter, code int, 
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }
+

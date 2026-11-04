@@ -36,24 +36,25 @@ func (m *MemoryConsumerRepositoryAdapter) RecordInbox(_ context.Context, record 
 	return true, nil
 }
 
-func (m *MemoryConsumerRepositoryAdapter) GetProjection(_ context.Context, tenantID, aggregateType, aggregateID string) (*contracts.AggregateProjectionState, error) {
+func (m *MemoryConsumerRepositoryAdapter) GetProjection(_ context.Context, tenantID, handlerID, aggregateType, aggregateID string) (*contracts.AggregateProjectionState, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	key := tenantID + ":" + aggregateType + ":" + aggregateID
+	key := tenantID + ":" + handlerID + ":" + aggregateType + ":" + aggregateID
 	if proj, exists := m.projections[key]; exists {
 		return &proj, nil
 	}
 	return nil, nil
 }
 
-func (m *MemoryConsumerRepositoryAdapter) ApplyProjectionEffect(_ context.Context, tenantID, aggregateType, aggregateID string, version int64, eventID, payloadHash string) error {
+func (m *MemoryConsumerRepositoryAdapter) ApplyProjectionEffect(_ context.Context, tenantID, handlerID, aggregateType, aggregateID string, version int64, eventID, payloadHash string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	key := tenantID + ":" + aggregateType + ":" + aggregateID
+	key := tenantID + ":" + handlerID + ":" + aggregateType + ":" + aggregateID
 	m.projections[key] = contracts.AggregateProjectionState{
 		TenantID:        tenantID,
+		HandlerID:       handlerID,
 		AggregateType:   aggregateType,
 		AggregateID:     aggregateID,
 		LastVersion:     version,
@@ -65,18 +66,19 @@ func (m *MemoryConsumerRepositoryAdapter) ApplyProjectionEffect(_ context.Contex
 	return nil
 }
 
-func (m *MemoryConsumerRepositoryAdapter) ParkAggregate(_ context.Context, tenantID, aggregateType, aggregateID string, _ string) error {
+func (m *MemoryConsumerRepositoryAdapter) ParkAggregate(_ context.Context, tenantID, handlerID, aggregateType, aggregateID string, _ string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	key := tenantID + ":" + aggregateType + ":" + aggregateID
-	proj := m.projections[key]
-	proj.TenantID = tenantID
-	proj.AggregateType = aggregateType
-	proj.AggregateID = aggregateID
-	proj.IsParked = true
-	proj.UpdatedAt = time.Now().UTC()
-	m.projections[key] = proj
+	key := tenantID + ":" + handlerID + ":" + aggregateType + ":" + aggregateID
+	existing := m.projections[key]
+	existing.TenantID = tenantID
+	existing.HandlerID = handlerID
+	existing.AggregateType = aggregateType
+	existing.AggregateID = aggregateID
+	existing.IsParked = true
+	existing.UpdatedAt = time.Now().UTC()
+	m.projections[key] = existing
 	return nil
 }
 

@@ -30,3 +30,4 @@ func IsContentHashConsistent(existingHash, newHash string) bool {
 	}
 	return existingHash == newHash
 }
+

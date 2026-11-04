@@ -48,6 +48,7 @@ type ConsumerInboxRecord struct {
 
 type AggregateProjectionState struct {
 	TenantID        string    `json:"tenant_id"`
+	HandlerID       string    `json:"handler_id"`
 	AggregateType   string    `json:"aggregate_type"`
 	AggregateID     string    `json:"aggregate_id"`
 	LastVersion     int64     `json:"last_version"`
