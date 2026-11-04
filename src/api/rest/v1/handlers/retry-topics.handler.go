@@ -6,8 +6,12 @@ import (
 	"strconv"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"event-driven-platform/src/features/retry-topics/contracts"
 	"event-driven-platform/src/features/retry-topics/service"
+	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
@@ -23,6 +27,9 @@ func NewRetryTopicsHandler(svc *service.RetryTopicsService) *RetryTopicsHandler 
 
 func (h *RetryTopicsHandler) EvaluateRetry(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/retries/evaluate", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
@@ -33,24 +40,58 @@ func (h *RetryTopicsHandler) EvaluateRetry(w http.ResponseWriter, r *http.Reques
 		corrID = newUUID
 	}
 
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/retries/evaluate"),
+		attribute.String("correlation_id", corrID),
+	)
+
+	tenantID := r.Header.Get(constants.HeaderXTenantID)
+
 	var req contracts.EvaluateRetryInput
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&req); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "retry-topics", "malformed retry evaluation request payload", tenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
 
-	result, err := h.svc.EvaluateRetry(r.Context(), req)
+	span.SetAttributes(
+		attribute.String("tenant_id", tenantID),
+		attribute.String("stream_ordering", string(req.StreamOrdering)),
+		attribute.String("classification", string(req.Classification)),
+		attribute.Int("attempt_number", req.AttemptNumber),
+		attribute.Int("max_attempts", req.MaxAttempts),
+	)
+
+	result, err := h.svc.EvaluateRetry(ctx, req)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		observability.LogWarn(ctx, "retry-topics", "retry evaluation validation failed", tenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
+
+	span.SetAttributes(
+		attribute.String("retry.disposition", string(result.Disposition)),
+		attribute.Int64("retry.backoff_ms", result.BackoffMs),
+	)
+
+	observability.LogInfo(ctx, "retry-topics", "retry decision evaluated successfully", tenantID, map[string]any{
+		"disposition":    result.Disposition,
+		"backoff_ms":     result.BackoffMs,
+		"attempt_number": req.AttemptNumber,
+	})
 
 	h.writeSuccess(w, http.StatusOK, result, start, reqID, corrID, causationID)
 }
 
 func (h *RetryTopicsHandler) ScheduleRetry(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/retries/attempts", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
@@ -61,24 +102,58 @@ func (h *RetryTopicsHandler) ScheduleRetry(w http.ResponseWriter, r *http.Reques
 		corrID = newUUID
 	}
 
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/retries/attempts"),
+		attribute.String("correlation_id", corrID),
+	)
+
 	var req contracts.ScheduleRetryInput
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(&req); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "retry-topics", "malformed schedule retry request payload", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
 
-	rec, err := h.svc.ScheduleRetryAttempt(r.Context(), req)
+	span.SetAttributes(
+		attribute.String("tenant_id", req.TenantID),
+		attribute.String("handler_id", req.HandlerID),
+		attribute.String("event_id", req.EventID),
+		attribute.String("aggregate_id", req.AggregateID),
+		attribute.Int("attempt_number", req.AttemptNumber),
+	)
+
+	rec, err := h.svc.ScheduleRetryAttempt(ctx, req)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "SCHEDULE_FAILED"))
+		observability.LogError(ctx, "retry-topics", "failed scheduling retry attempt", req.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
+
+	span.SetAttributes(
+		attribute.String("retry.public_id", rec.PublicID),
+		attribute.String("retry.status", string(rec.Status)),
+		attribute.String("retry.idempotency_key", rec.IdempotencyKey),
+	)
+
+	observability.LogInfo(ctx, "retry-topics", "retry attempt scheduled successfully in ledger", req.TenantID, map[string]any{
+		"public_id":       rec.PublicID,
+		"event_id":        rec.EventID,
+		"attempt_number":  rec.AttemptNumber,
+		"idempotency_key": rec.IdempotencyKey,
+	})
 
 	h.writeSuccess(w, http.StatusCreated, rec, start, reqID, corrID, causationID)
 }
 
 func (h *RetryTopicsHandler) GetDueRetries(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "GET /api/v1/retries/due", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
@@ -98,11 +173,26 @@ func (h *RetryTopicsHandler) GetDueRetries(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	records, err := h.svc.GetDueRetries(r.Context(), tenantID, limit)
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/retries/due"),
+		attribute.String("tenant_id", tenantID),
+		attribute.Int("limit", limit),
+		attribute.String("correlation_id", corrID),
+	)
+
+	records, err := h.svc.GetDueRetries(ctx, tenantID, limit)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "QUERY_FAILED"))
+		observability.LogError(ctx, "retry-topics", "failed querying due retries", tenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
+
+	span.SetAttributes(attribute.Int("records_count", len(records)))
+	observability.LogInfo(ctx, "retry-topics", "polled due retries successfully", tenantID, map[string]any{
+		"count": len(records),
+	})
 
 	h.writeSuccess(w, http.StatusOK, records, start, reqID, corrID, causationID)
 }
@@ -147,4 +237,5 @@ func (h *RetryTopicsHandler) writeError(w http.ResponseWriter, code int, canonic
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }
+
 

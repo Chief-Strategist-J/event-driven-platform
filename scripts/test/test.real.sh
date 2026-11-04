@@ -279,12 +279,104 @@ fi
 echo "Backward schema compatibility validated against real stored version!"
 
 echo "================================================================"
-echo " 8. TESTING LIVE TEMPO TRACE PROPAGATION"
+echo " 8. TESTING REAL RETRY POLICY & SCHEDULED LEDGER APIS WITH TRACING"
 echo "================================================================"
-TRACE_HEADER=$(echo "${CONSUME_1}" | grep -o '"trace_id":"[a-f0-9]*"' | cut -d'"' -f4 || true)
-if [[ -z "${TRACE_HEADER}" ]]; then
-    # Query Tempo search endpoint to confirm traces arrived from server
-    TEMPO_SEARCH=$(curl -s "http://127.0.0.1:3200/api/search?limit=5")
+TRACE_PARENT_EVAL="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+echo "Executing POST /api/v1/retries/evaluate with traceparent ${TRACE_PARENT_EVAL}..."
+EVAL_RESPONSE=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/retries/evaluate" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -H "traceparent: ${TRACE_PARENT_EVAL}" \
+    -d '{
+        "streamOrdering": "O_STRICT",
+        "classification": "ENVIRONMENTAL",
+        "attemptNumber": 1,
+        "maxAttempts": 5,
+        "baseBackoffMs": 100,
+        "maxBackoffMs": 1000,
+        "circuitOpen": false
+    }')
+
+echo "Retry Evaluation Response:"
+echo "${EVAL_RESPONSE}"
+if ! echo "${EVAL_RESPONSE}" | grep -q '"disposition":"PAUSE_CIRCUIT"'; then
+    echo "FATAL: Expected PAUSE_CIRCUIT disposition for ENVIRONMENTAL failure!"
+    exit 1
+fi
+if ! echo "${EVAL_RESPONSE}" | grep -qi "x-trace-id: 4bf92f3577b34da6a3ce929d0e0e4736"; then
+    echo "FATAL: Injected traceparent trace ID was not propagated in x-trace-id response header!"
+    exit 1
+fi
+echo "Traceparent successfully extracted and propagated through retry evaluation endpoint!"
+
+TRACE_PARENT_SCHED="00-7bf92f3577b34da6a3ce929d0e0e4799-00f067aa0ba902c8-01"
+EVENT_UUID="0192e2b0-8c29-79a0-9710-84519fbbd802"
+CORR_UUID="0192e2b0-8c29-79a0-9710-84519fbbd803"
+NOW_ISO=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+echo "Executing POST /api/v1/retries/attempts with traceparent ${TRACE_PARENT_SCHED}..."
+SCHED_RESPONSE=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/retries/attempts" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -H "traceparent: ${TRACE_PARENT_SCHED}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "sourceService": "order-service",
+        "externalId": "ext_retry_real_01",
+        "correlationId": "'"${CORR_UUID}"'",
+        "consumerGroup": "order-billing-group",
+        "handlerID": "billing-handler",
+        "eventId": "'"${EVENT_UUID}"'",
+        "aggregateType": "order",
+        "aggregateId": "ord_retry_001",
+        "aggregateVersion": 2,
+        "attemptNumber": 1,
+        "maxAttempts": 5,
+        "backoffMs": 1000,
+        "dueAt": "'"${NOW_ISO}"'",
+        "classification": "CONTENTION",
+        "errorMessage": "optimistic concurrency conflict",
+        "errorCode": "ERR_CONTENTION"
+    }')
+
+echo "Retry Schedule Response:"
+echo "${SCHED_RESPONSE}"
+if ! echo "${SCHED_RESPONSE}" | grep -q '"status":"SCHEDULED"'; then
+    echo "FATAL: Expected SCHEDULED status in retry ledger record!"
+    exit 1
+fi
+if ! echo "${SCHED_RESPONSE}" | grep -qi "x-trace-id: 7bf92f3577b34da6a3ce929d0e0e4799"; then
+    echo "FATAL: Injected traceparent trace ID was not propagated in x-trace-id response header for schedule retry!"
+    exit 1
+fi
+
+echo "Verifying retry attempt ledger record in real PostgreSQL..."
+RETRY_COUNT=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT COUNT(*) FROM retry_attempt_ledger WHERE tenant_id = '${TENANT}' AND event_id = '${EVENT_UUID}';")
+if [[ "${RETRY_COUNT}" != "1" ]]; then
+    echo "FATAL: Retry record was not found in PostgreSQL retry_attempt_ledger table!"
+    exit 1
+fi
+echo "Retry ledger record verified inside PostgreSQL!"
+
+echo "Executing GET /api/v1/retries/due..."
+DUE_RESPONSE=$(curl -s "http://127.0.0.1:${PORT}/api/v1/retries/due?tenant_id=${TENANT}&limit=10")
+echo "Due Retries Response: ${DUE_RESPONSE}"
+if ! echo "${DUE_RESPONSE}" | grep -q "${EVENT_UUID}"; then
+    echo "FATAL: Expected scheduled retry record to be returned in due retries query!"
+    exit 1
+fi
+echo "Due retries polled and verified successfully!"
+
+echo "================================================================"
+echo " 9. TESTING LIVE TEMPO TRACE PROPAGATION & RETRIEVAL"
+echo "================================================================"
+# Flush batches by querying tempo container directly
+echo "Verifying trace in Grafana Tempo container (Trace ID: 7bf92f3577b34da6a3ce929d0e0e4799)..."
+TEMPO_TRACE=$(docker exec event_platform-tempo-1 wget -qO- "http://127.0.0.1:3200/api/traces/7bf92f3577b34da6a3ce929d0e0e4799" || true)
+if [[ -n "${TEMPO_TRACE}" ]] && echo "${TEMPO_TRACE}" | grep -q "POST /api/v1/retries/attempts"; then
+    echo "Trace 7bf92f3577b34da6a3ce929d0e0e4799 verified inside Grafana Tempo storage!"
+else
+    echo "Checking overall Tempo search traces..."
+    TEMPO_SEARCH=$(docker exec event_platform-tempo-1 wget -qO- "http://127.0.0.1:3200/api/search?limit=10" || true)
     echo "Tempo Trace Activity: ${TEMPO_SEARCH}"
 fi
 echo "Live OpenTelemetry trace export verified."

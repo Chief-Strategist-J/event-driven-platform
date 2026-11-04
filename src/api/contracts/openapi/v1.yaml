@@ -673,3 +673,118 @@ paths:
           description: List of due retry attempts
         "500":
           description: Internal error
+
+  /api/v1/consumer-groups/members:
+    post:
+      summary: Register Consumer Group Member
+      operationId: registerConsumerGroupMember
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - groupId
+                - memberId
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string }
+                groupId: { type: string }
+                memberId: { type: string }
+                instanceId: { type: string }
+                clientHost: { type: string }
+                assignmentStrategy: { type: string }
+      responses:
+        "201":
+          description: Member registered successfully
+        "400":
+          description: Validation failed or banned eager assignor
+
+    get:
+      summary: List Consumer Group Members
+      operationId: listConsumerGroupMembers
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: group_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: List of active members in consumer group
+        "500":
+          description: Internal error
+
+  /api/v1/consumer-groups/heartbeat:
+    post:
+      summary: Pulse Consumer Member Heartbeat
+      operationId: pulseConsumerHeartbeat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - groupId
+                - memberId
+              properties:
+                tenantId: { type: string }
+                groupId: { type: string }
+                memberId: { type: string }
+                instanceId: { type: string }
+                correlationId: { type: string }
+      responses:
+        "200":
+          description: Heartbeat recorded and generation status returned
+        "400":
+          description: Validation error
+
+  /api/v1/consumer-groups/rebalance:
+    post:
+      summary: Record Rebalance Partition Assignment Sync
+      operationId: syncConsumerRebalance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - groupId
+                - memberId
+                - generationId
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string }
+                groupId: { type: string }
+                memberId: { type: string }
+                generationId: { type: integer, minimum: 0 }
+                rebalanceReason: { type: string }
+                memberCount: { type: integer, minimum: 0 }
+                revokedPartitions: { type: array, items: { type: object } }
+                assignedPartitions: { type: array, items: { type: object } }
+                durationMs: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Rebalance synced and partition assignment updated
+        "400":
+          description: Validation error

@@ -26,6 +26,8 @@ import (
 	orderingService "event-driven-platform/src/features/event-ordering-protection/service"
 	retryAdapters "event-driven-platform/src/features/retry-topics/infrastructure/adapters"
 	retryService "event-driven-platform/src/features/retry-topics/service"
+	groupAdapters "event-driven-platform/src/features/consumer-groups/infrastructure/adapters"
+	groupService "event-driven-platform/src/features/consumer-groups/service"
 	consumerAdapters "event-driven-platform/src/features/idempotent-consumers/infrastructure/adapters"
 	consumerService "event-driven-platform/src/features/idempotent-consumers/service"
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
@@ -96,6 +98,7 @@ func describeService() chassis.ServiceSpec {
 			versioningRepo := versioningAdapters.NewPostgresEventVersioningAdapter(db)
 			orderingRepo := orderingAdapters.NewPostgresEventOrderingAdapter(db)
 			retryRepo := retryAdapters.NewPostgresRetryTopicsAdapter(db)
+			groupRepo := groupAdapters.NewPostgresConsumerGroupsAdapter(db)
 
 			var producer producers.ProducerPort
 			kafkaBrokersEnv := os.Getenv("KAFKA_BROKERS")
@@ -111,6 +114,7 @@ func describeService() chassis.ServiceSpec {
 			versioningSvc := versioningService.NewEventVersioningService(versioningRepo, nil)
 			orderingSvc := orderingService.NewEventOrderingService(orderingRepo)
 			retrySvc := retryService.NewRetryTopicsService(retryRepo)
+			groupSvc := groupService.NewConsumerGroupsService(groupRepo)
 
 			return chassis.Services{
 				Registry: map[string]any{
@@ -121,6 +125,7 @@ func describeService() chassis.ServiceSpec {
 					"versioningService": versioningSvc,
 					"orderingService":   orderingSvc,
 					"retryService":      retrySvc,
+					"groupService":      groupSvc,
 				},
 			}, nil
 		},
@@ -166,6 +171,11 @@ func describeService() chassis.ServiceSpec {
 				retryHandler := handlers.NewRetryTopicsHandler(retrySvc)
 				retryRouter := routers.NewRetryTopicsRouter(retryHandler)
 				retryRouter.RegisterRoutes(router)
+			}
+			if groupSvc, exists := instances["groupService"].(*groupService.ConsumerGroupsService); exists && groupSvc != nil {
+				groupHandler := handlers.NewConsumerGroupsHandler(groupSvc)
+				groupRouter := routers.NewConsumerGroupsRouter(groupHandler)
+				groupRouter.RegisterRoutes(router)
 			}
 		},
 		RegisterDaemons: func(lifecycle *chassis.Lifecycle, services chassis.Services) {

@@ -1,2 +1,45 @@
-feature: consumer-groups
-mode: stateless_hexagonal
+name: consumer-groups
+version: 1.0.0
+description: Production-grade Kafka consumer group coordination, CooperativeStickyAssignor rebalancing, static membership epoch tracking, and heartbeat watchdog monitoring.
+entities:
+  consumer_group_member:
+    primary_key: [tenant_id, id]
+    foreign_keys: []
+    identifiers:
+      id: UUIDv7
+      public_id: String (cgm_...)
+      tenant_id: String
+      source_service: String
+      external_id: String
+      correlation_id: UUIDv7
+    fields:
+      group_id: String
+      member_id: String
+      instance_id: String
+      client_host: String
+      assignment_strategy: String
+      assigned_partitions: JSONB
+      generation_id: Int64
+      heartbeat_at: TimestampUTC
+      status: String (JOINING, STABLE, REBALANCING, DEAD)
+      created_at: TimestampUTC
+      updated_at: TimestampUTC
+  consumer_group_rebalance_log:
+    primary_key: [tenant_id, id]
+    foreign_keys: []
+    identifiers:
+      id: UUIDv7
+      public_id: String (cgr_...)
+      tenant_id: String
+      source_service: String
+      external_id: String
+      correlation_id: UUIDv7
+    fields:
+      group_id: String
+      generation_id: Int64
+      rebalance_reason: String
+      member_count: Int32
+      revoked_partitions: JSONB
+      assigned_partitions: JSONB
+      duration_ms: Int64
+      created_at: TimestampUTC
