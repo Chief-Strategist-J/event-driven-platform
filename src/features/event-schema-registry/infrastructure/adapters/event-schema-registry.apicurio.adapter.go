@@ -13,7 +13,6 @@ import (
 	"event-driven-platform/src/shared/errors"
 )
 
-// ApicurioSchemaRegistryAdapter communicates with the live Apicurio Registry v2 HTTP REST API
 type ApicurioSchemaRegistryAdapter struct {
 	baseURL    string
 	httpClient *http.Client

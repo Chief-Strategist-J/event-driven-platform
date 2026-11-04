@@ -16,7 +16,7 @@ fi
 
 echo "==> Applying pending PostgreSQL migrations from ${MIGRATIONS_DIR}..."
 
-for migration_file in $(ls "${MIGRATIONS_DIR}"/*.sql | sort); do
+for migration_file in $(ls "${MIGRATIONS_DIR}"/[0-9][0-9][0-9][0-9]_*.sql | grep -v '\.rollback\.sql$' | sort); do
     echo "Applying $(basename "${migration_file}")..."
     if [ -n "${DOCKER_BIN}" ] && "${DOCKER_BIN}" ps --format '{{.Names}}' | grep -q 'event_platform-db-1'; then
         "${DOCKER_BIN}" exec -i event_platform-db-1 psql -U postgres -d event_store < "${migration_file}"

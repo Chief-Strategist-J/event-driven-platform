@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/google/uuid"
+
 	"event-driven-platform/src/features/event-ordering-protection/contracts"
 	"event-driven-platform/src/features/event-ordering-protection/domain/machines"
 	"event-driven-platform/src/features/event-ordering-protection/domain/rules"
@@ -113,6 +115,11 @@ func (s *EventOrderingService) EvaluateAndApply(ctx context.Context, input contr
 			return nil, fmt.Errorf("failed recording held aggregate: %w", err)
 		}
 
+		heldEventUUID := input.EventID
+		if _, err := uuid.Parse(heldEventUUID); err != nil {
+			heldEventUUID, _ = utils.GenerateUUIDv7()
+		}
+
 		heldID, _ := utils.GenerateUUIDv7()
 		heldPublicID, _ := utils.GeneratePublicID("hld")
 		heldEvent := contracts.SequenceHeldEventRecord{
@@ -127,7 +134,7 @@ func (s *EventOrderingService) EvaluateAndApply(ctx context.Context, input contr
 			AggregateType:    input.AggregateType,
 			AggregateID:      input.AggregateID,
 			AggregateVersion: input.AggregateVersion,
-			EventID:          input.EventID,
+			EventID:          heldEventUUID,
 			EventType:        input.EventType,
 			Payload:          input.Payload,
 			PayloadHash:      payloadHash,

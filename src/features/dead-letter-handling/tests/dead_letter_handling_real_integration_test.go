@@ -54,7 +54,6 @@ func getDLQIntegrationDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// 1. Mandatory Physical Check Constraint Rejection per 09-test-writing.md Tier 1
 func TestDeadLetterHandling_Integration_PhysicalCheckConstraints(t *testing.T) {
 	db := getDLQIntegrationDB(t)
 	defer db.Close()
@@ -62,7 +61,6 @@ func TestDeadLetterHandling_Integration_PhysicalCheckConstraints(t *testing.T) {
 
 	badID, _ := utils.GenerateUUIDv7()
 
-	// Invariant: public_id must match regex ^dlq_[0-9a-zA-Z]{26}$
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO dead_letter_quarantine (
 			id, public_id, tenant_id, source_service, external_id, correlation_id, topic, partition, source_offset,
@@ -78,7 +76,6 @@ func TestDeadLetterHandling_Integration_PhysicalCheckConstraints(t *testing.T) {
 		t.Fatalf("expected physical check constraint violation for malformed public_id, but insert succeeded")
 	}
 
-	// Invariant: aggregate_version must be >= 1
 	_, err = db.ExecContext(ctx, `
 		INSERT INTO dead_letter_quarantine (
 			id, public_id, tenant_id, source_service, external_id, correlation_id, topic, partition, source_offset,
@@ -95,7 +92,6 @@ func TestDeadLetterHandling_Integration_PhysicalCheckConstraints(t *testing.T) {
 	}
 }
 
-// 2. Real PostgreSQL Quarantine, Key Parking and Redrive Drainage
 func TestDeadLetterHandling_Integration_PostgresQuarantineAndRedrive(t *testing.T) {
 	db := getDLQIntegrationDB(t)
 	defer db.Close()
@@ -129,7 +125,6 @@ func TestDeadLetterHandling_Integration_PostgresQuarantineAndRedrive(t *testing.
 		ErrorCode:        "ERR_SCHEMA_VIOLATION",
 	}
 
-	// 1. Quarantine Event
 	rec, err := svc.QuarantineEvent(ctx, input)
 	if err != nil {
 		t.Fatalf("failed to quarantine event in real PostgreSQL: %v", err)
@@ -139,20 +134,17 @@ func TestDeadLetterHandling_Integration_PostgresQuarantineAndRedrive(t *testing.
 		t.Fatalf("expected QUARANTINED status, got %s", rec.Status)
 	}
 
-	// 2. Verify row exists in real PostgreSQL
 	var count int
 	err = db.QueryRowContext(ctx, "SELECT COUNT(*) FROM dead_letter_quarantine WHERE tenant_id = $1 AND id = $2", tenantID, rec.ID).Scan(&count)
 	if err != nil || count != 1 {
 		t.Fatalf("expected 1 row in dead_letter_quarantine, got %d (err: %v)", count, err)
 	}
 
-	// 3. Verify Ordering-Preserving Key Parking Invariant in aggregate_parking_store
 	isParked, err := svc.IsKeyParked(ctx, tenantID, "inventory-handler", "order", aggregateID)
 	if err != nil || !isParked {
 		t.Fatalf("expected aggregate %s to be parked in real DB, got %v", aggregateID, isParked)
 	}
 
-	// 4. Test Redrive Resolution
 	invoker := func(_ context.Context, _ contracts.DeadLetterQuarantineRecord) (bool, error) {
 		return true, nil
 	}
@@ -161,7 +153,6 @@ func TestDeadLetterHandling_Integration_PostgresQuarantineAndRedrive(t *testing.
 		t.Fatalf("failed to redrive quarantined event: %v (result: %+v)", redriveErr, result)
 	}
 
-	// 5. Verify Aggregate Unparked in PostgreSQL
 	isParkedAfter, err := svc.IsKeyParked(ctx, tenantID, "inventory-handler", "order", aggregateID)
 	if err != nil || isParkedAfter {
 		t.Fatalf("expected aggregate to be unparked after redrive resolution, got %v", isParkedAfter)

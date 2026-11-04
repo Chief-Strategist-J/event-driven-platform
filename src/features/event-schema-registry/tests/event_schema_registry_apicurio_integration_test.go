@@ -36,7 +36,6 @@ func TestEventSchemaRegistry_ApicurioIntegration(t *testing.T) {
 		Schema:   schemaBody,
 	}
 
-	// 1. Register schema in real Apicurio Registry
 	created, err := svc.RegisterSchema(ctx, input)
 	if err != nil {
 		t.Fatalf("failed to register schema in real Apicurio Registry: %v", err)
@@ -45,7 +44,6 @@ func TestEventSchemaRegistry_ApicurioIntegration(t *testing.T) {
 		t.Fatalf("expected created schema ID %s, got %+v", schemaID, created)
 	}
 
-	// 2. Fetch schema back from real Apicurio Registry
 	retrieved, err := svc.GetSchema(ctx, tenantID, schemaID)
 	if err != nil {
 		t.Fatalf("failed to retrieve schema from Apicurio Registry: %v", err)
@@ -58,7 +56,6 @@ func TestEventSchemaRegistry_ApicurioIntegration(t *testing.T) {
 		t.Errorf("expected content %s, got %s", schemaBody, retrieved.Schema)
 	}
 
-	// 3. Duplicate registration conflict check
 	_, errDupe := svc.RegisterSchema(ctx, input)
 	if errDupe == nil {
 		t.Fatalf("expected conflict error registering duplicate schema in Apicurio, got nil")
