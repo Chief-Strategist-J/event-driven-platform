@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+
 	"event-driven-platform/src/features/offset-management/contracts"
 	"event-driven-platform/src/features/offset-management/domain/rules"
 	"event-driven-platform/src/features/offset-management/infrastructure/ports"
+	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/utils"
 )
 
@@ -20,6 +23,18 @@ func NewOffsetManagementService(repo ports.OffsetManagementRepositoryPort) *Offs
 }
 
 func (s *OffsetManagementService) CommitOffset(ctx context.Context, input contracts.CommitOffsetInput) (*contracts.ConsumerStoredOffsetRecord, error) {
+	ctx, span := observability.StartSpan(ctx, "offset-management.commit_offset")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("tenant_id", input.TenantID),
+		attribute.String("group_id", input.GroupID),
+		attribute.String("topic", input.Topic),
+		attribute.Int("partition", int(input.Partition)),
+		attribute.Int64("offset", input.Offset),
+		attribute.Int64("log_end_offset", input.LogEndOffset),
+	)
+
 	existing, err := s.repo.GetStoredOffset(ctx, input.TenantID, input.GroupID, input.Topic, input.Partition)
 	var currentOffset int64 = 0
 	if err == nil && existing != nil {
@@ -27,6 +42,8 @@ func (s *OffsetManagementService) CommitOffset(ctx context.Context, input contra
 	}
 
 	if err := rules.ValidateOffsetCommit(currentOffset, input.Offset); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		observability.LogWarn(ctx, "offset-management", "offset commit validation rejected", input.TenantID, map[string]any{"error": err.Error()})
 		return nil, err
 	}
 
@@ -37,10 +54,12 @@ func (s *OffsetManagementService) CommitOffset(ctx context.Context, input contra
 
 	recordID, err := utils.GenerateUUIDv7()
 	if err != nil {
+		observability.RecordError(span, err)
 		return nil, err
 	}
 	publicID, err := utils.GeneratePublicID("cso")
 	if err != nil {
+		observability.RecordError(span, err)
 		return nil, err
 	}
 
@@ -62,6 +81,8 @@ func (s *OffsetManagementService) CommitOffset(ctx context.Context, input contra
 
 	res, err := s.repo.UpsertStoredOffset(ctx, rec)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "STORAGE_ERROR"))
+		observability.LogError(ctx, "offset-management", "failed persisting stored offset in repository", input.TenantID, map[string]any{"error": err.Error()})
 		return nil, err
 	}
 
@@ -84,12 +105,32 @@ func (s *OffsetManagementService) CommitOffset(ctx context.Context, input contra
 	}
 	_ = s.repo.RecordAuditLog(ctx, auditLog)
 
+	span.SetAttributes(
+		attribute.String("offset.public_id", res.PublicID),
+		attribute.Int64("offset.commit_epoch", res.CommitEpoch),
+		attribute.Int64("offset.lag", res.Lag),
+	)
+
 	return res, nil
 }
 
 func (s *OffsetManagementService) RewindOffset(ctx context.Context, input contracts.RewindOffsetInput) (*contracts.ConsumerStoredOffsetRecord, error) {
+	ctx, span := observability.StartSpan(ctx, "offset-management.rewind_offset")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("tenant_id", input.TenantID),
+		attribute.String("group_id", input.GroupID),
+		attribute.String("topic", input.Topic),
+		attribute.Int("partition", int(input.Partition)),
+		attribute.Int64("target_offset", input.TargetOffset),
+		attribute.String("reason", input.Reason),
+	)
+
 	if input.TargetOffset < 0 {
-		return nil, rules.ErrNegativeOffsetDisallowed
+		err := rules.ErrNegativeOffsetDisallowed
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		return nil, err
 	}
 
 	existing, err := s.repo.GetStoredOffset(ctx, input.TenantID, input.GroupID, input.Topic, input.Partition)
@@ -107,10 +148,12 @@ func (s *OffsetManagementService) RewindOffset(ctx context.Context, input contra
 
 	recID, err := utils.GenerateUUIDv7()
 	if err != nil {
+		observability.RecordError(span, err)
 		return nil, err
 	}
 	pubID, err := utils.GeneratePublicID("cso")
 	if err != nil {
+		observability.RecordError(span, err)
 		return nil, err
 	}
 
@@ -131,6 +174,8 @@ func (s *OffsetManagementService) RewindOffset(ctx context.Context, input contra
 
 	res, err := s.repo.UpsertStoredOffset(ctx, rec)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "STORAGE_ERROR"))
+		observability.LogError(ctx, "offset-management", "failed persisting rewound offset", input.TenantID, map[string]any{"error": err.Error()})
 		return nil, err
 	}
 
@@ -153,17 +198,36 @@ func (s *OffsetManagementService) RewindOffset(ctx context.Context, input contra
 	}
 	_ = s.repo.RecordAuditLog(ctx, auditLog)
 
+	span.SetAttributes(
+		attribute.String("offset.public_id", res.PublicID),
+		attribute.Int64("offset.commit_epoch", res.CommitEpoch),
+	)
+
 	return res, nil
 }
 
 func (s *OffsetManagementService) FastForwardOffset(ctx context.Context, input contracts.FastForwardOffsetInput) (*contracts.ConsumerStoredOffsetRecord, error) {
+	ctx, span := observability.StartSpan(ctx, "offset-management.fast_forward_offset")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("tenant_id", input.TenantID),
+		attribute.String("group_id", input.GroupID),
+		attribute.String("topic", input.Topic),
+		attribute.Int("partition", int(input.Partition)),
+		attribute.Int64("shift_by", input.ShiftBy),
+		attribute.String("reason", input.Reason),
+	)
+
 	existing, err := s.repo.GetStoredOffset(ctx, input.TenantID, input.GroupID, input.Topic, input.Partition)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "NOT_FOUND"))
 		return nil, err
 	}
 
 	targetOffset, err := rules.ComputeFastForwardOffset(existing.StoredOffset, input.ShiftBy, existing.LogEndOffset)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
 		return nil, err
 	}
 
@@ -174,10 +238,12 @@ func (s *OffsetManagementService) FastForwardOffset(ctx context.Context, input c
 
 	recID, err := utils.GenerateUUIDv7()
 	if err != nil {
+		observability.RecordError(span, err)
 		return nil, err
 	}
 	pubID, err := utils.GeneratePublicID("cso")
 	if err != nil {
+		observability.RecordError(span, err)
 		return nil, err
 	}
 
@@ -198,6 +264,8 @@ func (s *OffsetManagementService) FastForwardOffset(ctx context.Context, input c
 
 	res, err := s.repo.UpsertStoredOffset(ctx, rec)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "STORAGE_ERROR"))
+		observability.LogError(ctx, "offset-management", "failed persisting fast-forward offset", input.TenantID, map[string]any{"error": err.Error()})
 		return nil, err
 	}
 
@@ -220,12 +288,29 @@ func (s *OffsetManagementService) FastForwardOffset(ctx context.Context, input c
 	}
 	_ = s.repo.RecordAuditLog(ctx, auditLog)
 
+	span.SetAttributes(
+		attribute.String("offset.public_id", res.PublicID),
+		attribute.Int64("offset.commit_epoch", res.CommitEpoch),
+	)
+
 	return res, nil
 }
 
 func (s *OffsetManagementService) EvaluateLag(ctx context.Context, tenantID, groupID, topic string, partition int32, rate float64) (*contracts.LagEvaluationResult, error) {
+	ctx, span := observability.StartSpan(ctx, "offset-management.evaluate_lag")
+	defer span.End()
+
+	span.SetAttributes(
+		attribute.String("tenant_id", tenantID),
+		attribute.String("group_id", groupID),
+		attribute.String("topic", topic),
+		attribute.Int("partition", int(partition)),
+		attribute.Float64("rate", rate),
+	)
+
 	rec, err := s.repo.GetStoredOffset(ctx, tenantID, groupID, topic, partition)
 	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "NOT_FOUND"))
 		return nil, err
 	}
 
@@ -236,6 +321,12 @@ func (s *OffsetManagementService) EvaluateLag(ctx context.Context, tenantID, gro
 	} else if severity == contracts.LagSeverityStalled {
 		action = "FIRE_CRITICAL_STALL_ALERT"
 	}
+
+	span.SetAttributes(
+		attribute.String("lag.severity", string(severity)),
+		attribute.String("lag.action", action),
+		attribute.Int64("lag.current", rec.Lag),
+	)
 
 	return &contracts.LagEvaluationResult{
 		GroupID:      rec.GroupID,

@@ -52,3 +52,4 @@ WHERE tenant_id = $1 AND group_id = $2
 ORDER BY topic ASC, partition ASC;
 `
 )
+

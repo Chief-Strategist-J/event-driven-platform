@@ -16,3 +16,4 @@ func RegisterOffsetManagementRoutes(mux *http.ServeMux, repo ports.OffsetManagem
 	mux.HandleFunc("POST /api/v1/offsets/rewind", h.HandleRewindOffset)
 	mux.HandleFunc("POST /api/v1/offsets/fast-forward", h.HandleFastForwardOffset)
 }
+

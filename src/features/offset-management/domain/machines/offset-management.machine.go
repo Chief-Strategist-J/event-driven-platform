@@ -45,3 +45,4 @@ func (m *LagStateMachine) Transition(next contracts.LagSeverity) error {
 	}
 	return ErrInvalidLagTransition
 }
+

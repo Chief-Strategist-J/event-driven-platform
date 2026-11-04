@@ -118,3 +118,4 @@ sequenceDiagram
 
 ### Negative & Mitigations
 * **Write Amplification**: Every batch updates `consumer_stored_offset`. *Mitigation*: Piggybacked directly onto existing business database transactions.
+

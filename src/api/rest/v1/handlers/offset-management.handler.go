@@ -36,12 +36,20 @@ func (h *OffsetManagementHandler) HandleCommitOffset(w http.ResponseWriter, r *h
 	tenantID := r.Header.Get(constants.HeaderXTenantID)
 
 	if corrID == "" {
-		corrID, _ = utils.GenerateUUIDv7()
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
 	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/offsets/commit"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	var input contracts.CommitOffsetInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "offset-management", "malformed commit offset request", tenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
@@ -53,12 +61,36 @@ func (h *OffsetManagementHandler) HandleCommitOffset(w http.ResponseWriter, r *h
 		input.CorrelationID = corrID
 	}
 
+	span.SetAttributes(
+		attribute.String("tenant_id", input.TenantID),
+		attribute.String("group_id", input.GroupID),
+		attribute.String("topic", input.Topic),
+		attribute.Int("partition", int(input.Partition)),
+		attribute.Int64("offset", input.Offset),
+		attribute.Int64("log_end_offset", input.LogEndOffset),
+	)
+
 	res, err := h.feat.CommitOffset(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "COMMIT_OFFSET_FAILED"))
+		observability.LogWarn(ctx, "offset-management", "offset commit rejected", input.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
+
+	span.SetAttributes(
+		attribute.String("offset.public_id", res.PublicID),
+		attribute.Int64("offset.lag", res.Lag),
+		attribute.Int64("offset.commit_epoch", res.CommitEpoch),
+	)
+	observability.LogInfo(ctx, "offset-management", "offset committed successfully", input.TenantID, map[string]any{
+		"public_id":    res.PublicID,
+		"group_id":     input.GroupID,
+		"topic":        input.Topic,
+		"partition":    input.Partition,
+		"offset":       input.Offset,
+		"commit_epoch": res.CommitEpoch,
+	})
 
 	h.writeSuccess(w, http.StatusOK, res, start, reqID, corrID, causationID)
 }
@@ -75,12 +107,20 @@ func (h *OffsetManagementHandler) HandleRewindOffset(w http.ResponseWriter, r *h
 	tenantID := r.Header.Get(constants.HeaderXTenantID)
 
 	if corrID == "" {
-		corrID, _ = utils.GenerateUUIDv7()
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
 	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/offsets/rewind"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	var input contracts.RewindOffsetInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "offset-management", "malformed rewind offset request", tenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
@@ -92,12 +132,35 @@ func (h *OffsetManagementHandler) HandleRewindOffset(w http.ResponseWriter, r *h
 		input.CorrelationID = corrID
 	}
 
+	span.SetAttributes(
+		attribute.String("tenant_id", input.TenantID),
+		attribute.String("group_id", input.GroupID),
+		attribute.String("topic", input.Topic),
+		attribute.Int("partition", int(input.Partition)),
+		attribute.Int64("target_offset", input.TargetOffset),
+		attribute.String("reason", input.Reason),
+	)
+
 	res, err := h.feat.RewindOffset(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "REWIND_OFFSET_FAILED"))
+		observability.LogWarn(ctx, "offset-management", "offset rewind rejected", input.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
+
+	span.SetAttributes(
+		attribute.String("offset.public_id", res.PublicID),
+		attribute.Int64("offset.commit_epoch", res.CommitEpoch),
+	)
+	observability.LogInfo(ctx, "offset-management", "offset rewound successfully", input.TenantID, map[string]any{
+		"public_id":     res.PublicID,
+		"group_id":      input.GroupID,
+		"topic":         input.Topic,
+		"partition":     input.Partition,
+		"target_offset": input.TargetOffset,
+		"reason":        input.Reason,
+	})
 
 	h.writeSuccess(w, http.StatusOK, res, start, reqID, corrID, causationID)
 }
@@ -114,12 +177,20 @@ func (h *OffsetManagementHandler) HandleFastForwardOffset(w http.ResponseWriter,
 	tenantID := r.Header.Get(constants.HeaderXTenantID)
 
 	if corrID == "" {
-		corrID, _ = utils.GenerateUUIDv7()
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
 	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/offsets/fast-forward"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	var input contracts.FastForwardOffsetInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "offset-management", "malformed fast-forward offset request", tenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
@@ -131,12 +202,36 @@ func (h *OffsetManagementHandler) HandleFastForwardOffset(w http.ResponseWriter,
 		input.CorrelationID = corrID
 	}
 
+	span.SetAttributes(
+		attribute.String("tenant_id", input.TenantID),
+		attribute.String("group_id", input.GroupID),
+		attribute.String("topic", input.Topic),
+		attribute.Int("partition", int(input.Partition)),
+		attribute.Int64("shift_by", input.ShiftBy),
+		attribute.String("reason", input.Reason),
+	)
+
 	res, err := h.feat.FastForwardOffset(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "FAST_FORWARD_OFFSET_FAILED"))
+		observability.LogWarn(ctx, "offset-management", "offset fast-forward rejected", input.TenantID, map[string]any{"error": err.Error()})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
+
+	span.SetAttributes(
+		attribute.String("offset.public_id", res.PublicID),
+		attribute.Int64("offset.commit_epoch", res.CommitEpoch),
+	)
+	observability.LogInfo(ctx, "offset-management", "offset fast-forwarded successfully", input.TenantID, map[string]any{
+		"public_id":     res.PublicID,
+		"group_id":      input.GroupID,
+		"topic":         input.Topic,
+		"partition":     input.Partition,
+		"shift_by":      input.ShiftBy,
+		"target_offset": res.StoredOffset,
+		"reason":        input.Reason,
+	})
 
 	h.writeSuccess(w, http.StatusOK, res, start, reqID, corrID, causationID)
 }

@@ -67,3 +67,4 @@ func ComputeFastForwardOffset(currentOffset, shiftBy, logEndOffset int64) (int64
 	}
 	return target, nil
 }
+

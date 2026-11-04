@@ -88,3 +88,4 @@ func (a *PostgresOffsetManagementAdapter) RecordAuditLog(ctx context.Context, lo
 	)
 	return err
 }
+

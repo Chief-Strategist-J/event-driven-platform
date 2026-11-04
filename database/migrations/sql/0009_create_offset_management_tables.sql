@@ -1,3 +1,13 @@
+-- migration:      0009
+-- description:    create consumer stored offset and audit log tables
+-- author:         chief-strategist
+-- date:           2026-11-04T19:00:00Z
+-- depends_on:     0008
+-- reversible:     YES
+-- lock_risk:      LOW
+-- rows_affected:  schema only
+-- reason:         enforce authoritative stored offset management, anti-regression, and immutable audit logs per WP-7
+
 CREATE TABLE IF NOT EXISTS consumer_stored_offset (
     id UUID NOT NULL,
     public_id VARCHAR(30) NOT NULL,
@@ -21,6 +31,11 @@ CREATE TABLE IF NOT EXISTS consumer_stored_offset (
     CONSTRAINT uq_consumer_stored_offset_external UNIQUE (tenant_id, source_service, external_id),
     CONSTRAINT uq_consumer_stored_offset_group_topic_part UNIQUE (tenant_id, group_id, topic, partition),
     CONSTRAINT ck_consumer_stored_offset_public_id CHECK (public_id ~ '^cso_[0-9a-zA-Z]{26}$'),
+    CONSTRAINT ck_consumer_stored_offset_source_service CHECK (source_service = btrim(source_service) AND source_service <> ''),
+    CONSTRAINT ck_consumer_stored_offset_external_id CHECK (external_id = btrim(external_id) AND external_id <> ''),
+    CONSTRAINT ck_consumer_stored_offset_group_id CHECK (group_id = btrim(group_id) AND group_id <> ''),
+    CONSTRAINT ck_consumer_stored_offset_topic CHECK (topic = btrim(topic) AND topic <> ''),
+    CONSTRAINT ck_consumer_stored_offset_partition CHECK (partition >= 0),
     CONSTRAINT ck_consumer_stored_offset_stored_non_neg CHECK (stored_offset >= 0),
     CONSTRAINT ck_consumer_stored_offset_lag_non_neg CHECK (lag >= 0),
     CONSTRAINT ck_consumer_stored_offset_epoch_non_neg CHECK (commit_epoch >= 1)
@@ -52,6 +67,11 @@ CREATE TABLE IF NOT EXISTS consumer_offset_audit_log (
     CONSTRAINT uq_consumer_offset_audit_log_public_id UNIQUE (tenant_id, public_id),
     CONSTRAINT uq_consumer_offset_audit_log_external UNIQUE (tenant_id, source_service, external_id),
     CONSTRAINT ck_consumer_offset_audit_log_public_id CHECK (public_id ~ '^coal_[0-9a-zA-Z]{26}$'),
+    CONSTRAINT ck_consumer_offset_audit_log_source_service CHECK (source_service = btrim(source_service) AND source_service <> ''),
+    CONSTRAINT ck_consumer_offset_audit_log_external_id CHECK (external_id = btrim(external_id) AND external_id <> ''),
+    CONSTRAINT ck_consumer_offset_audit_log_group_id CHECK (group_id = btrim(group_id) AND group_id <> ''),
+    CONSTRAINT ck_consumer_offset_audit_log_topic CHECK (topic = btrim(topic) AND topic <> ''),
+    CONSTRAINT ck_consumer_offset_audit_log_partition CHECK (partition >= 0),
     CONSTRAINT ck_consumer_offset_audit_log_op_type CHECK (operation_type IN ('COMMIT', 'REWIND', 'FAST_FORWARD', 'RESET')),
     CONSTRAINT ck_consumer_offset_audit_log_prev_non_neg CHECK (previous_offset >= 0),
     CONSTRAINT ck_consumer_offset_audit_log_target_non_neg CHECK (target_offset >= 0)

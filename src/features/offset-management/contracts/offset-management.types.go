@@ -111,3 +111,4 @@ type LagEvaluationResult struct {
 	Severity     LagSeverity `json:"severity"`
 	Action       string      `json:"action"`
 }
+

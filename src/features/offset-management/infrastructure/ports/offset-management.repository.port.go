@@ -12,3 +12,4 @@ type OffsetManagementRepositoryPort interface {
 	ListStoredOffsets(ctx context.Context, tenantID, groupID string) ([]contracts.ConsumerStoredOffsetRecord, error)
 	RecordAuditLog(ctx context.Context, log contracts.ConsumerOffsetAuditLogRecord) error
 }
+

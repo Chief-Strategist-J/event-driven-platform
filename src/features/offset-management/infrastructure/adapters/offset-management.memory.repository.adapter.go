@@ -75,3 +75,4 @@ func (a *MemoryOffsetManagementAdapter) RecordAuditLog(ctx context.Context, log 
 	a.logs = append(a.logs, log)
 	return nil
 }
+

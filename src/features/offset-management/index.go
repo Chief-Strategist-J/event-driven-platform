@@ -37,3 +37,4 @@ func (f *OffsetManagementFeature) FastForwardOffset(ctx context.Context, input c
 func (f *OffsetManagementFeature) EvaluateLag(ctx context.Context, tenantID, groupID, topic string, partition int32, rate float64) (*contracts.LagEvaluationResult, error) {
 	return f.Service.EvaluateLag(ctx, tenantID, groupID, topic, partition, rate)
 }
+
