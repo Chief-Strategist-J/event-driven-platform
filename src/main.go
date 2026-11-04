@@ -20,6 +20,8 @@ import (
 	dlqService "event-driven-platform/src/features/dead-letter-handling/service"
 	schemaAdapters "event-driven-platform/src/features/event-schema-registry/infrastructure/adapters"
 	schemaService "event-driven-platform/src/features/event-schema-registry/service"
+	versioningAdapters "event-driven-platform/src/features/event-versioning/infrastructure/adapters"
+	versioningService "event-driven-platform/src/features/event-versioning/service"
 	consumerAdapters "event-driven-platform/src/features/idempotent-consumers/infrastructure/adapters"
 	consumerService "event-driven-platform/src/features/idempotent-consumers/service"
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
@@ -87,6 +89,7 @@ func describeService() chassis.ServiceSpec {
 			outboxRepo := outboxAdapters.NewPostgresOutboxRepositoryAdapter(db)
 			consumerRepo := consumerAdapters.NewPostgresConsumerRepositoryAdapter(db)
 			dlqRepo := dlqAdapters.NewPostgresDeadLetterRepositoryAdapter(db)
+			versioningRepo := versioningAdapters.NewPostgresEventVersioningAdapter(db)
 
 			var producer producers.ProducerPort
 			kafkaBrokersEnv := os.Getenv("KAFKA_BROKERS")
@@ -99,13 +102,15 @@ func describeService() chassis.ServiceSpec {
 			outboxSvc := outboxService.NewOutboxService(outboxRepo, producer)
 			consumerSvc := consumerService.NewConsumerService(consumerRepo)
 			dlqSvc := dlqService.NewDeadLetterService(dlqRepo)
+			versioningSvc := versioningService.NewEventVersioningService(versioningRepo, nil)
 
 			return chassis.Services{
 				Registry: map[string]any{
-					"schemaService":   schemaSvc,
-					"outboxService":   outboxSvc,
-					"consumerService": consumerSvc,
-					"dlqService":      dlqSvc,
+					"schemaService":     schemaSvc,
+					"outboxService":     outboxSvc,
+					"consumerService":   consumerSvc,
+					"dlqService":        dlqSvc,
+					"versioningService": versioningSvc,
 				},
 			}, nil
 		},
@@ -136,6 +141,11 @@ func describeService() chassis.ServiceSpec {
 				dlqHandler := handlers.NewDeadLetterHandler(dlqSvc, defaultInvoker)
 				dlqRouter := routers.NewDeadLetterRouter(dlqHandler)
 				dlqRouter.RegisterRoutes(router)
+			}
+			if versioningSvc, exists := instances["versioningService"].(*versioningService.EventVersioningService); exists && versioningSvc != nil {
+				versioningHandler := handlers.NewEventVersioningHandler(versioningSvc)
+				versioningRouter := routers.NewEventVersioningRouter(versioningHandler)
+				versioningRouter.RegisterRoutes(router)
 			}
 		},
 		RegisterDaemons: func(lifecycle *chassis.Lifecycle, services chassis.Services) {

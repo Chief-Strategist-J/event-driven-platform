@@ -22,17 +22,20 @@ jobs:
       - name: Lint Dockerfiles
         uses: hadolint/hadolint-action@v3.1.0
         with:
-          dockerfile: event-driven-platform/deploy/docker/service/Dockerfile
+          dockerfile: deploy/docker/service/Dockerfile
 
       - name: Validate Docker Compose
         run: |
-          docker compose -f event-driven-platform/deploy/docker/compose/docker-compose.infra.yml config --quiet
+          docker compose -f deploy/docker/compose/docker-compose.infra.yml config --quiet
           APP_DIGEST=sha256:d824d528994a5c92c813be5bfb3a58eeb06f190a07e868a83ee07ff5b3f11467 \
-            docker compose -f event-driven-platform/deploy/docker/compose/docker-compose.single.yml config --quiet
+            docker compose --profile "*" -f deploy/docker/compose/docker-compose.single.yml config --quiet
+
+      - name: Run Unit Tests
+        run: |
+          go test -v -race ./src/features/...
 
       - name: Run Integration Tests with Testcontainers
         run: |
-          cd event-driven-platform
           go test -v ./deploy/tests/integration/... -timeout 5m
 
   build-and-sign:
@@ -49,8 +52,8 @@ jobs:
       - name: Build Container Image
         uses: docker/build-push-action@v5
         with:
-          context: event-driven-platform
-          file: event-driven-platform/deploy/docker/service/Dockerfile
+          context: .
+          file: deploy/docker/service/Dockerfile
           push: false
           tags: ghcr.io/scaibu/event-driven-platform:${{ github.sha }}
           cache-from: type=gha

@@ -1,2 +1,144 @@
 feature: event-versioning
 mode: stateless_hexagonal
+
+entities:
+  - entity: event_schema_version
+    owner: event-driven-platform
+    description: Immutable catalog of wire schema versions per stream and event type with transitive compatibility validation
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        default: uuidv7()
+        constraint: PK(tenant_id, id), immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE(tenant_id, public_id), format 'sch_' + 26 chars, immutable
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (tenant_id = btrim(tenant_id) AND tenant_id <> ''), immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (source_service = btrim(source_service) AND source_service <> '')
+      - name: external_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (external_id = btrim(external_id) AND external_id <> '')
+      - name: correlation_id
+        type: uuid
+        null: no
+        constraint: immutable
+      - name: stream_name
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (stream_name = btrim(stream_name) AND stream_name <> '')
+      - name: event_type
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (event_type = btrim(event_type) AND event_type <> '')
+      - name: schema_version
+        type: int
+        null: no
+        constraint: CHECK (schema_version >= 1)
+      - name: schema_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: UNIQUE(tenant_id, schema_id), CHECK (schema_id = btrim(schema_id) AND schema_id <> '')
+      - name: format
+        type: varchar(32)
+        null: no
+        constraint: CHECK (format IN ('JSON_SCHEMA', 'AVRO', 'PROTOBUF'))
+      - name: compatibility_mode
+        type: varchar(32)
+        null: no
+        constraint: CHECK (compatibility_mode IN ('FULL_TRANSITIVE', 'BACKWARD_TRANSITIVE', 'FORWARD_TRANSITIVE', 'NONE'))
+      - name: schema_definition
+        type: jsonb
+        null: no
+        constraint: CHECK (jsonb_typeof(schema_definition) = 'object')
+      - name: payload_hash
+        type: varchar(64)
+        null: no
+        constraint: CHECK (payload_hash ~ '^[0-9a-f]{64}$')
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: now()
+    invariants:
+      - UNIQUE(tenant_id, stream_name, event_type, schema_version)
+      - Immutability of id, public_id, tenant_id, correlation_id
+    pii: [none]
+    source_of_truth: db
+
+  - entity: event_upcaster_registry
+    owner: event-driven-platform
+    description: Registry of deterministic, pure step-wise schema transforms mapping historical payloads to target reader versions
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        default: uuidv7()
+        constraint: PK(tenant_id, id), immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE(tenant_id, public_id), format 'upc_' + 26 chars, immutable
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (tenant_id = btrim(tenant_id) AND tenant_id <> ''), immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (source_service = btrim(source_service) AND source_service <> '')
+      - name: external_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (external_id = btrim(external_id) AND external_id <> '')
+      - name: correlation_id
+        type: uuid
+        null: no
+        constraint: immutable
+      - name: event_type
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (event_type = btrim(event_type) AND event_type <> '')
+      - name: from_version
+        type: int
+        null: no
+        constraint: CHECK (from_version >= 1)
+      - name: to_version
+        type: int
+        null: no
+        constraint: CHECK (to_version = from_version + 1)
+      - name: transformer_name
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (transformer_name = btrim(transformer_name) AND transformer_name <> '')
+      - name: is_active
+        type: boolean
+        null: no
+        default: true
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: now()
+    invariants:
+      - UNIQUE(tenant_id, event_type, from_version, to_version)
+      - Sequential steps only (to_version = from_version + 1)
+    pii: [none]
+    source_of_truth: db

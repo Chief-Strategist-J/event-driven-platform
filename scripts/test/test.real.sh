@@ -211,7 +211,75 @@ fi
 echo "Dead-letter quarantine and ordering key parking verified in PostgreSQL!"
 
 echo "================================================================"
-echo " 7. TESTING LIVE TEMPO TRACE PROPAGATION"
+echo " 7. TESTING LIVE EVENT VERSIONING & TRANSITIVE SCHEMA APIS"
+echo "================================================================"
+SCH_RESPONSE=$(curl -s -X POST "http://127.0.0.1:${PORT}/api/v1/schemas/versions" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "sourceService": "order-service",
+        "externalId": "ext_sch_real_01",
+        "streamName": "orders.v1",
+        "eventType": "OrderPlaced",
+        "schemaVersion": 1,
+        "schemaId": "sch_ord_v1_'"${TIMESTAMP}"'",
+        "format": "JSON_SCHEMA",
+        "compatibilityMode": "BACKWARD_TRANSITIVE",
+        "schemaDefinition": {
+            "type": "object",
+            "properties": {
+                "orderId": {"type": "string"},
+                "amount": {"type": "number"}
+            },
+            "required": ["orderId"]
+        }
+    }')
+
+echo "Schema Registration Response: ${SCH_RESPONSE}"
+if ! echo "${SCH_RESPONSE}" | grep -q '"success":true'; then
+    echo "FATAL: Schema registration failed!"
+    exit 1
+fi
+
+echo "Verifying schema record persisted in real PostgreSQL..."
+SCHEMA_COUNT=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT COUNT(*) FROM event_schema_version WHERE tenant_id = '${TENANT}' AND event_type = 'OrderPlaced';")
+if [[ "${SCHEMA_COUNT}" != "1" ]]; then
+    echo "FATAL: Schema was not persisted into PostgreSQL event_schema_version table!"
+    exit 1
+fi
+echo "Schema versioning persisted and verified in PostgreSQL!"
+
+echo "Testing schema backward compatibility check endpoint..."
+COMPAT_CHECK=$(curl -s -X POST "http://127.0.0.1:${PORT}/api/v1/schemas/compatibility/check" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "streamName": "orders.v1",
+        "eventType": "OrderPlaced",
+        "targetVersion": 1,
+        "compatibilityMode": "BACKWARD_TRANSITIVE",
+        "newSchema": {
+            "type": "object",
+            "properties": {
+                "orderId": {"type": "string"},
+                "amount": {"type": "number"},
+                "discount": {"type": "number"}
+            },
+            "required": ["orderId"]
+        }
+    }')
+
+echo "Compatibility Check Response: ${COMPAT_CHECK}"
+if ! echo "${COMPAT_CHECK}" | grep -q '"isCompatible":true'; then
+    echo "FATAL: Expected new optional field to be backward compatible!"
+    exit 1
+fi
+echo "Backward schema compatibility validated against real stored version!"
+
+echo "================================================================"
+echo " 8. TESTING LIVE TEMPO TRACE PROPAGATION"
 echo "================================================================"
 TRACE_HEADER=$(echo "${CONSUME_1}" | grep -o '"trace_id":"[a-f0-9]*"' | cut -d'"' -f4 || true)
 if [[ -z "${TRACE_HEADER}" ]]; then

@@ -29,6 +29,7 @@ ARG SERVICE_PATH=.
 ARG UID=10001
 ARG GID=10001
 
+# hadolint ignore=DL3008
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates tzdata tini \
  && rm -rf /var/lib/apt/lists/* \

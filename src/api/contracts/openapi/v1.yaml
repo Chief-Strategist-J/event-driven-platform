@@ -331,3 +331,116 @@ paths:
       responses:
         "200":
           description: List of quarantined records
+
+  /api/v1/schemas/versions:
+    post:
+      summary: Register Event Schema Version
+      operationId: registerSchemaVersion
+      parameters:
+        - name: x-correlation-id
+          in: header
+          required: false
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - streamName
+                - eventType
+                - schemaVersion
+                - schemaId
+                - format
+                - compatibilityMode
+                - schemaDefinition
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string, format: uuid }
+                streamName: { type: string }
+                eventType: { type: string }
+                schemaVersion: { type: integer, minimum: 1 }
+                schemaId: { type: string }
+                format:
+                  type: string
+                  enum: [JSON_SCHEMA, AVRO, PROTOBUF]
+                compatibilityMode:
+                  type: string
+                  enum: [FULL_TRANSITIVE, BACKWARD_TRANSITIVE, FORWARD_TRANSITIVE, NONE]
+                schemaDefinition: { type: object }
+      responses:
+        "201":
+          description: Schema version successfully registered
+        "400":
+          description: Validation or compatibility check failed
+
+  /api/v1/schemas/compatibility/check:
+    post:
+      summary: Evaluate Schema Compatibility Preflight
+      operationId: checkSchemaCompatibility
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - streamName
+                - eventType
+                - targetVersion
+                - compatibilityMode
+                - newSchema
+              properties:
+                tenantId: { type: string }
+                streamName: { type: string }
+                eventType: { type: string }
+                targetVersion: { type: integer, minimum: 1 }
+                compatibilityMode:
+                  type: string
+                  enum: [FULL_TRANSITIVE, BACKWARD_TRANSITIVE, FORWARD_TRANSITIVE, NONE]
+                newSchema: { type: object }
+      responses:
+        "200":
+          description: Compatibility check result
+        "400":
+          description: Malformed request
+
+  /api/v1/schemas/upcast:
+    post:
+      summary: Execute In-Memory Upcast Pipeline
+      operationId: upcastEventPayload
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - eventType
+                - sourceVersion
+                - targetVersion
+                - payload
+              properties:
+                tenantId: { type: string }
+                eventType: { type: string }
+                sourceVersion: { type: integer, minimum: 1 }
+                targetVersion: { type: integer, minimum: 1 }
+                payload: { type: object }
+      responses:
+        "200":
+          description: Successfully transformed event payload
+        "400":
+          description: Transformation error or broken chain
