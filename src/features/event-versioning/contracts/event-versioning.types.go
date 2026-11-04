@@ -109,3 +109,4 @@ type UpcasterRecord struct {
 	IsActive        bool      `json:"isActive"`
 	CreatedAt       time.Time `json:"createdAt"`
 }
+

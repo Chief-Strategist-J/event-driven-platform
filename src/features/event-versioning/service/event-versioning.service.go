@@ -167,3 +167,4 @@ func (s *EventVersioningService) UpcastEvent(ctx context.Context, input contract
 
 	return s.engine.ExecuteChain(input, chain)
 }
+

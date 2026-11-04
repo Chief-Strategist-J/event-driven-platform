@@ -21,3 +21,4 @@ func NewEventVersioningService(repo ports.EventVersioningRepositoryPort, engine 
 func NewUpcasterEngine() *machines.UpcasterEngine {
 	return machines.NewUpcasterEngine()
 }
+

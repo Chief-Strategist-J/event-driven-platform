@@ -96,3 +96,4 @@ func (m *MemoryEventVersioningAdapter) GetUpcasterChain(_ context.Context, tenan
 	}
 	return chain, nil
 }
+

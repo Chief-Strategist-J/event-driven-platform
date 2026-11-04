@@ -48,3 +48,4 @@ FROM event_upcaster_registry
 WHERE tenant_id = $1 AND event_type = $2 AND from_version >= $3 AND to_version <= $4 AND is_active = TRUE
 ORDER BY from_version ASC;`
 )
+

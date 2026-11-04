@@ -15,3 +15,4 @@ type EventVersioningRepositoryPort interface {
 	SaveUpcaster(ctx context.Context, record contracts.UpcasterRecord) error
 	GetUpcasterChain(ctx context.Context, tenantID, eventType string, fromVersion, toVersion int) ([]contracts.UpcasterRecord, error)
 }
+

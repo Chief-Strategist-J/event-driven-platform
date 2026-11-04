@@ -164,3 +164,4 @@ func extractRequiredFields(schemaMap map[string]any) map[string]struct{} {
 	}
 	return out
 }
+

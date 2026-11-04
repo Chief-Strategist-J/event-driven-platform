@@ -137,3 +137,4 @@ func (p *PostgresEventVersioningAdapter) GetUpcasterChain(ctx context.Context, t
 	}
 	return chain, nil
 }
+

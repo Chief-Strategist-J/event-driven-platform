@@ -24,3 +24,4 @@ func ValidateRawJSON(data json.RawMessage) error {
 func NormalizeString(s string) string {
 	return strings.TrimSpace(s)
 }
+
