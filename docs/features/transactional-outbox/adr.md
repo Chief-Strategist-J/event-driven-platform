@@ -1,4 +1,4 @@
-# ADR: Transactional Outbox Pattern for Guaranteed At-Least-Once Event Publishing
+# Transactional Outbox: Architectural Decision Record & Production Reference
 
 * **Status:** Accepted
 * **Date:** 2026-11-04
@@ -17,7 +17,7 @@ Distributed transactions (2PC / XA) across Kafka and PostgreSQL are not supporte
 
 ---
 
-## 2. Decision Drivers & Invariants (from business-logic.md v3)
+## 2. Invariants (System-Wide Truths)
 
 * **INV-01 Atomicity**: Business mutation and outbox insert share ONE connection, ONE transaction, ONE database.
 * **INV-02 Delivery Semantics**: At-least-once end to end; exactly-once exists only as an idempotent consumer effect.
@@ -29,8 +29,11 @@ Distributed transactions (2PC / XA) across Kafka and PostgreSQL are not supporte
 * **INV-04 Version Monotonicity**: Each event carries `aggregate_version = previous + 1`, enforced via unique constraint `(tenant_id, aggregate_type, aggregate_id, aggregate_version)`.
 * **INV-05 Event Identity**: `event_id` generated once via RFC 9562 UUIDv7, immutable across retries and replays.
 * **INV-06 Single Writer**: `source_service` header guarantees a single service writes an aggregate type.
+* **INV-07 No Ghost Events**: Never publish an event whose transaction can still be lost (async commit, async failover).
 * **INV-09 Business Idempotency**: Step 1 claims `x-idempotency-key` in `outbox_idempotency_keys` table; retry with identical key is a no-op.
+* **INV-11 Retention Chain**: Source-of-truth retention $\ge$ Kafka retention $\ge$ consumer dedupe window $\ge$ provider idempotency window.
 * **INV-12 Payload Fidelity**: Financial numbers strictly forbidden as float; integer minor units or decimal strings only. Payloads > 1MB require claim-check.
+* **INV-14 Observability Completeness**: Absence of metrics is an alert condition, never a healthy state.
 
 ---
 
@@ -54,7 +57,7 @@ sequenceDiagram
     Client->>Service: POST /api/v1/outbox (x-idempotency-key, payload)
     activate Service
     Service->>DB: 1. Claim Idempotency Key (INSERT INTO outbox_idempotency_keys ON CONFLICT)
-    alt Idempotency Key Already Claimed
+    alt Idempotency Key Already Claimed (F1.2)
         DB-->>Service: Return existing record_id
         Service-->>Client: 200 OK (Return existing OutboxRecord - no duplicate aggregate)
     else First Command Execution
@@ -108,8 +111,6 @@ sequenceDiagram
     end
 ```
 
----
-
 ### 3.2 Outbox Record State Machine Diagram
 
 ```mermaid
@@ -135,64 +136,55 @@ stateDiagram-v2
 
 ---
 
-### 3.3 Failure Modes and Handling Matrix
+## 4. Specific Edge Cases and Deep Failure Handling
 
-```mermaid
-flowchart TD
-    Start[Event Staging or Relay Request] --> C1{Is Payload > 1MB?}
-    C1 -- Yes --> E1[Reject: 400 Size Limit / Require Claim-Check F1.7]
-    C1 -- No --> C2{Contains Float in JSON?}
-    C2 -- Yes --> E2[Reject: 400 Validation Error / Financial Float Forbidden F1.9]
-    C2 -- No --> C3{Idempotency Key Claimed?}
-    C3 -- Collision --> E3[Return Staged Record / Idempotent No-Op F1.2]
-    C3 -- New --> StepAtomic[Insert in Single DB Transaction INV-01]
-    
-    StepAtomic --> Mode{Mode Selected}
-    Mode -- CDC Path --> StepCDC[Insert & Immediate Delete in Same Tx Step 5]
-    StepCDC --> WAL[Logical Decoding via Debezium]
-    
-    Mode -- Poller Path --> StepPending[Save as PENDING with aggregate_version]
-    StepPending --> Relay[Poller Worker Claims Lease IN_FLIGHT F4.0]
-    
-    Relay --> Pub{Broker Publish}
-    Pub -- Success --> FencedConfirm{Worker Still Owns Lease?}
-    FencedConfirm -- Yes --> SetPublished[Mark PUBLISHED F4.0]
-    FencedConfirm -- No --> FencedDrop[Drop / Reclaimed by Other Worker F4.6]
-    
-    Pub -- Fail --> IncRetry[Increment Retry Count]
-    IncRetry --> C4{Retry Count >= 5?}
-    C4 -- No --> SetFailed[Status PENDING for Backoff]
-    C4 -- Yes --> SetParked[Status PARKED / Block Key k+1 F4.7]
-```
+### 4.1 Write Path Edge Cases
+1. **F1.2 Ambiguous Commit (Connection drops during COMMIT)**:
+   - *Impact*: Client does not know if the transaction committed. Naive retries could double-charge or create two aggregates.
+   - *Mitigation*: Step 1 claims `x-idempotency-key` in `outbox_idempotency_keys` table with primary key `(tenant_id, idempotency_key)`. The retry hits `ON CONFLICT DO NOTHING`, detects the collision, and returns the existing `OutboxRecord` without creating duplicate aggregates or outbox rows.
+2. **F1.5 Concurrent Mutations on Same Aggregate**:
+   - *Impact*: Two concurrent business transactions assign the same version or produce an out-of-order WAL commit sequence.
+   - *Mitigation*: DB unique constraint `UNIQUE (tenant_id, aggregate_type, aggregate_id, aggregate_version)` causes the slower concurrent transaction to abort with a SQL unique violation, mapped to `ConflictError` (HTTP 409).
+3. **F1.7 Oversized Payloads**:
+   - *Impact*: Payloads exceeding broker request size limit (e.g., 1MB) become permanent poison events that stall partition processing.
+   - *Mitigation*: `rules.IsPayloadSizeValid` rejects payloads $> 1\text{MB}$ at ingress before database persistence.
+4. **F1.9 Floating-Point Precision Loss**:
+   - *Impact*: `float64` floating point parsing drifts currency cents over time and rounds 64-bit integers $> 2^{53}$.
+   - *Mitigation*: `rules.HasFloatingPointNumbers` parses numeric tokens and rejects any JSON payload containing `.`, `e`, or `E`.
+
+### 4.2 Relay & Poller Edge Cases
+1. **F4.0 / F4.1 Lock Holding Across Network**:
+   - *Impact*: Holding database row locks open while awaiting Kafka network acks pins PostgreSQL vacuum horizons, accumulates table bloat, and exhausts connection pools.
+   - *Mitigation*: Lease-based claim model. Poller marks records `IN_FLIGHT` with `worker_id` and `lease_expires_at` in a short transaction, releases the lock, performs the network publish asynchronously, and marks `PUBLISHED` in a separate short transaction.
+2. **F4.3 Commit-Order Visibility Gap**:
+   - *Impact*: A transaction with an earlier timestamp commits *after* a poller has read past that timestamp. Watermark/cursor-based querying skips the committed event forever.
+   - *Mitigation*: Queries never filter on `id > last_seen_id` or `created_at > last_seen_timestamp`. Queries select strictly by `status = 'PENDING' OR (status = 'IN_FLIGHT' AND lease_expires_at < NOW())`.
+3. **F4.6 Lease Expiration Fencing**:
+   - *Impact*: Worker A experiences a GC pause or network stall exceeding its 30s lease. Worker B reclaims the batch and publishes. Worker A awakens and attempts to mark the records published, overwriting subsequent state.
+   - *Mitigation*: `MarkPublishedByWorker` queries `WHERE tenant_id = $1 AND id = $2 AND worker_id = $3 AND (lease_expires_at IS NULL OR lease_expires_at >= NOW())`. If 0 rows are affected, Worker A is fenced out and returns `ErrWorkerOwnershipLost`.
+4. **F4.7 Poison Event / Poison Aggregate Parking**:
+   - *Impact*: A record with an unroutable schema or broker-rejected payload fails permanently. Skipping it and publishing version $k+1$ violates INV-03 per-aggregate ordering.
+   - *Mitigation*: After 5 consecutive publish errors, the record transitions to `PARKED`. The relay query includes `AND NOT EXISTS (SELECT 1 FROM outbox p WHERE p.aggregate_id = o.aggregate_id AND p.status = 'PARKED')`, safely halting all subsequent versions for that specific entity while allowing sibling aggregates to proceed without partition stalls.
+5. **F4.11 Cleanup Deletes Unpublished Rows**:
+   - *Impact*: Purge queries inadvertently truncate pending or stalled events.
+   - *Mitigation*: `FlowPurgeExpiredPublishedRecords` explicitly filters `WHERE status = 'PUBLISHED' AND created_at < NOW() - INTERVAL '48 hours'`. It is mathematically impossible for a `PENDING`, `IN_FLIGHT`, or `PARKED` row to be deleted by cleanup jobs.
 
 ---
 
-## 4. Comprehensive Failure Mode Engineering Reference
+## 5. Comprehensive Failure Mode Reference Matrix
 
-| Failure Code | Scenario | Impact | Code Handling & Architectural Guardrail | Detection |
+| Code | Failure Scenario | Impact | Code Mitigation | Live Detection |
 |---|---|---|---|---|
-| **F1.1** | Dual-write attempt | Event Loss / Ghost State | Zero Kafka clients imported in domain feature; all writes go to `outbox` | CI dependency scanner |
-| **F1.2** | Ambiguous commit / network drop | Duplicate aggregate & event | Step 1 claims `x-idempotency-key` in `outbox_idempotency_keys` table; retry returns existing record | Unique violation counter |
-| **F1.5** | Concurrent mutations on same aggregate | Race condition / version collision | `UNIQUE(tenant_id, aggregate_type, aggregate_id, aggregate_version)` constraint | SQL Unique Violation (mapped to `ConflictError`) |
-| **F1.7** | Oversized payload | Broker partition block / poison pill | Write-time rejection of payloads > 1MB (`IsPayloadSizeValid`); requires claim-check | Payload size histogram |
-| **F1.9** | Floating-point numbers in payload | Financial precision loss & cents drift | `HasFloatingPointNumbers` scans payload and rejects floats (`.`, `e`, `E`) | Validation error counter |
-| **F2.1** | Kafka down / Relay down | PostgreSQL WAL bloat | Outbox rows accumulate safely as `PENDING`; backpressure monitored | Slot lag bytes & WAL disk alerts |
-| **F4.0** | Row locks held during network send | Lock pileup & DB outage | Lease model: records claimed as `IN_FLIGHT` with worker ID and lease expiry | Oldest transaction age |
-| **F4.2** | Concurrent workers reorder versions | Downstream corruption | `ORDER BY aggregate_version ASC` + partition key affinity on `aggregate_id` | Consumer gap detector |
-| **F4.6** | Worker lease expires during dispatch | Duplicates & race collision | `MarkPublishedByWorker` fences confirm step on worker ownership & active lease | Reclaim counter |
-| **F4.7** | Poison event payload | Outage on partition | Transitions to `PARKED` after 5 retries; query suppresses versions $> k$ | Alert when `count(status='PARKED') > 0` |
-| **F9.1** | Silent flow stoppage | Undetected outage | Synthetic canary heartbeat emitted every ~30s (`EmitCanaryHeartbeat`) | Canary consumer latency |
-
----
-
-## 5. Consequences & Tradeoffs
-
-### Positive
-* Complete parity with `business-logic.md` v3 production decision tree.
-* Worker lease claiming eliminates long database transactions while preventing worker race conditions via fencing.
-* Financial precision and idempotency guarantees protect downstream ledgers from duplicate or rounded financial data.
-* Poison-pill isolation operates per-aggregate, ensuring a bad record halts only that entity without impacting other tenants or aggregates.
-
-### Negative / Tradeoffs
-* Parking an aggregate blocks all subsequent versions for that specific entity until an engineer triages the payload (Section 11 R3 runbook).
-* Lease model requires periodic clock synchronization across poller worker nodes to maintain lease accuracy.
+| **F1.1** | Dual-write attempt | Event loss or ghost event | Zero Kafka imports in business services; mandatory outbox insertion | CI dependency scanner |
+| **F1.2** | Ambiguous commit | Duplicate aggregate & event | `outbox_idempotency_keys` table claims key first; retries return existing record | Idempotency conflict rate |
+| **F1.5** | Concurrent aggregate write | Version collision | `UNIQUE (tenant_id, aggregate_type, aggregate_id, aggregate_version)` | Unique constraint violation metric |
+| **F1.7** | Oversized payload | Broker rejection & partition block | Hard write-time check $\le 1\text{MB}$ in `rules.IsPayloadSizeValid` | Payload size histogram |
+| **F1.9** | Float in JSON contract | Financial cents drift | `rules.HasFloatingPointNumbers` rejects floats in JSON numbers | Contract validation error counter |
+| **F1.14** | Null key or aggregate ID | Skipping / unroutable event | `rules.ValidateOutboxInput` enforces non-empty strings on all identifiers | Validation failure metric |
+| **F2.1** | Kafka down / broker halt | Postgres disk bloat | Records stay safely `PENDING`; backpressure monitored | Slot lag bytes & WAL free disk % |
+| **F4.0** | Row lock held over network | DB connection exhaustion | Lease model: records claimed as `IN_FLIGHT`, send without open DB tx | Oldest active transaction age |
+| **F4.2** | Multiple workers reorder versions | Downstream corruption | Batch ordered by `aggregate_version ASC`; hash partition affinity on `aggregate_id` | Consumer gap detector |
+| **F4.6** | Worker lease expires mid-send | Overwrite / race condition | `MarkPublishedByWorker` fences updates on worker ownership & active lease | Reclaim counter spike |
+| **F4.7** | Poison event | Partition outage | Retry count $\ge 5 \to \text{PARKED}$; queries block subsequent versions $k+1$ | Alert when `count(status='PARKED') > 0` |
+| **F4.11** | Retention purge deletes pending | Silent data loss | Purge query strictly filters `WHERE status = 'PUBLISHED'` | Purge count vs published count |
+| **F9.1** | Silent pipeline stoppage | Undetected loss | Synthetic canary emitted every ~30s (`EmitCanaryHeartbeat`) | Canary consumer latency SLO |
