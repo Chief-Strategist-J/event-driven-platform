@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -14,14 +15,14 @@ import (
 	kafkaProducer "event-driven-platform/messaging/engine/producers/kafka"
 	"event-driven-platform/src/api/rest/v1/handlers"
 	"event-driven-platform/src/api/rest/v1/routers"
+	dlqAdapters "event-driven-platform/src/features/dead-letter-handling/infrastructure/adapters"
+	dlqContracts "event-driven-platform/src/features/dead-letter-handling/contracts"
+	dlqService "event-driven-platform/src/features/dead-letter-handling/service"
 	schemaAdapters "event-driven-platform/src/features/event-schema-registry/infrastructure/adapters"
-	schemaPorts "event-driven-platform/src/features/event-schema-registry/infrastructure/ports"
 	schemaService "event-driven-platform/src/features/event-schema-registry/service"
 	consumerAdapters "event-driven-platform/src/features/idempotent-consumers/infrastructure/adapters"
-	consumerPorts "event-driven-platform/src/features/idempotent-consumers/infrastructure/ports"
 	consumerService "event-driven-platform/src/features/idempotent-consumers/service"
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
-	outboxPorts "event-driven-platform/src/features/transactional-outbox/infrastructure/ports"
 	outboxService "event-driven-platform/src/features/transactional-outbox/service"
 	"event-driven-platform/src/infra/chassis"
 	"event-driven-platform/src/infra/database"
@@ -68,49 +69,43 @@ func describeService() chassis.ServiceSpec {
 		},
 		BuildServices: func(deps chassis.Dependencies) (chassis.Services, error) {
 			schemaRegistryURL := os.Getenv("SCHEMA_REGISTRY_URL")
-			var schemaRepo schemaPorts.SchemaRegistryRepositoryPort
-			if schemaRegistryURL != "" {
-				schemaRepo = schemaAdapters.NewApicurioSchemaRegistryAdapter(schemaRegistryURL)
-			} else {
-				schemaRepo = schemaAdapters.NewMemorySchemaRegistryAdapter()
+			if schemaRegistryURL == "" {
+				schemaRegistryURL = "http://127.0.0.1:8082/apis/registry/v2"
 			}
+			schemaRepo := schemaAdapters.NewApicurioSchemaRegistryAdapter(schemaRegistryURL)
 			schemaSvc := schemaService.NewSchemaRegistryService(schemaRepo)
 
-			var outboxRepo outboxPorts.OutboxRepositoryPort
-			var consumerRepo consumerPorts.ConsumerRepositoryPort
-
 			dbURL := os.Getenv("DATABASE_URL")
-			if dbURL != "" {
-				db, err := sql.Open("postgres", dbURL)
-				if err == nil {
-					outboxRepo = outboxAdapters.NewPostgresOutboxRepositoryAdapter(db)
-					consumerRepo = consumerAdapters.NewPostgresConsumerRepositoryAdapter(db)
-				}
+			if dbURL == "" {
+				dbURL = "postgres://postgres:postgres@127.0.0.1:5432/event_store?sslmode=disable"
 			}
-			if outboxRepo == nil {
-				outboxRepo = outboxAdapters.NewMemoryOutboxRepositoryAdapter()
+			db, err := sql.Open("postgres", dbURL)
+			if err != nil {
+				return chassis.Services{}, fmt.Errorf("failed connecting to postgres: %w", err)
 			}
-			if consumerRepo == nil {
-				consumerRepo = consumerAdapters.NewMemoryConsumerRepositoryAdapter()
-			}
+
+			outboxRepo := outboxAdapters.NewPostgresOutboxRepositoryAdapter(db)
+			consumerRepo := consumerAdapters.NewPostgresConsumerRepositoryAdapter(db)
+			dlqRepo := dlqAdapters.NewPostgresDeadLetterRepositoryAdapter(db)
 
 			var producer producers.ProducerPort
 			kafkaBrokersEnv := os.Getenv("KAFKA_BROKERS")
-			if kafkaBrokersEnv != "" {
-				brokers := strings.Split(kafkaBrokersEnv, ",")
-				producer = kafkaProducer.NewKafkaProducerAdapter(kafkaProducer.DefaultKafkaProducerConfig(brokers))
-			} else {
-				producer = producers.NewMemoryProducerAdapter()
+			if kafkaBrokersEnv == "" {
+				kafkaBrokersEnv = "127.0.0.1:9092"
 			}
+			brokers := strings.Split(kafkaBrokersEnv, ",")
+			producer = kafkaProducer.NewKafkaProducerAdapter(kafkaProducer.DefaultKafkaProducerConfig(brokers))
 
 			outboxSvc := outboxService.NewOutboxService(outboxRepo, producer)
 			consumerSvc := consumerService.NewConsumerService(consumerRepo)
+			dlqSvc := dlqService.NewDeadLetterService(dlqRepo)
 
 			return chassis.Services{
 				Registry: map[string]any{
 					"schemaService":   schemaSvc,
 					"outboxService":   outboxSvc,
 					"consumerService": consumerSvc,
+					"dlqService":      dlqSvc,
 				},
 			}, nil
 		},
@@ -133,6 +128,14 @@ func describeService() chassis.ServiceSpec {
 				consumerHandler := handlers.NewIdempotentConsumerHandler(consumerSvc)
 				consumerRouter := routers.NewIdempotentConsumerRouter(consumerHandler)
 				consumerRouter.RegisterRoutes(router)
+			}
+			if dlqSvc, exists := instances["dlqService"].(*dlqService.DeadLetterService); exists && dlqSvc != nil {
+				defaultInvoker := func(_ context.Context, _ dlqContracts.DeadLetterQuarantineRecord) (bool, error) {
+					return true, nil
+				}
+				dlqHandler := handlers.NewDeadLetterHandler(dlqSvc, defaultInvoker)
+				dlqRouter := routers.NewDeadLetterRouter(dlqHandler)
+				dlqRouter.RegisterRoutes(router)
 			}
 		},
 		RegisterDaemons: func(lifecycle *chassis.Lifecycle, services chassis.Services) {

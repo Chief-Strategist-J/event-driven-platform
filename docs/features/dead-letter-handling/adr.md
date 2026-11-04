@@ -30,30 +30,31 @@ In an event-driven aggregate system, naive DLQ routing causes severe data corrup
 * **DL-06 Identity Preserved**: Redriven events retain original `event_id`, `aggregate_id`, and `aggregate_version`.
 * **DL-07 Same Guards on Redrive**: Redrive passes through consumer ingress and version guard; zero backdoor force-writes.
 * **DL-08 Message Defects vs Outages**: Infrastructure outages (e.g., `TIMEOUT`) pause consumption via circuit breaker; they are strictly forbidden from quarantine.
+* **DL-09 Window Chain**: Maximum quarantine age must remain less than consumer dedupe and external provider idempotency windows.
 * **DL-11 Bounded Attempts Everywhere**: Maximum 3 automatic/manual redrives before human triage is required.
 * **DL-13 Single Writer & Epoch Fencing**: Redrive and drains are executed only by the current partition owner verified by `owner_epoch`.
 * **DL-15 Crash-Safe Poison Handling**: Attempt counter is recorded in `attempt_record` **before** execution. Over-budget at pickup is quarantined without execution.
 
 ---
 
-## 3. Detailed Architectural Dialogue & Engineering Rationale
+## 3. Real-Life Use Cases & Critical Engineering Needs
 
-### 3.1 Why Key Parking Is Mandatory (DL-02 vs Head-of-Line Blocking)
-**Engineer:** *Why can't we simply pause the Kafka partition when an event fails?*  
-**Architect:** Pausing the partition stops all events across hundreds of unrelated customers who happen to share that partition. That turns an isolated message defect into a widespread platform outage (Severity: OUTAGE).  
+### 3.1 Real-Life Production Scenarios
 
-**Engineer:** *Then why not just send the bad event to a DLQ topic and let the partition continue?*  
-**Architect:** Because if version $V=2$ of Order #999 goes to DLQ, and the partition continues, the consumer immediately processes $V=3$ (e.g., `OrderCancelled`). If an operator fixes the bug tomorrow and re-drives $V=2$ (`OrderPaid`), the order transitions backwards from `Cancelled` to `Paid`. That is a critical data corruption bug (Severity: CORRUPT).  
+1. **E-Commerce Order Ledger Corruption (Why DL-02 is Critical)**:
+   - *Scenario*: User places order $V=1$ (`OrderCreated`). Payment webhook emits $V=2$ (`OrderPaid`). A transient schema mapping bug causes $V=2$ to fail in the billing consumer. Seconds later, user cancels order, emitting $V=3$ (`OrderCancelled`).
+   - *Without Key Parking*: $V=2$ goes to a standard DLQ topic. The main consumer processes $V=3$, setting order status to `CANCELLED`. Next morning, an engineer clicks "Re-drive DLQ". $V=2$ runs and overwrites the status to `PAID`, dispatching physical goods for a cancelled order.
+   - *With Key Parking*: $V=2$ failure locks `aggregate_parking_store`. $V=3$ arrives and is buffered into `parked_event`. Neither runs until $V=2$ is repaired. Redrive runs $V=2$, then sequentially drains $V=3$, preserving true causal business history.
 
-**The Decision:** We implement **Durable Key Parking (`aggregate_parking_store`) and Ordered Event Buffering (`parked_event`)**. The partition advances so other customers are not blocked, but aggregate Order #999 is parked. Any subsequent event ($V=3, V=4$) for Order #999 is buffered in `parked_event`. Once $V=2$ is repaired and redriven, $V=3$ and $V=4$ drain in sequential version order.
+2. **The "Poison Pill of Death" Crash Loop (Why DL-15 is Critical)**:
+   - *Scenario*: A rogue client submits an order with a 15MB deeply nested JSON structure. When the JSON parser runs, the Go runtime triggers an uncatchable heap allocation OOM or stack overflow panic.
+   - *Without `attempt_record`*: The container crashes instantly. Kubernetes restarts the pod. The consumer reconnects to Kafka, reads the uncommitted offset, parses the same 15MB payload, and crashes again. The service enters `CrashLoopBackOff`, taking down the entire consumer group.
+   - *With `attempt_record`*: The consumer records attempt #1 in a dedicated short transaction before calling the parser. After restarting from an OOM, pickup sees `attempt_count >= budget` (3), immediately quarantines the raw bytes without calling the parser, commits the offset, and stays online.
 
----
-
-### 3.2 Crash-Safe Poison Handling (DL-15 & F3.2)
-**Engineer:** *Why do we need a separate `attempt_record` table before executing the handler?*  
-**Architect:** If a poison message triggers an Out-Of-Memory (OOM) or Go runtime panic, the process dies before any `defer` or error handler can run. Because in-memory state is wiped, the container restarts, re-reads the exact same offset, and panics again—an infinite crash-loop restart storm.  
-
-**The Decision:** Invariant **DL-15** enforces writing an `attempt_record` in a short dedicated transaction *before* dispatching to the business handler. On restart, the pre-check inspects `attempt_record`. If `attempt_count > budget`, it quarantines the event immediately without calling the handler, breaking the crash-loop.
+3. **Database Timeout Masquerading as a Poison Pill (Why DL-08 is Critical)**:
+   - *Scenario*: PostgreSQL primary hits 100% CPU due to a heavy vacuum process, timing out connections for 30 seconds.
+   - *Without Classifier*: 5,000 valid orders hit database timeouts. A naive consumer treats them as failures and dumps all 5,000 orders into the DLQ, parking 5,000 customers.
+   - *With Classifier*: `IsMessageDefect("TIMEOUT")` returns `false`. Invariant **DL-08** halts consumption, trips the local circuit breaker, pauses the Kafka partition, and resumes automatically when PostgreSQL heals—zero messages quarantined.
 
 ---
 
@@ -148,92 +149,74 @@ erDiagram
 
 ---
 
-## 5. Visual Architectural Diagrams
+## 5. Failure Case Sequence Diagrams
 
-### 5.1 Record Processing Pipeline & Crash-Safe Gate (v3 Section 3)
-
-```mermaid
-flowchart TD
-    subgraph INGRESS["1. Transport Ingress (Raw Bytes)"]
-        K1["Fetch Record from Kafka (Raw Bytes)"] --> H1["Extract Routing Headers (event_id, aggregate_id, version)"]
-    end
-
-    subgraph PRECHECK["2. Parking Check & Crash Guard (DL-15)"]
-        H1 --> P1{"Is Key Parked?<br/>(aggregate_parking_store)"}
-        P1 -- "Yes" --> B1["Buffer into parked_event (ordered by v)<br/>Advance consumed_offset & Skip"]
-        P1 -- "No" --> A1["Check / Record attempt_record<br/>(Dedicated short tx)"]
-        A1 -- "attempt_count > budget" --> Q1["Quarantine Immediately WITHOUT Executing<br/>(Crash-loop break)"]
-        A1 -- "Within budget" --> EX["Deserialize & Dispatch to Business Handler"]
-    end
-
-    subgraph EXEC["3. Handler Execution & Quarantine"]
-        EX -- "Success" --> S1["Delete attempt_record<br/>Commit Consumer Sink Tx"]
-        EX -- "Environmental Failure (TIMEOUT/503)" --> BR["Trigger Circuit Breaker<br/>Pause Partition Consumption (DL-08)"]
-        EX -- "Message Defect (Schema, Logic)" --> Q2["Durable Quarantine & Key Parking"]
-    end
-
-    subgraph QUAR["4. Durable Quarantine (DL-02, DL-05)"]
-        Q2 --> W1["INSERT INTO dead_letter_quarantine<br/>(status = 'QUARANTINED')"]
-        W1 --> W2["UPSERT INTO aggregate_parking_store<br/>(is_parked = TRUE, owner_epoch)"]
-        W2 --> W3["Commit consumed_offset in SAME DB Tx"]
-    end
-```
-
----
-
-### 5.2 Ordered Redrive & Sequential Drain Algorithm (v3 Section 10.1)
-
+### 5.1 F3.2: Crash-Loop Poison Pill Prevention (DL-15)
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Operator as Operator / Triage API
-    participant Service as Dead Letter Service
-    participant DB as PostgreSQL (C-QS)
-    participant Handler as Consumer Ingress Handler
+    actor Broker as Kafka Partition
+    participant Consumer as Consumer Runtime
+    participant CQS as PostgreSQL (attempt_record)
+    participant Quarantine as PostgreSQL (dead_letter_quarantine)
 
-    Operator->>Service: RedriveEvent(quarantine_id)
-    Service->>DB: Lock aggregate_parking_store (verify owner_epoch)
-    Service->>Handler: Invoke Handler with Original Blocking Event (V=2)
-    Handler-->>Service: Success
-    Service->>DB: Update status = REDRIVEN_SUCCESS
-
-    Note over Service,DB: Sequential Drain of Buffered Versions (DL-02)
-    Service->>DB: GetParkedEventsForDrain(aggregate_id) (ORDER BY v ASC)
-    DB-->>Service: Return [V=3, V=4]
+    Broker->>Consumer: Fetch Poison Record (causes OOM / segfault)
+    Consumer->>CQS: INSERT INTO attempt_record (attempt_count = 1)
+    Note over Consumer: Container killed by OS kernel (OOMKilled)
     
-    Service->>Handler: Invoke Handler(V=3)
-    Handler-->>Service: Success
-    Service->>DB: DELETE FROM parked_event WHERE v = 3
+    Note over Consumer: Kubernetes Restarts Pod
+    Broker->>Consumer: Re-fetch same record offset
+    Consumer->>CQS: Check attempt_record (count = 1 -> increment to 2)
+    Note over Consumer: Container killed again (OOMKilled)
 
-    Service->>Handler: Invoke Handler(V=4)
-    Handler-->>Service: Success
-    Service->>DB: DELETE FROM parked_event WHERE v = 4
+    Note over Consumer: Kubernetes Restarts Pod (Pickup Attempt 3)
+    Broker->>Consumer: Re-fetch same record offset
+    Consumer->>CQS: Check attempt_record (count = 2 -> count >= budget)
+    Note over Consumer: Crash-loop detected! DO NOT invoke handler!
+    Consumer->>Quarantine: Quarantine Record Immediately (Status: QUARANTINED)
+    Consumer->>CQS: Commit consumed_offset past poison event
+    Note over Consumer: Consumer remains healthy; container stays online!
+```
 
-    Service->>DB: UNPARK aggregate_parking_store (is_parked = FALSE)
-    Service-->>Operator: 200 OK (Blocking event redriven and 2 buffered events drained)
+### 5.2 F4.4: Systemic Mass-Quarantine Circuit Breaker
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Broker as Kafka Partition
+    participant Consumer as Consumer Runtime
+    participant Breaker as Systemic Circuit Breaker
+    participant Alert as Opsgenie / PagerDuty
+
+    Note over Broker: Bad Deploy: Missing DB column causes 100% handler failures
+    loop 50 Distinct Keys in 5 Minutes
+        Broker->>Consumer: Ingest Record
+        Consumer->>Breaker: Record Error Fingerprint (ERR_MISSING_COLUMN)
+    end
+    Breaker->>Breaker: Cardinality Threshold Exceeded (> 50 distinct keys)
+    Breaker->>Consumer: TRIP SYSTEMIC BREAKER: HALT CONSUMER GROUP
+    Consumer->>Alert: PAGE ON-CALL: Mass quarantine halted!
+    Note over Consumer: Halts consumption across all partitions;<br/>Prevents creating 100,000 parked keys!
 ```
 
 ---
 
-## 6. HTTP Delivery Endpoints (OpenAPI Contract)
+## 6. Product Metrics & Operational Sizing Matrix
 
-Synchronized with `src/api/contracts/openapi/v1.yaml`:
+### 6.1 Telemetry & Golden Signals (Required vs Implemented)
 
-1. `POST /api/v1/dlq/quarantine`: Ingests failed message, stores byte-for-byte fidelity, and atomically locks the aggregate key.
-2. `POST /api/v1/dlq/redrive`: Bounded redrive passing through consumer ingress; drains all buffered `parked_event` records sequentially before unparking key.
-3. `POST /api/v1/dlq/discard`: Human-authorized discard with audit reason; unparks key.
-4. `GET /api/v1/dlq/quarantined`: Paginated triage endpoint filtering by `tenantId`, `handlerId`, and `status`.
+| Metric Name | Type | Production Target / SLA | Implemented Status | Description / Purpose |
+|---|---|---|---|---|
+| `dlq_unresolved_quarantine_total` | Gauge | `0` (T0 Tier) | **Implemented** | Total number of unresolved quarantined records. Alerts immediately if $> 0$ for T0. |
+| `dlq_oldest_unresolved_seconds` | Gauge | `< 14400s` (4 hours for T0) | **Implemented** | Age of oldest un-dispositioned record. Tracks SLA breach. |
+| `dlq_parked_keys_count` | Gauge | `0` (or owned in triage) | **Implemented** | Number of aggregates currently blocked from state advancement. |
+| `dlq_parked_events_buffered_total` | Counter | Monitored | **Implemented** | Count of live subsequent versions held in `parked_event`. |
+| `dlq_redrive_attempts_total` | Counter | Success rate $> 95\%$ | **Implemented** | Measures automated and manual redrive efficiency. |
+| `dlq_systemic_halt_active` | Gauge | `0` | **Implemented** | Binary alert indicating systemic breaker trip. |
+| `dlq_epoch_mismatch_aborts_total` | Counter | `0` | **Implemented** | Fencing metric catching zombie instances attempting stale writes. |
 
----
+### 6.2 Capacity Sizing Rules (Section 14)
 
-## 7. PostgreSQL Storage Gate Constraint Registry
-
-| Constraint Name | Description | PostgreSQL Type | Canonical Error Code |
-|---|---|---|---|
-| `pk_dead_letter_quarantine` | Composite primary key `(tenant_id, id)` | PRIMARY KEY | `CONFLICT` (409) |
-| `dlq_public_id_uk` | Unique external opaque ID (`dlq_...`) | UNIQUE | `CONFLICT` (409) |
-| `dlq_external_uk` | Natural dedupe `(tenant_id, source_service, external_id)` | UNIQUE | `CONFLICT` (409) |
-| `pk_aggregate_parking_store` | Primary key `(tenant_id, handler_id, aggregate_type, aggregate_id)` | PRIMARY KEY | `CONFLICT` (409) |
-| `pk_parked_event` | Composite primary key including `aggregate_version` | PRIMARY KEY | `CONFLICT` (409) |
-| `pk_attempt_record` | Crash-safe pre-check key `(tenant_id, consumer_group, handler_id, event_id)` | PRIMARY KEY | `CONFLICT` (409) |
-| `pk_consumed_offset` | Offset tracking `(tenant_id, consumer_group, topic, partition)` | PRIMARY KEY | `CONFLICT` (409) |
+1. **Quarantine Storage**:
+   $$\text{Storage} \approx \text{Quarantine Rate} \times \text{Avg Envelope Size (10KB)} \times \text{Max Unresolved Age (90 days)}$$
+2. **Parked Buffer Storage**:
+   - Bounded by hard cap: 10,000 events or 100MB per aggregate key. Exceeding cap pauses partition to prevent memory exhaustion (**F5.3**).
