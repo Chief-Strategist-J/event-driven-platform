@@ -3,6 +3,7 @@ ARG BUILDER_IMAGE=golang:1.23-bookworm
 ARG BASE_IMAGE=debian:bookworm-slim
 
 # ---------- Stage 1: Go Application Builder ----------
+# hadolint ignore=DL3006
 FROM ${BUILDER_IMAGE} AS builder
 ARG SERVICE_PATH=.
 WORKDIR /build
@@ -24,6 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go build -trimpath -ldflags="-s -w" -o /build/platform-service ./src/main.go
 
 # ---------- Stage 2: Minimal Hardened Runtime ----------
+# hadolint ignore=DL3006
 FROM ${BASE_IMAGE} AS runtime
 ARG SERVICE_PATH=.
 ARG UID=10001
