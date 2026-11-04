@@ -14,6 +14,7 @@ In distributed event-driven and event-sourced topologies, event payloads are imm
 2. **Deserialization Crashes**: Incompatible schema evolution breaks deserializers in consumer loops, triggering infinite fetch retries, crashes, or catastrophic DLQ quarantine storms.
 3. **Poison Aggregates**: Without version translation, old events replayed from the event store fail downstream handlers, unnecessarily parking aggregates across the platform.
 4. **Semantic Corruption**: Structural compatibility checks (such as bare JSON schemas or unannotated types) do not detect unit, precision, or meaning alterations (e.g. converting float dollars to integer cents under the same field name), leading to silent financial corruption.
+5. **Traceability Blind Spots**: Deserialization mutations and multi-step upcasting across historical events risk dropping OpenTelemetry `traceparent` contexts and losing correlation between the original writer schema and the final business mutation.
 
 ---
 
@@ -90,13 +91,13 @@ erDiagram
 flowchart TD
     A["Raw Wire Bytes from Kafka (EV-01)"] --> B["Header & Magic Byte Inspection"]
     B --> C{"Registry ID Resolved?"}
-    C -- No --> D["Quarantine C1 Defect (DL-08) & Park Aggregate (DL-02)"]
+    C -- No --> D["Quarantine C1 Defect and Park Aggregate"]
     C -- Yes --> E["Fetch Schema & Inspect Target Reader Model"]
     E --> F{"Is Writer Version == Reader Version?"}
     F -- Yes --> G["Pass directly to Handler"]
-    F -- No --> H["Fetch Sequential Upcaster Chain (V_source -> V_target)"]
+    F -- No --> H["Fetch Sequential Upcaster Chain"]
     H --> I{"Upcaster Chain Complete?"}
-    I -- No --> J["Quarantine C2 Missing Upcaster & Park Key"]
+    I -- No --> J["Quarantine C2 Missing Upcaster and Park Key"]
     I -- Yes --> K["Execute Pure In-Memory Transforms (EV-06)"]
     K --> L["Pass Upcasted Payload to Business Handler"]
     L --> M["Update Aggregate Projection & Commit Offset"]
@@ -104,23 +105,81 @@ flowchart TD
 
 ---
 
-## 6. Real-Life Production Use Cases
+## 6. End-to-End Distributed Tracing & Telemetry Architecture
 
-### 6.1 Multi-Currency & Minor Units Transition
+Every message moving through the schema resolution and upcasting pipeline retains uninterrupted distributed tracing across process boundaries, ensuring complete end-to-end auditability.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Producer as Producer Service
+    participant Kafka as Kafka Broker (Header: traceparent)
+    participant Consumer as Consumer Runtime (Span: EventConsume)
+    participant Engine as Upcaster Engine (Span: EventUpcast)
+    participant OTel as OpenTelemetry Collector (Tempo)
+    participant Handler as Business Handler (Span: HandleOrder)
+
+    Producer->>Kafka: Publish Record (traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01)
+    Kafka->>Consumer: Ingest Record with traceparent
+    Consumer->>Consumer: Extract W3C TraceContext & Start Child Span (EventConsume)
+    Consumer->>Engine: Upcast Payload (Inject trace context & writer metadata)
+    Engine->>Engine: Start Internal Span (EventUpcast)
+    Engine->>OTel: Export Span: event_type=OrderPlaced, writer_v=1, target_v=3, steps=2
+    Engine-->>Consumer: Return Logical V3 Payload
+    Consumer->>Handler: Invoke Business Handler (Propagate Trace Context)
+    Handler->>OTel: Export Span: HandleOrder (status=SUCCESS, latency_ms=12)
+```
+
+### 6.1 Trace Context Preservation Invariants:
+1. **W3C `traceparent` Forwarding**: The carrier `traceparent` extracted from Kafka headers is parsed into Go `context.Context` via OpenTelemetry text map propagators before deserialization.
+2. **Upcast Span Annotation**: When an event traverses the upcasting engine ($V_1 \to V_3$), a dedicated span `event.upcast` is recorded as a direct child of the consume span. Attributes include:
+   - `messaging.event_type`: The past-tense domain event name.
+   - `schema.writer_version`: Source version recorded at write time.
+   - `schema.target_version`: Reader schema compiled into the consumer runtime.
+   - `upcaster.steps_applied`: Count of sequential step transformations executed.
+   - `upcaster.duration_ms`: Execution latency of the in-memory transformations.
+3. **Quarantine Baggage**: If an upcasting step fails or a schema ID is unknown, the complete W3C trace ID, span ID, and correlation ID are persisted into `dead_letter_quarantine` so triage operators can jump directly from the triage UI to the Tempo trace.
+
+---
+
+## 7. Real-Life Production Edge Cases
+
+### 7.1 Multi-Currency & Minor Units Transition
 * **Business Challenge**: An enterprise billing platform originally modeled order prices as floating-point numbers (`"price": 19.99`). Floating-point arithmetic during batch settlement accumulated rounding discrepancies.
 * **Evolution**: Schema Version 2 introduced integer minor units `"amount_cents": 1999` and explicit `"currency": "USD"`, marking `"price"` as deprecated.
 * **Upcaster Guarantee**: Upcaster `order_v1_to_v2` executes during event ingestion or historical replay. When a historical V1 event is read, the upcaster deterministically derives `amount_cents = round(price * 100)` and `currency = "USD"`. The consumer business handler only implements the V2 model, eliminating double-accounting logic.
 
-### 6.2 Zero-Downtime Microservice Upgrades (Expand / Contract)
+### 7.2 Zero-Downtime Microservice Upgrades (Expand / Contract)
 * **Business Challenge**: Introducing mandatory `warehouse_id` on `OrderPlaced` events without coordinating deployment downtime across 14 independent consumer teams.
 * **Evolution**:
   1. *Phase E1 (Expand)*: Producer publishes both legacy fields and new optional `warehouse_id`.
   2. *Phase E2 (Migrate)*: Consumers deploy upcasters that supply regional fulfillment defaults for legacy events lacking the field.
   3. *Phase C1 (Contract)*: Consumers transition to the modern model. Telemetry verifies zero reads of legacy fields before the producer ceases emission.
 
+### 7.3 Interleaved Schema Versions During Rolling Deployments (F7.3.1)
+* **Production Scenario**: A producer service runs 20 Kubernetes pods. During a rolling deployment lasting 8 minutes, half the pods emit Schema Version 2 while the remaining pods emit Schema Version 3 for the same customer aggregate stream.
+* **Edge Case Danger**: Aggregate `ord_987` receives event sequence:
+  - $V=1$ with Schema Version 2 from old pod.
+  - $V=2$ with Schema Version 3 from new pod.
+  - $V=3$ with Schema Version 2 from old pod.
+* **Architectural Handling**: Consumers must never assume that schema versions increase monotonically. The consumer runtime dynamically inspects each message envelope's embedded schema ID, resolves the specific writer schema, and upcasts on a strictly per-event basis. The aggregate version sequence ($V=1, 2, 3$) remains completely unhindered and gapless.
+
+### 7.4 Historical Replay with Retired Schema Horizons (F12.4 & F14.1)
+* **Production Scenario**: A regulatory audit requires replaying a 3-year-old financial audit trail from object store cold archive. The events were emitted using Schema V1, which has been retired from active production for 24 months.
+* **Edge Case Danger**: If the schema registry purged historical IDs or developers removed "unused" V1 upcasters to clean up code, the audit replay crashes immediately, rendering historical records permanently unreadable.
+* **Architectural Handling**: 
+  1. **Readability Horizon (EV-07)**: Schemas and upcaster code can never be deleted while retained bytes exist in Kafka, Outbox, DB, or long-term cold archives.
+  2. **Registry Snapshot Bundling**: Cold archives store exported schema registry snapshots alongside raw event byte batches.
+  3. **Multi-Step Step-Wise Execution**: The upcaster engine applies $V_1 \to V_2 \to V_3 \to V_4$ sequentially, allowing modern handlers to read 3-year-old raw bytes without requiring manual database migration scripts.
+
+### 7.5 Structural Renaming with Zero Fact Loss (EV-12 & F10.6)
+* **Production Scenario**: An organization splits a legacy monolithic nested object `"customer_info": {"name": "Alice", "address": "123 Main St"}` into normalized root properties `"customer_name"` and `"shipping_address"`.
+* **Edge Case Danger**: A naive upcaster might map `"address"` to `"shipping_address"`, losing billing address information or inventing a dummy country code.
+* **Architectural Handling**: Upcasters are strictly fact-preserving. Missing optional attributes are mapped to explicit `null` (never fabricated constants like `"country": "US"`). Any transformation that cannot preserve 100% of the input facts is rejected during CI golden testing (G5), requiring a major stream migration (§11) rather than an in-memory upcaster.
+
 ---
 
-## 7. Product & Operational Metrics
+## 8. Product & Operational Metrics
 
 | Metric | Target SLA | Warning Threshold | Remediation Runbook |
 | :--- | :--- | :--- | :--- |
@@ -129,3 +188,4 @@ flowchart TD
 | `event_versioning_unknown_schema_id_total` | `0` | $\ge 1$ | Trigger C1 DLQ alert; verify Apicurio cross-region replication |
 | `event_versioning_chain_length` | Avg $\le 2$ | $> 5$ steps | Schedule stream compaction or V-major stream migration (§11) |
 | `event_versioning_upcast_failures_total` | `0` | $> 0$ | Trigger immediate page; dispatch RB-02 hotfix for defective upcaster |
+| `event_versioning_trace_carrier_missing_total` | `0` | $> 0$ | Page producer on broken W3C traceparent injection |
