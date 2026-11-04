@@ -1,7 +1,7 @@
 include:
   - path: docker-compose.infra.yml
 
-x-hardening: &hardening
+x-hardening-app: &hardening-app
   read_only: true
   cap_drop: [ALL]
   security_opt: ["no-new-privileges:true"]
@@ -11,7 +11,7 @@ x-hardening: &hardening
 
 services:
   app:
-    <<: *hardening
+    <<: *hardening-app
     build:
       context: ../../..
       dockerfile: deploy/docker/service/Dockerfile
