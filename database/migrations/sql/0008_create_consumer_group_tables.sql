@@ -73,3 +73,4 @@ CREATE TRIGGER trg_prevent_consumer_group_member_immutable_update
 BEFORE UPDATE ON consumer_group_member
 FOR EACH ROW
 EXECUTE FUNCTION fn_prevent_consumer_group_member_immutable_update();
+

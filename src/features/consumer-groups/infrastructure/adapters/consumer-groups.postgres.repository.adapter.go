@@ -124,3 +124,4 @@ func (p *PostgresConsumerGroupsAdapter) ListMembers(ctx context.Context, tenantI
 	}
 	return members, nil
 }
+

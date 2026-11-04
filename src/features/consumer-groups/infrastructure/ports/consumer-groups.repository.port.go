@@ -15,3 +15,4 @@ type ConsumerGroupsRepositoryPort interface {
 	RecordRebalance(ctx context.Context, log contracts.RebalanceLogRecord) error
 	ListMembers(ctx context.Context, tenantID, groupID string) ([]contracts.ConsumerGroupMemberRecord, error)
 }
+

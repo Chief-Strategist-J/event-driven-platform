@@ -20,3 +20,4 @@ func (r *ConsumerGroupsRouter) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/consumer-groups/rebalance", r.handler.RebalanceSync)
 	mux.HandleFunc("GET /api/v1/consumer-groups/members", r.handler.ListMembers)
 }
+

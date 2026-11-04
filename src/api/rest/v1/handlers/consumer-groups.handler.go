@@ -168,3 +168,4 @@ func (h *ConsumerGroupsHandler) writeError(w http.ResponseWriter, code int, cano
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }
+

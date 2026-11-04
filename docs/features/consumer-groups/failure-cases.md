@@ -14,3 +14,4 @@ This catalog categorizes all failure scenarios for **Consumer Groups (WP-6)** un
 | **FL-CG-03** | Batch processing exceeds 80% of max poll interval | Coordinator evicts consumer assuming hung thread | Watchdog timer reaches 240s | Pause partition ingestion via `Pause()`, commit active offsets, then resume | Tune `max.poll.records` or batch concurrency |
 | **FL-CG-04** | Zombie consumer thread post-revocation | Concurrent writes from two pods to same database projection | Stale generation ID in database update query | Reject write via generation epoch check; abort transaction | Rebalance epoch fencing prevents split-brain writes |
 | **FL-CG-05** | Heartbeat thread starvation (>45s) | Pod evicted from consumer group by broker | `now - heartbeat_at > 45000ms` | Transition member to `DEAD` in ledger; trigger watchdog exit | Separate heartbeat thread from processing thread |
+

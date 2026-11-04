@@ -18,8 +18,21 @@ func TestConsumerGroupsEngine(t *testing.T) {
 
 	tenantID := "tenant-cgm"
 	groupID := "orders-fulfillment-v1"
+	canonicalGroupID := "prod.orders.checkout.fulfillment.v1"
 	memberID := "orders-pod-0-cgm"
 	instanceID := "orders-pod-0"
+
+	t.Run("group id convention validation", func(t *testing.T) {
+		err := rules.ValidateGroupID("invalid-group-id")
+		if err != rules.ErrInvalidGroupIDConvention {
+			t.Fatalf("expected ErrInvalidGroupIDConvention, got: %v", err)
+		}
+
+		err = rules.ValidateGroupID(canonicalGroupID)
+		if err != nil {
+			t.Fatalf("expected valid canonical group ID, got: %v", err)
+		}
+	})
 
 	t.Run("eager assignors are strictly banned", func(t *testing.T) {
 		err := rules.VerifyAssignorStrategy("org.apache.kafka.clients.consumer.RangeAssignor")
@@ -167,4 +180,74 @@ func TestConsumerGroupsEngine(t *testing.T) {
 			t.Fatalf("expected DEAD for 50s heartbeat (>45s session timeout), got %s", statusExpired)
 		}
 	})
+
+	t.Run("partition epoch fence rejects stale worker epoch", func(t *testing.T) {
+		err := rules.VerifyPartitionEpochFence(1, 2)
+		if err != rules.ErrStalePartitionEpoch {
+			t.Fatalf("expected ErrStalePartitionEpoch for workerEpoch < currentEpoch, got: %v", err)
+		}
+
+		err = rules.VerifyPartitionEpochFence(2, 2)
+		if err != nil {
+			t.Fatalf("expected nil for matching epoch, got: %v", err)
+		}
+
+		err = rules.VerifyPartitionEpochFence(3, 2)
+		if err != nil {
+			t.Fatalf("expected nil for newer epoch, got: %v", err)
+		}
+	})
+
+	t.Run("watchdog escalation evaluates correct action based on stalls", func(t *testing.T) {
+		action := rules.EvaluateWatchdogEscalation(500, 1000, 5000)
+		if action != contracts.WatchdogActionNormal {
+			t.Fatalf("expected NORMAL, got: %s", action)
+		}
+
+		action = rules.EvaluateWatchdogEscalation(6000, 1000, 5000)
+		if action != contracts.WatchdogActionInterrupt {
+			t.Fatalf("expected INTERRUPT_RECORD, got: %s", action)
+		}
+
+		action = rules.EvaluateWatchdogEscalation(12000, 1000, 5000)
+		if action != contracts.WatchdogActionSelfFence {
+			t.Fatalf("expected SELF_FENCE_PAUSE, got: %s", action)
+		}
+
+		action = rules.EvaluateWatchdogEscalation(500, 160000, 5000)
+		if action != contracts.WatchdogActionGracefulExit {
+			t.Fatalf("expected GRACEFUL_EXIT, got: %s", action)
+		}
+
+		action = rules.EvaluateWatchdogEscalation(500, 190000, 5000)
+		if action != contracts.WatchdogActionHardExit {
+			t.Fatalf("expected HARD_EXIT, got: %s", action)
+		}
+	})
+
+	t.Run("lost partition evaluation disallows commits", func(t *testing.T) {
+		allowed := rules.EvaluateLostPartitionDisallowCommit(true)
+		if allowed {
+			t.Fatalf("expected commit not allowed for lost partition")
+		}
+
+		allowed = rules.EvaluateLostPartitionDisallowCommit(false)
+		if !allowed {
+			t.Fatalf("expected commit allowed for active partition")
+		}
+	})
+
+	t.Run("rebalance storm detection flags excessive rebalances within window", func(t *testing.T) {
+		err := rules.EvaluateRebalanceStorm(2, 5*time.Minute)
+		if err != nil {
+			t.Fatalf("expected no storm for 2 rebalances, got: %v", err)
+		}
+
+		err = rules.EvaluateRebalanceStorm(4, 5*time.Minute)
+		if err != rules.ErrRebalanceStormDetected {
+			t.Fatalf("expected ErrRebalanceStormDetected for 4 rebalances, got: %v", err)
+		}
+	})
 }
+
+

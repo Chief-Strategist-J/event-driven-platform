@@ -49,3 +49,4 @@ func (f *ConsumerGroupsFeature) ListMembers(ctx context.Context, tenantID, group
 func (f *ConsumerGroupsFeature) GetRepository() ports.ConsumerGroupsRepositoryPort {
 	return f.Service.GetRepository()
 }
+

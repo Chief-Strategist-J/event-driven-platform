@@ -97,3 +97,22 @@ type RebalanceSyncInput struct {
 	AssignedPartitions []PartitionAssignment `json:"assignedPartitions"`
 	DurationMs         int64                 `json:"durationMs"`
 }
+
+type WatchdogEscalationLevel string
+
+const (
+	WatchdogActionNormal       WatchdogEscalationLevel = "NORMAL"
+	WatchdogActionInterrupt    WatchdogEscalationLevel = "INTERRUPT_RECORD"
+	WatchdogActionSelfFence    WatchdogEscalationLevel = "SELF_FENCE_PAUSE"
+	WatchdogActionGracefulExit WatchdogEscalationLevel = "GRACEFUL_EXIT"
+	WatchdogActionHardExit     WatchdogEscalationLevel = "HARD_EXIT"
+)
+
+type PartitionEpochFenceInput struct {
+	TenantID     string `json:"tenantId"`
+	GroupID      string `json:"groupId"`
+	Topic        string `json:"topic"`
+	Partition    int32  `json:"partition"`
+	WorkerEpoch  int64  `json:"workerEpoch"`
+	CurrentEpoch int64  `json:"currentEpoch"`
+}

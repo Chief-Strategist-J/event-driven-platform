@@ -116,3 +116,4 @@ func (m *MemoryConsumerGroupsAdapter) ListMembers(ctx context.Context, tenantID,
 	}
 	return result, nil
 }
+

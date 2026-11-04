@@ -138,3 +138,4 @@ func (s *ConsumerGroupsService) SyncRebalance(ctx context.Context, input contrac
 func (s *ConsumerGroupsService) ListMembers(ctx context.Context, tenantID, groupID string) ([]contracts.ConsumerGroupMemberRecord, error) {
 	return s.repo.ListMembers(ctx, tenantID, groupID)
 }
+

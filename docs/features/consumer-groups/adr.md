@@ -120,3 +120,4 @@ sequenceDiagram
     Pod->>Coord: JoinGroup (group.instance.id = pod-0)
     Coord-->>Pod: Rejoin Accepted without rebalance! Retains P0, P1.
 ```
+

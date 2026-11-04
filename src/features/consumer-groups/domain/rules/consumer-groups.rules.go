@@ -2,6 +2,7 @@ package rules
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"time"
 
@@ -9,9 +10,12 @@ import (
 )
 
 var (
-	ErrEagerAssignorDisallowed = errors.New("eager rebalance assignors are strictly banned per Tier 1 rules")
-	ErrMaxPollIntervalExceeded = errors.New("processing duration exceeded 80 percent of max.poll.interval; partition pause required")
-	ErrSessionTimeoutBreached  = errors.New("heartbeat age exceeded session.timeout.ms; member marked dead")
+	ErrEagerAssignorDisallowed   = errors.New("eager rebalance assignors are strictly banned per Tier 1 rules")
+	ErrMaxPollIntervalExceeded   = errors.New("processing duration exceeded 80 percent of max.poll.interval; partition pause required")
+	ErrSessionTimeoutBreached    = errors.New("heartbeat age exceeded session.timeout.ms; member marked dead")
+	ErrInvalidGroupIDConvention  = errors.New("group_id must strictly follow convention '<env>.<domain>.<service>.<handler>.v<n>'")
+	ErrRebalanceStormDetected    = errors.New("rebalance storm detected: rebalance frequency exceeded safety threshold")
+	ErrStalePartitionEpoch       = errors.New("write rejected: worker partition epoch is fenced by a newer generation")
 )
 
 const (
@@ -21,6 +25,16 @@ const (
 	MaxPollRecordsCap  int   = 500
 	FetchMaxBytesCap   int64 = 52428800
 )
+
+var groupIDRegex = regexp.MustCompile(`^[a-z0-9\-]+(\.[a-z0-9\-]+){3}\.v[0-9]+$`)
+
+func ValidateGroupID(groupID string) error {
+	trimmed := strings.TrimSpace(groupID)
+	if !groupIDRegex.MatchString(trimmed) {
+		return ErrInvalidGroupIDConvention
+	}
+	return nil
+}
 
 func VerifyAssignorStrategy(strategy string) error {
 	trimmed := strings.TrimSpace(strategy)
@@ -75,3 +89,49 @@ func ComputeCooperativePartitionMigration(
 
 	return retained, revoked, added
 }
+
+func VerifyPartitionEpochFence(workerEpoch, currentEpoch int64) error {
+	if workerEpoch < currentEpoch {
+		return ErrStalePartitionEpoch
+	}
+	return nil
+}
+
+func EvaluateWatchdogEscalation(
+	laneStallMs int64,
+	pollThreadStallMs int64,
+	perRecordBudgetMs int64,
+) contracts.WatchdogEscalationLevel {
+	if perRecordBudgetMs <= 0 {
+		perRecordBudgetMs = 5000
+	}
+
+	if pollThreadStallMs > MaxPollIntervalMs/2 {
+		if pollThreadStallMs > (MaxPollIntervalMs/2)+30000 {
+			return contracts.WatchdogActionHardExit
+		}
+		return contracts.WatchdogActionGracefulExit
+	}
+
+	if laneStallMs > perRecordBudgetMs*2 {
+		return contracts.WatchdogActionSelfFence
+	}
+
+	if laneStallMs > perRecordBudgetMs {
+		return contracts.WatchdogActionInterrupt
+	}
+
+	return contracts.WatchdogActionNormal
+}
+
+func EvaluateLostPartitionDisallowCommit(isPartitionLost bool) bool {
+	return !isPartitionLost
+}
+
+func EvaluateRebalanceStorm(rebalanceCount int, window time.Duration) error {
+	if window <= 10*time.Minute && rebalanceCount > 3 {
+		return ErrRebalanceStormDetected
+	}
+	return nil
+}
+

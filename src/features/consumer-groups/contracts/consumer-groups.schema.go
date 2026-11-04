@@ -74,3 +74,4 @@ func ValidateRebalanceSync(input RebalanceSyncInput) error {
 	}
 	return nil
 }
+

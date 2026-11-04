@@ -31,3 +31,4 @@ func TransitionMemberStatus(current contracts.MemberStatus, next contracts.Membe
 	}
 	return current, ErrInvalidMemberTransition
 }
+
