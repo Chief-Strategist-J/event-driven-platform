@@ -171,3 +171,26 @@ func TestOffsetManagementEngine(t *testing.T) {
 	})
 }
 
+func BenchmarkOffsetManagement_ValidateOffsetCommit(b *testing.B) {
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		err := rules.ValidateOffsetCommit(100, 101)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkOffsetManagement_EvaluateLagSeverity(b *testing.B) {
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		sev := rules.EvaluateLagSeverity(100, 15000, time.Minute, 10.0)
+		if sev != contracts.LagSeveritySurge {
+			b.Fatal("invalid lag evaluation")
+		}
+	}
+}
+
+

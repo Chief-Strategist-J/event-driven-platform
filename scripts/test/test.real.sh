@@ -445,13 +445,86 @@ fi
 echo "Consumer group members listed and verified successfully!"
 
 echo "================================================================"
-echo " 10. TESTING LIVE TEMPO TRACE PROPAGATION & RETRIEVAL"
+echo " 10. TESTING REAL OFFSET MANAGEMENT WITH TRACING"
+echo "================================================================"
+TRACE_PARENT_OFFSET="00-abf92f3577b34da6a3ce929d0e0e4700-00f067aa0ba90201-01"
+OFFSET_TOPIC="orders.events.v1"
+OFFSET_EXT_ID="ext_offset_real_01"
+
+echo "Executing POST /api/v1/offsets/commit with traceparent ${TRACE_PARENT_OFFSET}..."
+OFFSET_COMMIT_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/offsets/commit" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -H "traceparent: ${TRACE_PARENT_OFFSET}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "sourceService": "order-service",
+        "externalId": "'"${OFFSET_EXT_ID}"'",
+        "correlationId": "'"${CORR_UUID}"'",
+        "groupId": "'"${GROUP_ID}"'",
+        "topic": "'"${OFFSET_TOPIC}"'",
+        "partition": 0,
+        "offset": 100,
+        "logEndOffset": 150
+    }')
+
+echo "Offset Commit Response:"
+echo "${OFFSET_COMMIT_RESP}"
+if ! echo "${OFFSET_COMMIT_RESP}" | grep -q '"storedOffset":100'; then
+    echo "FATAL: Expected storedOffset 100 in offset commit response!"
+    exit 1
+fi
+if ! echo "${OFFSET_COMMIT_RESP}" | grep -qi "x-trace-id: abf92f3577b34da6a3ce929d0e0e4700"; then
+    echo "FATAL: Injected traceparent trace ID was not propagated in x-trace-id response header for offset commit!"
+    exit 1
+fi
+
+echo "Verifying stored offset in real PostgreSQL..."
+OFFSET_COUNT=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT COUNT(*) FROM consumer_stored_offset WHERE tenant_id = '${TENANT}' AND group_id = '${GROUP_ID}' AND topic = '${OFFSET_TOPIC}' AND stored_offset = 100;")
+if [[ "${OFFSET_COUNT}" != "1" ]]; then
+    echo "FATAL: Stored offset record was not found in PostgreSQL consumer_stored_offset table!"
+    exit 1
+fi
+echo "Stored offset verified inside PostgreSQL!"
+
+TRACE_PARENT_REWIND="00-bbf92f3577b34da6a3ce929d0e0e4711-00f067aa0ba90212-01"
+echo "Executing POST /api/v1/offsets/rewind with traceparent ${TRACE_PARENT_REWIND}..."
+REWIND_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/offsets/rewind" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -H "traceparent: ${TRACE_PARENT_REWIND}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "sourceService": "order-service",
+        "externalId": "ext_rewind_real_01",
+        "correlationId": "'"${CORR_UUID}"'",
+        "groupId": "'"${GROUP_ID}"'",
+        "topic": "'"${OFFSET_TOPIC}"'",
+        "partition": 0,
+        "targetOffset": 60,
+        "reason": "Replay past messages for incident recovery"
+    }')
+
+echo "Offset Rewind Response:"
+echo "${REWIND_RESP}"
+if ! echo "${REWIND_RESP}" | grep -q '"storedOffset":60'; then
+    echo "FATAL: Expected storedOffset 60 after rewind!"
+    exit 1
+fi
+if ! echo "${REWIND_RESP}" | grep -qi "x-trace-id: bbf92f3577b34da6a3ce929d0e0e4711"; then
+    echo "FATAL: Injected traceparent trace ID was not propagated in x-trace-id response header for offset rewind!"
+    exit 1
+fi
+echo "Offset rewind verified in PostgreSQL!"
+
+echo "================================================================"
+echo " 11. TESTING LIVE TEMPO TRACE PROPAGATION & RETRIEVAL"
 echo "================================================================"
 # Flush batches by querying tempo container directly
-echo "Verifying trace in Grafana Tempo container (Trace ID: 8bf92f3577b34da6a3ce929d0e0e4700)..."
-TEMPO_TRACE=$(docker exec event_platform-tempo-1 wget -qO- "http://127.0.0.1:3200/api/traces/8bf92f3577b34da6a3ce929d0e0e4700" || true)
-if [[ -n "${TEMPO_TRACE}" ]] && echo "${TEMPO_TRACE}" | grep -q "POST /api/v1/consumer-groups/members"; then
-    echo "Trace 8bf92f3577b34da6a3ce929d0e0e4700 verified inside Grafana Tempo storage!"
+echo "Verifying trace in Grafana Tempo container (Trace ID: abf92f3577b34da6a3ce929d0e0e4700)..."
+TEMPO_TRACE=$(docker exec event_platform-tempo-1 wget -qO- "http://127.0.0.1:3200/api/traces/abf92f3577b34da6a3ce929d0e0e4700" || true)
+if [[ -n "${TEMPO_TRACE}" ]] && echo "${TEMPO_TRACE}" | grep -q "POST /api/v1/offsets/commit"; then
+    echo "Trace abf92f3577b34da6a3ce929d0e0e4700 verified inside Grafana Tempo storage!"
 else
     echo "Checking overall Tempo search traces..."
     TEMPO_SEARCH=$(docker exec event_platform-tempo-1 wget -qO- "http://127.0.0.1:3200/api/search?limit=10" || true)
