@@ -444,3 +444,110 @@ paths:
           description: Successfully transformed event payload
         "400":
           description: Transformation error or broken chain
+
+  /api/v1/events/evaluate-sequence:
+    post:
+      summary: Ingest and Evaluate Event Sequence Ordering
+      operationId: evaluateEventSequence
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - consumerGroup
+                - handlerId
+                - aggregateType
+                - aggregateId
+                - aggregateVersion
+                - eventId
+                - eventType
+                - payload
+                - ownerEpoch
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                consumerGroup: { type: string }
+                handlerId: { type: string }
+                aggregateType: { type: string }
+                aggregateId: { type: string }
+                aggregateVersion: { type: integer, minimum: 1 }
+                eventId: { type: string }
+                eventType: { type: string }
+                payload: { type: string }
+                headers: { type: object }
+                sourceOffset: { type: integer }
+                ownerEpoch: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Event sequence evaluated successfully
+        "400":
+          description: Validation error
+
+  /api/v1/events/held/drain:
+    post:
+      summary: Cascade Drain Held Sequence Events
+      operationId: drainHeldEvents
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - consumerGroup
+                - handlerId
+                - aggregateType
+                - aggregateId
+                - ownerEpoch
+              properties:
+                tenantId: { type: string }
+                consumerGroup: { type: string }
+                handlerId: { type: string }
+                aggregateType: { type: string }
+                aggregateId: { type: string }
+                ownerEpoch: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Held events drained successfully
+        "400":
+          description: Invalid request or fenced epoch
+
+  /api/v1/events/held:
+    get:
+      summary: List Parked Aggregate Trackers
+      operationId: listHeldTrackers
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: consumer_group
+          in: query
+          required: false
+          schema: { type: string }
+        - name: handler_id
+          in: query
+          required: false
+          schema: { type: string }
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, default: 20 }
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, default: 0 }
+      responses:
+        "200":
+          description: List of parked aggregate sequence trackers
+        "500":
+          description: Internal server error

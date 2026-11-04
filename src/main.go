@@ -22,6 +22,8 @@ import (
 	schemaService "event-driven-platform/src/features/event-schema-registry/service"
 	versioningAdapters "event-driven-platform/src/features/event-versioning/infrastructure/adapters"
 	versioningService "event-driven-platform/src/features/event-versioning/service"
+	orderingAdapters "event-driven-platform/src/features/event-ordering-protection/infrastructure/adapters"
+	orderingService "event-driven-platform/src/features/event-ordering-protection/service"
 	consumerAdapters "event-driven-platform/src/features/idempotent-consumers/infrastructure/adapters"
 	consumerService "event-driven-platform/src/features/idempotent-consumers/service"
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
@@ -90,6 +92,7 @@ func describeService() chassis.ServiceSpec {
 			consumerRepo := consumerAdapters.NewPostgresConsumerRepositoryAdapter(db)
 			dlqRepo := dlqAdapters.NewPostgresDeadLetterRepositoryAdapter(db)
 			versioningRepo := versioningAdapters.NewPostgresEventVersioningAdapter(db)
+			orderingRepo := orderingAdapters.NewPostgresEventOrderingAdapter(db)
 
 			var producer producers.ProducerPort
 			kafkaBrokersEnv := os.Getenv("KAFKA_BROKERS")
@@ -103,6 +106,7 @@ func describeService() chassis.ServiceSpec {
 			consumerSvc := consumerService.NewConsumerService(consumerRepo)
 			dlqSvc := dlqService.NewDeadLetterService(dlqRepo)
 			versioningSvc := versioningService.NewEventVersioningService(versioningRepo, nil)
+			orderingSvc := orderingService.NewEventOrderingService(orderingRepo)
 
 			return chassis.Services{
 				Registry: map[string]any{
@@ -111,6 +115,7 @@ func describeService() chassis.ServiceSpec {
 					"consumerService":   consumerSvc,
 					"dlqService":        dlqSvc,
 					"versioningService": versioningSvc,
+					"orderingService":   orderingSvc,
 				},
 			}, nil
 		},
@@ -146,6 +151,11 @@ func describeService() chassis.ServiceSpec {
 				versioningHandler := handlers.NewEventVersioningHandler(versioningSvc)
 				versioningRouter := routers.NewEventVersioningRouter(versioningHandler)
 				versioningRouter.RegisterRoutes(router)
+			}
+			if orderingSvc, exists := instances["orderingService"].(*orderingService.EventOrderingService); exists && orderingSvc != nil {
+				orderingHandler := handlers.NewEventOrderingHandler(orderingSvc)
+				orderingRouter := routers.NewEventOrderingRouter(orderingHandler)
+				orderingRouter.RegisterRoutes(router)
 			}
 		},
 		RegisterDaemons: func(lifecycle *chassis.Lifecycle, services chassis.Services) {

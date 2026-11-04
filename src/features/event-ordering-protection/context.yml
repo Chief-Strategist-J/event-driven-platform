@@ -1,2 +1,182 @@
 feature: event-ordering-protection
 mode: stateless_hexagonal
+
+entities:
+  - entity: aggregate_sequence_tracker
+    owner: event-driven-platform
+    description: Authoritative sequence progression, content hash history, and epoch-fenced hold status per aggregate
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        default: uuidv7()
+        constraint: PK(tenant_id, id), immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE(tenant_id, public_id), format 'seq_' + 26 chars, immutable
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (tenant_id = btrim(tenant_id) AND tenant_id <> ''), immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (source_service = btrim(source_service) AND source_service <> '')
+      - name: external_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (external_id = btrim(external_id) AND external_id <> '')
+      - name: correlation_id
+        type: uuid
+        null: no
+        constraint: immutable
+      - name: consumer_group
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (consumer_group = btrim(consumer_group) AND consumer_group <> '')
+      - name: handler_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (handler_id = btrim(handler_id) AND handler_id <> '')
+      - name: aggregate_type
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (aggregate_type = btrim(aggregate_type) AND aggregate_type <> '')
+      - name: aggregate_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (aggregate_id = btrim(aggregate_id) AND aggregate_id <> '')
+      - name: last_applied_version
+        type: bigint
+        null: no
+        constraint: CHECK (last_applied_version >= 0)
+      - name: last_payload_hash
+        type: varchar(64)
+        null: no
+        constraint: CHECK (last_payload_hash ~ '^[0-9a-f]{64}$')
+      - name: owner_epoch
+        type: bigint
+        null: no
+        constraint: CHECK (owner_epoch >= 0)
+      - name: is_held
+        type: boolean
+        null: no
+        default: false
+      - name: hold_reason
+        type: varchar(32)
+        null: yes
+        constraint: CHECK (hold_reason IS NULL OR hold_reason IN ('GAP', 'PARKED_FAILURE', 'INTEGRITY', 'RESYNCING'))
+      - name: blocking_version
+        type: bigint
+        null: yes
+        constraint: CHECK (blocking_version IS NULL OR blocking_version >= 1)
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: now()
+    invariants:
+      - UNIQUE(tenant_id, consumer_group, handler_id, aggregate_type, aggregate_id)
+      - (is_held = true) = (hold_reason IS NOT NULL)
+      - Immutability of id, public_id, tenant_id, correlation_id
+    pii: [none]
+    source_of_truth: db
+
+  - entity: sequence_held_event
+    owner: event-driven-platform
+    description: Lossless durable buffer of out-of-order or gap-holding event payloads awaiting sequential drain
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        default: uuidv7()
+        constraint: PK(tenant_id, id), immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE(tenant_id, public_id), format 'hld_' + 26 chars, immutable
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (tenant_id = btrim(tenant_id) AND tenant_id <> ''), immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (source_service = btrim(source_service) AND source_service <> '')
+      - name: external_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (external_id = btrim(external_id) AND external_id <> '')
+      - name: correlation_id
+        type: uuid
+        null: no
+        constraint: immutable
+      - name: consumer_group
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (consumer_group = btrim(consumer_group) AND consumer_group <> '')
+      - name: handler_id
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (handler_id = btrim(handler_id) AND handler_id <> '')
+      - name: aggregate_type
+        type: varchar(64)
+        null: no
+        normalize: trim
+        constraint: CHECK (aggregate_type = btrim(aggregate_type) AND aggregate_type <> '')
+      - name: aggregate_id
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (aggregate_id = btrim(aggregate_id) AND aggregate_id <> '')
+      - name: aggregate_version
+        type: bigint
+        null: no
+        constraint: CHECK (aggregate_version >= 1)
+      - name: event_id
+        type: uuid
+        null: no
+        constraint: immutable
+      - name: event_type
+        type: varchar(128)
+        null: no
+        normalize: trim
+        constraint: CHECK (event_type = btrim(event_type) AND event_type <> '')
+      - name: payload
+        type: jsonb
+        null: no
+        constraint: CHECK (jsonb_typeof(payload) = 'object')
+      - name: payload_hash
+        type: varchar(64)
+        null: no
+        constraint: CHECK (payload_hash ~ '^[0-9a-f]{64}$')
+      - name: headers
+        type: jsonb
+        null: no
+        default: '{}'::jsonb
+      - name: source_offset
+        type: bigint
+        null: no
+        constraint: CHECK (source_offset >= 0)
+      - name: arrived_at
+        type: timestamptz
+        null: no
+        default: now()
+    invariants:
+      - UNIQUE(tenant_id, consumer_group, handler_id, aggregate_type, aggregate_id, aggregate_version)
+      - UNIQUE(tenant_id, consumer_group, handler_id, event_id)
+      - Immutability of id, public_id, tenant_id, correlation_id
+    pii: [none]
+    source_of_truth: db
