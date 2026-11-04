@@ -10,10 +10,61 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.24.0"
 	"go.opentelemetry.io/otel/trace"
 )
 
 var defaultTracer = otel.Tracer("event-driven-platform")
+
+func InitGlobalTracer(ctx context.Context, serviceName, collectorEndpoint string) (func(context.Context) error, error) {
+	if collectorEndpoint == "" {
+		collectorEndpoint = os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+		if collectorEndpoint == "" {
+			collectorEndpoint = "127.0.0.1:4317"
+		}
+	}
+	if serviceName == "" {
+		serviceName = "event-driven-platform"
+	}
+
+	exporter, err := otlptracegrpc.New(ctx,
+		otlptracegrpc.WithInsecure(),
+		otlptracegrpc.WithEndpoint(collectorEndpoint),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create OTLP trace exporter: %w", err)
+	}
+
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceNameKey.String(serviceName),
+			attribute.String("environment", "local"),
+		),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize resource: %w", err)
+	}
+
+	bsp := sdktrace.NewBatchSpanProcessor(exporter)
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithResource(res),
+		sdktrace.WithSpanProcessor(bsp),
+	)
+
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
+	defaultTracer = tp.Tracer(serviceName)
+
+	return tp.Shutdown, nil
+}
 
 func StartSpan(ctx context.Context, spanName string, opts ...trace.SpanStartOption) (context.Context, trace.Span) {
 	return defaultTracer.Start(ctx, spanName, opts...)

@@ -9,6 +9,9 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"event-driven-platform/src/infra/observability"
+	"event-driven-platform/src/shared/middleware"
 )
 
 type Config struct {
@@ -18,9 +21,26 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
+	publicPort := os.Getenv("PORT")
+	if publicPort == "" {
+		publicPort = "8080"
+	}
+	if publicPort[0] != ':' {
+		publicPort = ":" + publicPort
+	}
+
+	adminPort := os.Getenv("ADMIN_PORT")
+	if adminPort == "" {
+		adminPort = "8081"
+	}
+	adminHost := os.Getenv("ADMIN_HOST")
+	if adminHost == "" {
+		adminHost = "127.0.0.1"
+	}
+
 	return Config{
-		PublicAddr:      ":8080",
-		AdminAddr:       "127.0.0.1:8081",
+		PublicAddr:      publicPort,
+		AdminAddr:       fmt.Sprintf("%s:%s", adminHost, adminPort),
 		ShutdownTimeout: 15 * time.Second,
 	}
 }
@@ -47,6 +67,21 @@ func Run(spec ServiceSpec, args []string, env []string) int {
 	cfg := DefaultConfig()
 	health := NewHealthCoordinator()
 	deps := Dependencies{Context: context.Background()}
+
+	otelEndpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+	if otelEndpoint == "" {
+		otelEndpoint = "127.0.0.1:4317"
+	}
+	shutdownTracer, err := observability.InitGlobalTracer(context.Background(), spec.Identity.Name, otelEndpoint)
+	if err != nil {
+		log.Printf("Warning: failed to initialize OpenTelemetry SDK: %v\n", err)
+	} else if shutdownTracer != nil {
+		defer func() {
+			shutCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = shutdownTracer(shutCtx)
+		}()
+	}
 
 	services, err := spec.BuildServices(deps)
 	if err != nil {
@@ -111,9 +146,11 @@ func wireServe(app *App, lifecycle *Lifecycle) {
 		app.Spec.RegisterAPIRoutes(publicMux, app.Services)
 	}
 
+	wrappedHandler := middleware.TraceAndContextMiddleware(middleware.ErrorRecoveryMiddleware(publicMux))
+
 	publicServer := &http.Server{
 		Addr:         app.Config.PublicAddr,
-		Handler:      publicMux,
+		Handler:      wrappedHandler,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  75 * time.Second,

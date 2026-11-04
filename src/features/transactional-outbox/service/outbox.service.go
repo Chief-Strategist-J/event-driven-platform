@@ -161,3 +161,17 @@ func (s *OutboxService) RelayBatch(ctx context.Context, batchSize int) (int, err
 
 	return publishedCount, nil
 }
+
+func (s *OutboxService) StartPollerDaemon(ctx context.Context, pollInterval time.Duration, batchSize int) error {
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			_, _ = s.RelayBatch(ctx, batchSize)
+		}
+	}
+}

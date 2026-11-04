@@ -1,17 +1,26 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"net/http"
 	"os"
+	"strings"
+	"time"
+
+	_ "github.com/lib/pq"
 
 	"event-driven-platform/messaging/engine/producers"
+	kafkaProducer "event-driven-platform/messaging/engine/producers/kafka"
 	"event-driven-platform/src/api/rest/v1/handlers"
 	"event-driven-platform/src/api/rest/v1/routers"
 	schemaAdapters "event-driven-platform/src/features/event-schema-registry/infrastructure/adapters"
 	schemaService "event-driven-platform/src/features/event-schema-registry/service"
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
+	outboxPorts "event-driven-platform/src/features/transactional-outbox/infrastructure/ports"
 	outboxService "event-driven-platform/src/features/transactional-outbox/service"
 	"event-driven-platform/src/infra/chassis"
+	"event-driven-platform/src/infra/database"
 )
 
 func main() {
@@ -26,9 +35,9 @@ func describeService() chassis.ServiceSpec {
 			Tier: "tier-1",
 		},
 		Needs: chassis.Needs{
-			Database: false,
+			Database: true,
 			Cache:    false,
-			Broker:   false,
+			Broker:   true,
 		},
 		DependsOn: []chassis.DownstreamDependency{},
 		Contracts: chassis.Contracts{
@@ -36,12 +45,48 @@ func describeService() chassis.ServiceSpec {
 			ProducedTopics: []string{},
 			ConsumedTopics: []string{},
 		},
+		Migrations: func() chassis.MigrationSet {
+			return chassis.MigrationSet{
+				Version: 1,
+				Apply: func(ctx context.Context) error {
+					dbURL := os.Getenv("DATABASE_URL")
+					if dbURL == "" {
+						return nil
+					}
+					db, err := sql.Open("postgres", dbURL)
+					if err != nil {
+						return err
+					}
+					defer db.Close()
+					return database.RunMigrations(ctx, db, "database/migrations/sql")
+				},
+			}
+		},
 		BuildServices: func(deps chassis.Dependencies) (chassis.Services, error) {
 			schemaRepo := schemaAdapters.NewMemorySchemaRegistryAdapter()
 			schemaSvc := schemaService.NewSchemaRegistryService(schemaRepo)
 
-			outboxRepo := outboxAdapters.NewMemoryOutboxRepositoryAdapter()
-			producer := producers.NewMemoryProducerAdapter()
+			var outboxRepo outboxPorts.OutboxRepositoryPort
+			dbURL := os.Getenv("DATABASE_URL")
+			if dbURL != "" {
+				db, err := sql.Open("postgres", dbURL)
+				if err == nil {
+					outboxRepo = outboxAdapters.NewPostgresOutboxRepositoryAdapter(db)
+				}
+			}
+			if outboxRepo == nil {
+				outboxRepo = outboxAdapters.NewMemoryOutboxRepositoryAdapter()
+			}
+
+			var producer producers.ProducerPort
+			kafkaBrokersEnv := os.Getenv("KAFKA_BROKERS")
+			if kafkaBrokersEnv != "" {
+				brokers := strings.Split(kafkaBrokersEnv, ",")
+				producer = kafkaProducer.NewKafkaProducerAdapter(kafkaProducer.DefaultKafkaProducerConfig(brokers))
+			} else {
+				producer = producers.NewMemoryProducerAdapter()
+			}
+
 			outboxSvc := outboxService.NewOutboxService(outboxRepo, producer)
 
 			return chassis.Services{
@@ -65,6 +110,10 @@ func describeService() chassis.ServiceSpec {
 				outboxHandler := handlers.NewTransactionalOutboxHandler(outboxSvc)
 				outboxRouter := routers.NewTransactionalOutboxRouter(outboxHandler)
 				outboxRouter.RegisterRoutes(router)
+
+				go func() {
+					_ = outboxSvc.StartPollerDaemon(context.Background(), 2*time.Second, 50)
+				}()
 			}
 		},
 	}
