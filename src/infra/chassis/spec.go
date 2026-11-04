@@ -54,6 +54,7 @@ type ServiceSpec struct {
 	BuildServices     func(deps Dependencies) (Services, error)
 	RegisterAPIRoutes func(router *http.ServeMux, services Services)
 	RegisterConsumers func(group any, services Services)
+	RegisterDaemons   func(lifecycle *Lifecycle, services Services)
 	Jobs              func() []JobSpec
 	Migrations        func() MigrationSet
 }

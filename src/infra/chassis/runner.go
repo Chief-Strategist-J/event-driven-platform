@@ -101,6 +101,9 @@ func Run(spec ServiceSpec, args []string, env []string) int {
 	switch bootCtx.Command {
 	case "serve":
 		wireServe(app, lifecycle)
+		if app.Spec.RegisterDaemons != nil {
+			app.Spec.RegisterDaemons(lifecycle, app.Services)
+		}
 	case "migrate":
 		if spec.Migrations != nil {
 			mig := spec.Migrations()

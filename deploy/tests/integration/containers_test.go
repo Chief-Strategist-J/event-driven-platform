@@ -35,9 +35,9 @@ func TestInfrastructureIntegration(t *testing.T) {
 		}
 	}()
 
-	// 2. Kafka KRaft container
+	// 2. Kafka KRaft container (using official confluentinc image supported by testcontainers-go/modules/kafka)
 	kafkaContainer, err := kafka.Run(ctx,
-		"apache/kafka:3.8.0",
+		"confluentinc/cp-kafka:7.6.0",
 		kafka.WithClusterID("test-cluster-id"),
 	)
 	if err != nil {

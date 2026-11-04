@@ -110,10 +110,19 @@ func describeService() chassis.ServiceSpec {
 				outboxHandler := handlers.NewTransactionalOutboxHandler(outboxSvc)
 				outboxRouter := routers.NewTransactionalOutboxRouter(outboxHandler)
 				outboxRouter.RegisterRoutes(router)
-
-				go func() {
-					_ = outboxSvc.StartPollerDaemon(context.Background(), 2*time.Second, 50)
-				}()
+			}
+		},
+		RegisterDaemons: func(lifecycle *chassis.Lifecycle, services chassis.Services) {
+			instances, ok := services.Registry.(map[string]any)
+			if !ok {
+				return
+			}
+			if outboxSvc, exists := instances["outboxService"].(*outboxService.OutboxService); exists && outboxSvc != nil {
+				lifecycle.AddComponent("outbox-poller-daemon", func(ctx context.Context) error {
+					return outboxSvc.StartPollerDaemon(ctx, 2*time.Second, 50)
+				}, func(_ context.Context) error {
+					return nil
+				})
 			}
 		},
 	}
