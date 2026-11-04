@@ -40,10 +40,10 @@ sequenceDiagram
     alt Schema ID Unknown or Chain Missing
         Reg-->>CRT: Error: ERR_SCHEMA_NOT_FOUND / ERR_CHAIN_INCOMPLETE
         CRT->>CRT: Classify Error as C1 (Poison Payload Defect)
-        CRT->>DLQ: INSERT INTO dead_letter_quarantine (Lossless bytes, Error code)
-        CRT->>Park: INSERT INTO aggregate_parking_store (aggregate_id, is_parked=TRUE)
-        CRT->>Kafka: Advance partition offset (DL-05 durable advance)
-        Note over CRT,Park: Aggregate is parked; live stream for other orders proceeds uninterrupted (DL-02)
+        CRT->>DLQ: Store quarantined event
+        CRT->>Park: Park aggregate key
+        CRT->>Kafka: Advance partition offset
+        Note over CRT,Park: Aggregate is parked; live stream proceeds
     end
 ```
 
@@ -63,10 +63,10 @@ sequenceDiagram
     Git->>Lint: Run C-GOV Validation
     Lint->>Lint: Check field semantic tags & unit annotations
     alt Field modified without renaming
-        Lint-->>Dev: REJECT: Unit/Precision modification detected on existing field 'amount'. Must introduce new field 'amount_cents' (EV-05).
+        Lint-->>Dev: Unit modification detected on amount
     end
     Note over Drift: Live Telemetry Safety Net
-    Drift->>Drift: Continuous monitoring of numeric distributions per schema version
-    Drift-->>Drift: 100x mean jump detected on schema change -> Trigger immediate drift alert
+    Drift->>Drift: Continuous monitoring of numeric distributions
+    Drift-->>Drift: Mean jump detected on schema change
 ```
 

@@ -75,8 +75,8 @@ sequenceDiagram
     Reg-->>CI: Return V1 schema definition
     CI->>CI: Evaluate Full Transitivity (EV-04)
     alt New required field without default added
-        CI-->>Dev: REJECT: Cannot add mandatory field 'warehouse_id' without default in FULL/BACKWARD mode
-        Dev->>CI: Push fix: 'warehouse_id' made optional with null default
+        CI-->>Dev: Incompatible schema modification
+        Dev->>CI: Push fix with optional field
     end
     CI->>CI: G4: Verify Upcaster chain exists for OrderPlaced (V1 -> V2)
     CI->>CI: G5: Run golden property test with simulated historical payloads
