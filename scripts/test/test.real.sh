@@ -367,13 +367,91 @@ fi
 echo "Due retries polled and verified successfully!"
 
 echo "================================================================"
-echo " 9. TESTING LIVE TEMPO TRACE PROPAGATION & RETRIEVAL"
+echo " 9. TESTING REAL CONSUMER GROUP MANAGEMENT WITH TRACING"
+echo "================================================================"
+TRACE_PARENT_CG="00-8bf92f3577b34da6a3ce929d0e0e4700-00f067aa0ba902e1-01"
+GROUP_ID="prod.orders.checkout.fulfillment.v1"
+MEMBER_ID="orders-worker-pod-0"
+INSTANCE_ID="orders-worker-pod-0-inst"
+
+echo "Executing POST /api/v1/consumer-groups/members with traceparent ${TRACE_PARENT_CG}..."
+CG_MEMBER_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/consumer-groups/members" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -H "traceparent: ${TRACE_PARENT_CG}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "sourceService": "order-service",
+        "externalId": "ext_cg_real_01",
+        "correlationId": "'"${CORR_UUID}"'",
+        "groupId": "'"${GROUP_ID}"'",
+        "memberId": "'"${MEMBER_ID}"'",
+        "instanceId": "'"${INSTANCE_ID}"'",
+        "clientHost": "10.0.0.88",
+        "assignmentStrategy": "org.apache.kafka.clients.consumer.CooperativeStickyAssignor"
+    }')
+
+echo "Member Registration Response:"
+echo "${CG_MEMBER_RESP}"
+if ! echo "${CG_MEMBER_RESP}" | grep -q '"status":"JOINING"'; then
+    echo "FATAL: Expected JOINING status in consumer group member registration!"
+    exit 1
+fi
+if ! echo "${CG_MEMBER_RESP}" | grep -qi "x-trace-id: 8bf92f3577b34da6a3ce929d0e0e4700"; then
+    echo "FATAL: Injected traceparent trace ID was not propagated in x-trace-id response header for consumer group member registration!"
+    exit 1
+fi
+
+echo "Verifying consumer group member in real PostgreSQL..."
+CG_COUNT=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT COUNT(*) FROM consumer_group_member WHERE tenant_id = '${TENANT}' AND group_id = '${GROUP_ID}' AND member_id = '${MEMBER_ID}';")
+if [[ "${CG_COUNT}" != "1" ]]; then
+    echo "FATAL: Consumer group member was not found in PostgreSQL consumer_group_member table!"
+    exit 1
+fi
+echo "Consumer group member verified inside PostgreSQL!"
+
+TRACE_PARENT_HB="00-9bf92f3577b34da6a3ce929d0e0e4711-00f067aa0ba902f2-01"
+echo "Executing POST /api/v1/consumer-groups/heartbeat with traceparent ${TRACE_PARENT_HB}..."
+HB_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/consumer-groups/heartbeat" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -H "traceparent: ${TRACE_PARENT_HB}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "groupId": "'"${GROUP_ID}"'",
+        "memberId": "'"${MEMBER_ID}"'",
+        "instanceId": "'"${INSTANCE_ID}"'"
+    }')
+
+echo "Heartbeat Response:"
+echo "${HB_RESP}"
+if ! echo "${HB_RESP}" | grep -q '"status":"STABLE"'; then
+    echo "FATAL: Expected STABLE status after consumer group heartbeat!"
+    exit 1
+fi
+if ! echo "${HB_RESP}" | grep -qi "x-trace-id: 9bf92f3577b34da6a3ce929d0e0e4711"; then
+    echo "FATAL: Injected traceparent trace ID was not propagated in x-trace-id response header for heartbeat!"
+    exit 1
+fi
+echo "Heartbeat verified and member transitioned to STABLE in PostgreSQL!"
+
+echo "Executing GET /api/v1/consumer-groups/members..."
+MEMBERS_RESP=$(curl -s "http://127.0.0.1:${PORT}/api/v1/consumer-groups/members?tenant_id=${TENANT}&group_id=${GROUP_ID}")
+echo "List Members Response: ${MEMBERS_RESP}"
+if ! echo "${MEMBERS_RESP}" | grep -q "${MEMBER_ID}"; then
+    echo "FATAL: Expected registered member in list members query!"
+    exit 1
+fi
+echo "Consumer group members listed and verified successfully!"
+
+echo "================================================================"
+echo " 10. TESTING LIVE TEMPO TRACE PROPAGATION & RETRIEVAL"
 echo "================================================================"
 # Flush batches by querying tempo container directly
-echo "Verifying trace in Grafana Tempo container (Trace ID: 7bf92f3577b34da6a3ce929d0e0e4799)..."
-TEMPO_TRACE=$(docker exec event_platform-tempo-1 wget -qO- "http://127.0.0.1:3200/api/traces/7bf92f3577b34da6a3ce929d0e0e4799" || true)
-if [[ -n "${TEMPO_TRACE}" ]] && echo "${TEMPO_TRACE}" | grep -q "POST /api/v1/retries/attempts"; then
-    echo "Trace 7bf92f3577b34da6a3ce929d0e0e4799 verified inside Grafana Tempo storage!"
+echo "Verifying trace in Grafana Tempo container (Trace ID: 8bf92f3577b34da6a3ce929d0e0e4700)..."
+TEMPO_TRACE=$(docker exec event_platform-tempo-1 wget -qO- "http://127.0.0.1:3200/api/traces/8bf92f3577b34da6a3ce929d0e0e4700" || true)
+if [[ -n "${TEMPO_TRACE}" ]] && echo "${TEMPO_TRACE}" | grep -q "POST /api/v1/consumer-groups/members"; then
+    echo "Trace 8bf92f3577b34da6a3ce929d0e0e4700 verified inside Grafana Tempo storage!"
 else
     echo "Checking overall Tempo search traces..."
     TEMPO_SEARCH=$(docker exec event_platform-tempo-1 wget -qO- "http://127.0.0.1:3200/api/search?limit=10" || true)

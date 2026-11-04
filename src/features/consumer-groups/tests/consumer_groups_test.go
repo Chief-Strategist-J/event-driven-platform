@@ -250,4 +250,40 @@ func TestConsumerGroupsEngine(t *testing.T) {
 	})
 }
 
+func BenchmarkConsumerGroups_ComputeCooperativeMigration(b *testing.B) {
+	current := []contracts.PartitionAssignment{
+		{Topic: "orders.placed", Partition: 0, Epoch: 1},
+		{Topic: "orders.placed", Partition: 1, Epoch: 1},
+		{Topic: "orders.placed", Partition: 2, Epoch: 1},
+		{Topic: "orders.placed", Partition: 3, Epoch: 1},
+	}
+	incoming := []contracts.PartitionAssignment{
+		{Topic: "orders.placed", Partition: 2, Epoch: 2},
+		{Topic: "orders.placed", Partition: 3, Epoch: 2},
+		{Topic: "orders.placed", Partition: 4, Epoch: 2},
+		{Topic: "orders.placed", Partition: 5, Epoch: 2},
+	}
+
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		retained, revoked, added := rules.ComputeCooperativePartitionMigration(current, incoming)
+		if len(retained) == 0 || len(revoked) == 0 || len(added) == 0 {
+			b.Fatal("invalid computation")
+		}
+	}
+}
+
+func BenchmarkConsumerGroups_EvaluateWatchdogEscalation(b *testing.B) {
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		action := rules.EvaluateWatchdogEscalation(6000, 1000, 5000)
+		if action != contracts.WatchdogActionInterrupt {
+			b.Fatal("invalid watchdog action")
+		}
+	}
+}
+
+
 
