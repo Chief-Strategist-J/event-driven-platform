@@ -48,6 +48,11 @@ func (h *DeadLetterHandler) Quarantine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
 	input := contracts.QuarantineEventInput{
 		TenantID:         req.TenantID,
 		SourceService:    req.SourceService,

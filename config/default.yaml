@@ -7,5 +7,22 @@ server:
   drain_deadline_seconds: 15
   propagation_wait_seconds: 5
   shutdown_deadline_seconds: 30
+
+database:
+  url: "${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/event_store?sslmode=disable}"
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime_seconds: 300
+
+schema_registry:
+  url: "${SCHEMA_REGISTRY_URL:-http://127.0.0.1:8082/apis/registry/v2}"
+
+broker:
+  kafka_brokers: "${KAFKA_BROKERS:-127.0.0.1:9092}"
+
+telemetry:
+  otlp_endpoint: "${OTEL_EXPORTER_OTLP_ENDPOINT:-127.0.0.1:4317}"
+  service_name: "event-driven-platform"
+
 endpoints:
   base_path: "/api/v1"
