@@ -168,4 +168,76 @@ func TestRetryTopicsEngine(t *testing.T) {
 			t.Fatalf("failed transitioning retry status: %v", err)
 		}
 	})
+
+	t.Run("causal wait classification triggers bounded causal wait hold", func(t *testing.T) {
+		res, err := svc.EvaluateRetry(ctx, contracts.EvaluateRetryInput{
+			StreamOrdering: contracts.OrderingStrict,
+			Classification: contracts.ClassCausalWait,
+			AttemptNumber:  1,
+			MaxAttempts:    3,
+			BaseBackoffMs:  1000,
+			MaxBackoffMs:   10000,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Disposition != contracts.DispositionCausalWait {
+			t.Fatalf("expected DispositionCausalWait, got %s", res.Disposition)
+		}
+	})
+
+	t.Run("reference data missing triggers longer scheduled hold", func(t *testing.T) {
+		res, err := svc.EvaluateRetry(ctx, contracts.EvaluateRetryInput{
+			StreamOrdering: contracts.OrderingStrict,
+			Classification: contracts.ClassReferenceDataMiss,
+			AttemptNumber:  1,
+			MaxAttempts:    3,
+			BaseBackoffMs:  1000,
+			MaxBackoffMs:   60000,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Disposition != contracts.DispositionHeldScheduled {
+			t.Fatalf("expected DispositionHeldScheduled, got %s", res.Disposition)
+		}
+		if res.BackoffMs < 30000 {
+			t.Fatalf("expected at least 30s backoff for reference data miss, got %d", res.BackoffMs)
+		}
+	})
+
+	t.Run("contention exceeding attempt 5 escalates to held scheduled retry", func(t *testing.T) {
+		res, err := svc.EvaluateRetry(ctx, contracts.EvaluateRetryInput{
+			StreamOrdering: contracts.OrderingStrict,
+			Classification: contracts.ClassContention,
+			AttemptNumber:  6,
+			MaxAttempts:    10,
+			BaseBackoffMs:  1000,
+			MaxBackoffMs:   10000,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Disposition != contracts.DispositionHeldScheduled {
+			t.Fatalf("expected DispositionHeldScheduled on hot aggregate contention escalation, got %s", res.Disposition)
+		}
+	})
+
+	t.Run("ambiguous effect triggers held scheduled retry preserving idempotency key", func(t *testing.T) {
+		res, err := svc.EvaluateRetry(ctx, contracts.EvaluateRetryInput{
+			StreamOrdering: contracts.OrderingStrict,
+			Classification: contracts.ClassAmbiguousEffect,
+			AttemptNumber:  1,
+			MaxAttempts:    3,
+			BaseBackoffMs:  1000,
+			MaxBackoffMs:   10000,
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.Disposition != contracts.DispositionHeldScheduled {
+			t.Fatalf("expected DispositionHeldScheduled for ambiguous effect, got %s", res.Disposition)
+		}
+	})
+
 }

@@ -15,12 +15,15 @@ const (
 type FailureClassification string
 
 const (
-	ClassEnvironmental    FailureClassification = "ENVIRONMENTAL"
-	ClassContention       FailureClassification = "CONTENTION"
-	ClassRateLimited      FailureClassification = "RATE_LIMITED"
-	ClassMessageTransient FailureClassification = "MESSAGE_TRANSIENT"
-	ClassPermanentData    FailureClassification = "PERMANENT_DATA"
-	ClassBusinessReject   FailureClassification = "BUSINESS_REJECT"
+	ClassEnvironmental       FailureClassification = "ENVIRONMENTAL"
+	ClassContention          FailureClassification = "CONTENTION"
+	ClassRateLimited         FailureClassification = "RATE_LIMITED"
+	ClassMessageTransient    FailureClassification = "MESSAGE_TRANSIENT"
+	ClassAmbiguousEffect     FailureClassification = "AMBIGUOUS_EFFECT"
+	ClassCausalWait          FailureClassification = "CAUSAL_WAIT"
+	ClassPermanentData       FailureClassification = "PERMANENT_DATA"
+	ClassBusinessReject      FailureClassification = "BUSINESS_REJECT"
+	ClassReferenceDataMiss   FailureClassification = "REFERENCE_DATA_MISSING"
 )
 
 type RetryDisposition string
@@ -32,6 +35,7 @@ const (
 	DispositionTopicScheduled  RetryDisposition = "TOPIC_SCHEDULED"
 	DispositionDeadLetter      RetryDisposition = "DEAD_LETTER"
 	DispositionExpired         RetryDisposition = "EXPIRED"
+	DispositionCausalWait      RetryDisposition = "CAUSAL_WAIT"
 )
 
 type RetryAttemptStatus string
@@ -110,3 +114,4 @@ type ScheduleRetryInput struct {
 	ErrorCode        string                `json:"errorCode"`
 	ValidUntil       *time.Time            `json:"validUntil,omitempty"`
 }
+

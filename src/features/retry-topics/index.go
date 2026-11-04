@@ -45,3 +45,4 @@ func (f *RetryTopicsFeature) GetDueRetries(ctx context.Context, tenantID string,
 func (f *RetryTopicsFeature) GetRepository() ports.RetryTopicsRepositoryPort {
 	return f.Service.GetRepository()
 }
+

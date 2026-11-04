@@ -19,3 +19,4 @@ func (r *RetryTopicsRouter) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/retries/attempts", r.handler.ScheduleRetry)
 	mux.HandleFunc("GET /api/v1/retries/due", r.handler.GetDueRetries)
 }
+

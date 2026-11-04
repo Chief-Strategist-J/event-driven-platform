@@ -16,3 +16,4 @@ This catalog enumerates all edge cases and failure modes for **Retry Topics (WP-
 | **FL-RT-05** | Permanent schema or domain rejection | Irrecoverable data invalidity | Validation error or typed business rejection | Route immediately to DLQ; never schedule retries | **RT-01, RT-06** |
 | **FL-RT-06** | Side-effect executed during retry attempt | Duplicate charges or state corruption on target | Retry execution of non-idempotent action | Deterministic idempotency key: $\text{SHA-256}(\text{handler} \mathbin{\Vert} \text{event} \mathbin{\Vert} \text{effect})$ | **RT-08** |
 | **FL-RT-07** | Thundering herd on retry execution | Synchronous retry attempts overwhelm downstream | Burst of failed events with identical due times | Cryptographic jitter: $\pm 20\%$ entropy added to exponential backoff | **RT-11** |
+

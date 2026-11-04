@@ -78,3 +78,4 @@ func (p *PostgresRetryTopicsAdapter) UpdateRetryStatus(ctx context.Context, tena
 	}
 	return nil
 }
+

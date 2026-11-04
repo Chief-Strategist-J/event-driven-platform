@@ -67,11 +67,54 @@ func EvaluateRetryDecision(input contracts.EvaluateRetryInput, now time.Time) co
 	}
 
 	if input.Classification == contracts.ClassContention {
+		if input.AttemptNumber <= 5 {
+			return contracts.EvaluateRetryResult{
+				Disposition: contracts.DispositionImmediateRetry,
+				BackoffMs:   10,
+				DueAt:       now.Add(10 * time.Millisecond),
+				Reason:      "database contention allows immediate in-place retry",
+			}
+		}
+		backoff := CalculateJitteredBackoff(input.AttemptNumber, input.BaseBackoffMs, input.MaxBackoffMs)
+		dueAt := now.Add(time.Duration(backoff) * time.Millisecond)
 		return contracts.EvaluateRetryResult{
-			Disposition: contracts.DispositionImmediateRetry,
-			BackoffMs:   10,
-			DueAt:       now.Add(10 * time.Millisecond),
-			Reason:      "database contention or optimistic lock conflict allows immediate in-place retry",
+			Disposition: contracts.DispositionHeldScheduled,
+			BackoffMs:   backoff,
+			DueAt:       dueAt,
+			Reason:      "hot aggregate contention escalated to scheduled retry to prevent in-place livelock",
+		}
+	}
+
+	if input.Classification == contracts.ClassCausalWait {
+		backoff := int64(5000)
+		dueAt := now.Add(time.Duration(backoff) * time.Millisecond)
+		return contracts.EvaluateRetryResult{
+			Disposition: contracts.DispositionCausalWait,
+			BackoffMs:   backoff,
+			DueAt:       dueAt,
+			Reason:      "referenced entity not yet present locally requires bounded durable causal hold",
+		}
+	}
+
+	if input.Classification == contracts.ClassReferenceDataMiss {
+		backoff := int64(30000)
+		dueAt := now.Add(time.Duration(backoff) * time.Millisecond)
+		return contracts.EvaluateRetryResult{
+			Disposition: contracts.DispositionHeldScheduled,
+			BackoffMs:   backoff,
+			DueAt:       dueAt,
+			Reason:      "missing reference data requires longer scheduled hold awaiting reference sync",
+		}
+	}
+
+	if input.Classification == contracts.ClassAmbiguousEffect {
+		backoff := CalculateJitteredBackoff(input.AttemptNumber, input.BaseBackoffMs, input.MaxBackoffMs)
+		dueAt := now.Add(time.Duration(backoff) * time.Millisecond)
+		return contracts.EvaluateRetryResult{
+			Disposition: contracts.DispositionHeldScheduled,
+			BackoffMs:   backoff,
+			DueAt:       dueAt,
+			Reason:      "ambiguous external effect mandates held scheduled retry with original deterministic idempotency key",
 		}
 	}
 
@@ -127,3 +170,4 @@ func EvaluateRetryDecision(input contracts.EvaluateRetryInput, now time.Time) co
 		Reason:      "unordered stream allows progressive retry topic routing",
 	}
 }
+

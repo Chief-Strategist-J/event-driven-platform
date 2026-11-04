@@ -121,3 +121,4 @@ sequenceDiagram
     Breaker-->>Worker: Close Breaker
     Worker->>Kafka: Resume Partition Ingestion
 ```
+

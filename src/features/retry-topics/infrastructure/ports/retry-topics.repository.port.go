@@ -12,3 +12,4 @@ type RetryTopicsRepositoryPort interface {
 	GetDueRetryAttempts(ctx context.Context, tenantID string, asOf time.Time, limit int) ([]contracts.RetryAttemptLedgerRecord, error)
 	UpdateRetryStatus(ctx context.Context, tenantID, id string, status contracts.RetryAttemptStatus) error
 }
+

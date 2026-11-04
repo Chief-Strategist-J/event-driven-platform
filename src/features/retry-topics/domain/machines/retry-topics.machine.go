@@ -23,3 +23,4 @@ func TransitionRetryStatus(current contracts.RetryAttemptStatus, next contracts.
 	}
 	return current, ErrInvalidStateTransition
 }
+

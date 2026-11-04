@@ -34,3 +34,4 @@ SET status = $3, updated_at = CURRENT_TIMESTAMP
 WHERE tenant_id = $1 AND id = $2;
 `
 )
+
