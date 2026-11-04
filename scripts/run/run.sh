@@ -29,6 +29,10 @@ fi
 
 COMPOSE_FILE="${PROJECT_ROOT}/deploy/docker/compose/docker-compose.infra.yml"
 
-echo "==> Starting infrastructure docker services using ${COMPOSE_FILE}..."
+# Enable observability profile by default so logs, traces, and metrics (Tempo, Loki, Prometheus, Grafana, Otel-Collector) are started
+COMPOSE_PROFILES="${COMPOSE_PROFILES:-observability}"
+export COMPOSE_PROFILES
+
+echo "==> Starting infrastructure docker services (profiles: ${COMPOSE_PROFILES}) using ${COMPOSE_FILE}..."
 "${DOCKER_BIN}" compose -f "${COMPOSE_FILE}" up -d "$@"
 

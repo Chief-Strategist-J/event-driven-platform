@@ -298,7 +298,7 @@ services:
       - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
     command: ["-c", "/etc/envoy/envoy.yaml"]
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:9901/ready || exit 1"]
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/9901 && echo -e \"GET /ready HTTP/1.1\\r\\nHost: 127.0.0.1\\r\\nConnection: close\\r\\n\\r\\n\" >&3 && cat <&3 | grep -q LIVE' || exit 1"]
       interval: 15s
       timeout: 3s
       retries: 3
