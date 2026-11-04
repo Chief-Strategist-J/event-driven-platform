@@ -39,7 +39,7 @@ func getVersioningIntegrationDB(t *testing.T) *sql.DB {
 		dbname = "event_store"
 	}
 
-	dsn := fmt.Sprintf("postgres:
+	dsn := fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=disable", user, pass, host, port, dbname)
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		t.Skipf("Skipping integration test: cannot connect to real PostgreSQL: %v", err)
