@@ -16,6 +16,9 @@ import (
 	"event-driven-platform/src/api/rest/v1/routers"
 	schemaAdapters "event-driven-platform/src/features/event-schema-registry/infrastructure/adapters"
 	schemaService "event-driven-platform/src/features/event-schema-registry/service"
+	consumerAdapters "event-driven-platform/src/features/idempotent-consumers/infrastructure/adapters"
+	consumerPorts "event-driven-platform/src/features/idempotent-consumers/infrastructure/ports"
+	consumerService "event-driven-platform/src/features/idempotent-consumers/service"
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
 	outboxPorts "event-driven-platform/src/features/transactional-outbox/infrastructure/ports"
 	outboxService "event-driven-platform/src/features/transactional-outbox/service"
@@ -47,7 +50,7 @@ func describeService() chassis.ServiceSpec {
 		},
 		Migrations: func() chassis.MigrationSet {
 			return chassis.MigrationSet{
-				Version: 1,
+				Version: 2,
 				Apply: func(ctx context.Context) error {
 					dbURL := os.Getenv("DATABASE_URL")
 					if dbURL == "" {
@@ -67,15 +70,21 @@ func describeService() chassis.ServiceSpec {
 			schemaSvc := schemaService.NewSchemaRegistryService(schemaRepo)
 
 			var outboxRepo outboxPorts.OutboxRepositoryPort
+			var consumerRepo consumerPorts.ConsumerRepositoryPort
+
 			dbURL := os.Getenv("DATABASE_URL")
 			if dbURL != "" {
 				db, err := sql.Open("postgres", dbURL)
 				if err == nil {
 					outboxRepo = outboxAdapters.NewPostgresOutboxRepositoryAdapter(db)
+					consumerRepo = consumerAdapters.NewPostgresConsumerRepositoryAdapter(db)
 				}
 			}
 			if outboxRepo == nil {
 				outboxRepo = outboxAdapters.NewMemoryOutboxRepositoryAdapter()
+			}
+			if consumerRepo == nil {
+				consumerRepo = consumerAdapters.NewMemoryConsumerRepositoryAdapter()
 			}
 
 			var producer producers.ProducerPort
@@ -88,11 +97,13 @@ func describeService() chassis.ServiceSpec {
 			}
 
 			outboxSvc := outboxService.NewOutboxService(outboxRepo, producer)
+			consumerSvc := consumerService.NewConsumerService(consumerRepo)
 
 			return chassis.Services{
 				Registry: map[string]any{
-					"schemaService": schemaSvc,
-					"outboxService": outboxSvc,
+					"schemaService":   schemaSvc,
+					"outboxService":   outboxSvc,
+					"consumerService": consumerSvc,
 				},
 			}, nil
 		},
@@ -110,6 +121,11 @@ func describeService() chassis.ServiceSpec {
 				outboxHandler := handlers.NewTransactionalOutboxHandler(outboxSvc)
 				outboxRouter := routers.NewTransactionalOutboxRouter(outboxHandler)
 				outboxRouter.RegisterRoutes(router)
+			}
+			if consumerSvc, exists := instances["consumerService"].(*consumerService.ConsumerService); exists && consumerSvc != nil {
+				consumerHandler := handlers.NewIdempotentConsumerHandler(consumerSvc)
+				consumerRouter := routers.NewIdempotentConsumerRouter(consumerHandler)
+				consumerRouter.RegisterRoutes(router)
 			}
 		},
 		RegisterDaemons: func(lifecycle *chassis.Lifecycle, services chassis.Services) {

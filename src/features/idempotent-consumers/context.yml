@@ -1,2 +1,37 @@
 feature: idempotent-consumers
 mode: stateless_hexagonal
+
+invariants:
+  - IC-01: Atomic effect (inbox record + business projection + offset in ONE transaction)
+  - IC-02: Effect-once semantics (transport is at-least-once forever)
+  - IC-03: Dedupe identity based on producer-assigned event_id
+  - IC-04: Two-layer defense (Layer 1: event_id dedupe; Layer 2: aggregate_version monotonic guard)
+  - IC-05: Version rule: v <= last (skip); v == last + 1 (apply); v > last + 1 (hold gap)
+  - IC-06: State vs Delta semantics (State allows strictly newer; Delta requires exactly next version)
+  - IC-08: Dedupe scope is scoped to (handler_id, event_id), never event_id alone
+  - IC-10: No ordering bypass (DLQ re-drive cannot apply stale versions over newer versions)
+
+failure_cases:
+  F3.1.1:
+    scenario: Unique violation on consumer inbox handled as exception aborts transaction
+    mitigation: FlowInsertConsumerInboxRecord uses ON CONFLICT DO NOTHING, returning rows_affected == 0 to skip duplicate cleanly.
+  F3.1.5:
+    scenario: Zombie consumer processes stale event concurrently with new partition owner
+    mitigation: Layer 2 Version Guard checks incoming version against last_version; stale zombie writes are rejected.
+  F3.2.2:
+    scenario: Strictly newer rule mistakenly used for DELTA events
+    mitigation: rules.EvaluateVersionRule mandates v == last + 1 for DELTA; gaps trigger ActionHoldGap.
+  F3.2.4:
+    scenario: Same version received with divergent content (upstream restore / split brain)
+    mitigation: Payload SHA-256 hash comparison against last_payload_hash; mismatch triggers ActionParkPoison.
+
+ports:
+  driving:
+    - IdempotentConsumerRouter: POST /api/v1/consumers/inbox
+  driven:
+    - ConsumerRepositoryPort: Inbox storage, version projection guard, and partition offset persistence
+
+adapters:
+  outbound:
+    - MemoryConsumerRepositoryAdapter: In-memory repository adapter for testing
+    - PostgresConsumerRepositoryAdapter: Live PostgreSQL adapter using consumer_inbox and consumer_projections

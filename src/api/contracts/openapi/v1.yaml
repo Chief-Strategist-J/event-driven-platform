@@ -133,3 +133,63 @@ paths:
           description: Validation failed
         "500":
           description: Internal server error
+  /api/v1/consumers/inbox:
+    post:
+      summary: Ingest and Process Event with Idempotent Consumer Gate
+      operationId: consumeInboxEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - eventId
+                - tenantId
+                - handlerId
+                - aggregateType
+                - aggregateId
+                - aggregateVersion
+                - eventType
+                - schemaVersion
+                - semanticClass
+                - payload
+              properties:
+                eventId:
+                  type: string
+                tenantId:
+                  type: string
+                handlerId:
+                  type: string
+                aggregateType:
+                  type: string
+                aggregateId:
+                  type: string
+                aggregateVersion:
+                  type: integer
+                  minimum: 1
+                eventType:
+                  type: string
+                schemaVersion:
+                  type: string
+                semanticClass:
+                  type: string
+                  enum: [STATE, DELTA]
+                payload:
+                  type: object
+                headers:
+                  type: object
+                  additionalProperties:
+                    type: string
+      responses:
+        "200":
+          description: Event successfully processed or acknowledged duplicate
+        "409":
+          description: Version gap detected (upstream loss); event held
+        "423":
+          description: Aggregate locked or parked due to poison pill
+        "400":
+          description: Validation failed
+        "500":
+          description: Internal server error

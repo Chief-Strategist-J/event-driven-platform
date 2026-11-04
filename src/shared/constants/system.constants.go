@@ -27,6 +27,7 @@ const (
 	APIVersionV1    = "v1"
 	PrefixOutbox    = "otb"
 	PrefixCanary    = "canary"
+	PrefixInbox     = "inbox"
 )
 
 const (
@@ -35,6 +36,7 @@ const (
 	ValidationRuleSizeLimit      = "size_limit"
 	ValidationRuleNoFloats       = "no_floats_allowed"
 	ValidationRuleMalformedJSON  = "malformed_json"
+	ValidationRuleInvalidVersion = "invalid_version"
 )
 
 const (
@@ -46,6 +48,8 @@ const (
 	FieldEventType        = "event_type"
 	FieldPayload          = "payload"
 	FieldIdempotencyKey   = "idempotency_key"
+	FieldEventID          = "event_id"
+	FieldHandlerID        = "handler_id"
 )
 
 const (
@@ -54,6 +58,7 @@ const (
 	ErrCodeNotFound           = "RESOURCE_NOT_FOUND"
 	ErrCodePreconditionFailed = "PRECONDITION_FAILED"
 	ErrCodeInternalError      = "INTERNAL_SERVER_ERROR"
+	ErrCodeVersionGap         = "VERSION_GAP_DETECTED"
 )
 
 const (
@@ -62,6 +67,15 @@ const (
 	StatusPublished = "PUBLISHED"
 	StatusFailed    = "FAILED"
 	StatusParked    = "PARKED"
+
+	StatusApplied   = "APPLIED"
+	StatusDuplicate = "DUPLICATE_SKIPPED"
+	StatusGapHeld   = "GAP_HELD"
+)
+
+const (
+	SemanticClassState = "STATE"
+	SemanticClassDelta = "DELTA"
 )
 
 const (
