@@ -36,12 +36,20 @@ func (s *BackpressureService) ReportSaturation(ctx context.Context, input contra
 
 	if err := contracts.ValidateReportSaturationInput(input); err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		observability.LogWarn(ctx, "backpressure", "report saturation validation failed", input.TenantID, map[string]any{
+			"error": err.Error(),
+		})
 		return nil, err
 	}
 
 	eval := rules.EvaluateSaturation(input.Signal)
 	if !eval.IsSaturated {
-		return nil, fmt.Errorf("signal does not indicate saturation: %s", eval.Recommendation)
+		err := fmt.Errorf("signal does not indicate saturation: %s", eval.Recommendation)
+		observability.RecordError(span, err, attribute.String("error.type", "SIGNAL_NOT_SATURATED"))
+		observability.LogWarn(ctx, "backpressure", "signal does not indicate saturation", input.TenantID, map[string]any{
+			"recommendation": eval.Recommendation,
+		})
+		return nil, err
 	}
 
 	existing, getErr := s.repo.GetBackpressureRecord(ctx, input.TenantID, input.Signal.HandlerID, input.Signal.DependencyID)
@@ -85,6 +93,7 @@ func (s *BackpressureService) ReportSaturation(ctx context.Context, input contra
 		State:            nextState,
 		PauseReason:      input.PauseReason,
 		ConcurrencyLimit: newLimit,
+		Version:          1,
 		PausedAt:         &now,
 	}
 
@@ -96,6 +105,10 @@ func (s *BackpressureService) ReportSaturation(ctx context.Context, input contra
 
 	auditID, _ := utils.GenerateUUIDv7()
 	auditPublicID, _ := utils.GeneratePublicID("bpa")
+	auditReason := string(eval.SaturationReason)
+	if auditReason == "" {
+		auditReason = "saturation-detected"
+	}
 	audit := contracts.BackpressureAuditRecord{
 		ID:            auditID,
 		PublicID:      auditPublicID,
@@ -109,7 +122,7 @@ func (s *BackpressureService) ReportSaturation(ctx context.Context, input contra
 		ToState:       nextState,
 		Event:         contracts.EventSaturationDetected,
 		PauseReason:   input.PauseReason,
-		Reason:        string(eval.SaturationReason),
+		Reason:        auditReason,
 	}
 	_ = s.repo.RecordAuditLog(ctx, audit)
 
@@ -134,18 +147,31 @@ func (s *BackpressureService) ReportRecovery(ctx context.Context, input contract
 
 	if err := contracts.ValidateReportRecoveryInput(input); err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		observability.LogWarn(ctx, "backpressure", "report recovery validation failed", input.TenantID, map[string]any{
+			"error": err.Error(),
+		})
 		return nil, err
 	}
 
 	existing, getErr := s.repo.GetBackpressureRecord(ctx, input.TenantID, input.HandlerID, input.DependencyID)
 	if getErr != nil {
 		observability.RecordError(span, getErr, attribute.String("error.type", "NOT_FOUND"))
+		observability.LogWarn(ctx, "backpressure", "record not found for recovery", input.TenantID, map[string]any{
+			"handler_id":    input.HandlerID,
+			"dependency_id": input.DependencyID,
+			"error":         getErr.Error(),
+		})
 		return nil, getErr
 	}
 
 	nextState, transErr := machines.TransitionTo(existing.State, contracts.EventRecoveryStarted)
 	if transErr != nil {
 		observability.RecordError(span, transErr, attribute.String("error.type", "INVALID_TRANSITION"))
+		observability.LogWarn(ctx, "backpressure", "invalid state transition for recovery", input.TenantID, map[string]any{
+			"current_state": existing.State,
+			"event":         contracts.EventRecoveryStarted,
+			"error":         transErr.Error(),
+		})
 		return nil, transErr
 	}
 
@@ -202,18 +228,31 @@ func (s *BackpressureService) ConfirmRecovery(ctx context.Context, input contrac
 
 	if err := contracts.ValidateReportRecoveryInput(input); err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		observability.LogWarn(ctx, "backpressure", "confirm recovery validation failed", input.TenantID, map[string]any{
+			"error": err.Error(),
+		})
 		return nil, err
 	}
 
 	existing, getErr := s.repo.GetBackpressureRecord(ctx, input.TenantID, input.HandlerID, input.DependencyID)
 	if getErr != nil {
 		observability.RecordError(span, getErr, attribute.String("error.type", "NOT_FOUND"))
+		observability.LogWarn(ctx, "backpressure", "record not found for confirm recovery", input.TenantID, map[string]any{
+			"handler_id":    input.HandlerID,
+			"dependency_id": input.DependencyID,
+			"error":         getErr.Error(),
+		})
 		return nil, getErr
 	}
 
 	nextState, transErr := machines.TransitionTo(existing.State, contracts.EventRecoveryConfirmed)
 	if transErr != nil {
 		observability.RecordError(span, transErr, attribute.String("error.type", "INVALID_TRANSITION"))
+		observability.LogWarn(ctx, "backpressure", "invalid state transition for confirm recovery", input.TenantID, map[string]any{
+			"current_state": existing.State,
+			"event":         contracts.EventRecoveryConfirmed,
+			"error":         transErr.Error(),
+		})
 		return nil, transErr
 	}
 
@@ -262,12 +301,20 @@ func (s *BackpressureService) GetState(ctx context.Context, input contracts.GetB
 
 	if err := contracts.ValidateGetBackpressureStateInput(input); err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		observability.LogWarn(ctx, "backpressure", "get backpressure state validation failed", input.TenantID, map[string]any{
+			"error": err.Error(),
+		})
 		return nil, err
 	}
 
 	rec, getErr := s.repo.GetBackpressureRecord(ctx, input.TenantID, input.HandlerID, input.DependencyID)
 	if getErr != nil {
 		observability.RecordError(span, getErr, attribute.String("error.type", "NOT_FOUND"))
+		observability.LogWarn(ctx, "backpressure", "backpressure state not found", input.TenantID, map[string]any{
+			"handler_id":    input.HandlerID,
+			"dependency_id": input.DependencyID,
+			"error":         getErr.Error(),
+		})
 		return nil, getErr
 	}
 

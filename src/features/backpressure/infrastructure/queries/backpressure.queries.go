@@ -18,13 +18,13 @@ ON CONFLICT (tenant_id, handler_id, dependency_id) DO UPDATE SET
     paused_at = EXCLUDED.paused_at,
     resumed_at = EXCLUDED.resumed_at,
     updated_at = CURRENT_TIMESTAMP
-RETURNING id, public_id, created_at, updated_at;
+RETURNING id, public_id, version, created_at, updated_at;
 `
 
 	FlowGetBackpressureRecord = `
 SELECT
     id, public_id, tenant_id, source_service, external_id, correlation_id,
-    handler_id, dependency_id, state, pause_reason, concurrency_limit,
+    handler_id, dependency_id, state, pause_reason, concurrency_limit, version,
     paused_at, resumed_at, created_at, updated_at
 FROM backpressure_state
 WHERE tenant_id = $1 AND handler_id = $2 AND dependency_id = $3;
@@ -33,7 +33,7 @@ WHERE tenant_id = $1 AND handler_id = $2 AND dependency_id = $3;
 	FlowListBackpressureByTenant = `
 SELECT
     id, public_id, tenant_id, source_service, external_id, correlation_id,
-    handler_id, dependency_id, state, pause_reason, concurrency_limit,
+    handler_id, dependency_id, state, pause_reason, concurrency_limit, version,
     paused_at, resumed_at, created_at, updated_at
 FROM backpressure_state
 WHERE tenant_id = $1

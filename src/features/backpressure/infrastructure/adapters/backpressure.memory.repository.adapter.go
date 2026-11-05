@@ -38,12 +38,16 @@ func (a *BackpressureMemoryRepositoryAdapter) UpsertBackpressureRecord(ctx conte
 		existing.ConcurrencyLimit = record.ConcurrencyLimit
 		existing.PausedAt = record.PausedAt
 		existing.ResumedAt = record.ResumedAt
+		existing.Version++
 		existing.UpdatedAt = now
 		copy := *existing
 		return &copy, nil
 	}
 	record.CreatedAt = now
 	record.UpdatedAt = now
+	if record.Version == 0 {
+		record.Version = 1
+	}
 	clone := record
 	a.records[key] = &clone
 	return &clone, nil

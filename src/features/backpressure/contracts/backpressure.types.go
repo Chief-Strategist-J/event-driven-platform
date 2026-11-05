@@ -69,6 +69,7 @@ type BackpressureRecord struct {
 	State            BackpressureState `json:"state"`
 	PauseReason      PauseReason       `json:"pauseReason"`
 	ConcurrencyLimit int64             `json:"concurrencyLimit"`
+	Version          int64             `json:"version"`
 	PausedAt         *time.Time        `json:"pausedAt,omitempty"`
 	ResumedAt        *time.Time        `json:"resumedAt,omitempty"`
 	CreatedAt        time.Time         `json:"createdAt"`

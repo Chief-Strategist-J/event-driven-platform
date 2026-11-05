@@ -26,6 +26,7 @@ func (a *BackpressurePostgresRepositoryAdapter) UpsertBackpressureRecord(ctx con
 
 	var createdAt, updatedAt time.Time
 	var returnedID, returnedPublicID string
+	var version int64
 
 	err := a.db.QueryRowContext(
 		ctx,
@@ -43,7 +44,7 @@ func (a *BackpressurePostgresRepositoryAdapter) UpsertBackpressureRecord(ctx con
 		record.ConcurrencyLimit,
 		record.PausedAt,
 		record.ResumedAt,
-	).Scan(&returnedID, &returnedPublicID, &createdAt, &updatedAt)
+	).Scan(&returnedID, &returnedPublicID, &version, &createdAt, &updatedAt)
 
 	if err != nil {
 		observability.RecordError(span, err)
@@ -52,6 +53,7 @@ func (a *BackpressurePostgresRepositoryAdapter) UpsertBackpressureRecord(ctx con
 
 	record.ID = returnedID
 	record.PublicID = returnedPublicID
+	record.Version = version
 	record.CreatedAt = createdAt
 	record.UpdatedAt = updatedAt
 	return &record, nil
@@ -82,6 +84,7 @@ func (a *BackpressurePostgresRepositoryAdapter) GetBackpressureRecord(ctx contex
 		&stateStr,
 		&pauseReasonStr,
 		&rec.ConcurrencyLimit,
+		&rec.Version,
 		&rec.PausedAt,
 		&rec.ResumedAt,
 		&rec.CreatedAt,
@@ -119,7 +122,7 @@ func (a *BackpressurePostgresRepositoryAdapter) ListBackpressureByTenant(ctx con
 		if err := rows.Scan(
 			&rec.ID, &rec.PublicID, &rec.TenantID, &rec.SourceService,
 			&rec.ExternalID, &rec.CorrelationID, &rec.HandlerID, &rec.DependencyID,
-			&stateStr, &pauseReasonStr, &rec.ConcurrencyLimit,
+			&stateStr, &pauseReasonStr, &rec.ConcurrencyLimit, &rec.Version,
 			&rec.PausedAt, &rec.ResumedAt, &rec.CreatedAt, &rec.UpdatedAt,
 		); err != nil {
 			observability.RecordError(span, err)

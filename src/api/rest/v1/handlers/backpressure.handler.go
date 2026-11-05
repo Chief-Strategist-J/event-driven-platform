@@ -49,6 +49,9 @@ func (h *BackpressureHandler) HandleReportSaturation(w http.ResponseWriter, r *h
 	var input contracts.ReportSaturationInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "backpressure-ingress", "malformed saturation payload", tenantID, map[string]any{
+			"error": err.Error(),
+		})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
@@ -70,6 +73,9 @@ func (h *BackpressureHandler) HandleReportSaturation(w http.ResponseWriter, r *h
 	res, err := h.feat.Service.ReportSaturation(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "SATURATION_REPORT_FAILED"))
+		observability.LogWarn(ctx, "backpressure-ingress", "report saturation rejected", input.TenantID, map[string]any{
+			"error": err.Error(),
+		})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
@@ -114,6 +120,9 @@ func (h *BackpressureHandler) HandleReportRecovery(w http.ResponseWriter, r *htt
 	var input contracts.ReportRecoveryInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "backpressure-ingress", "malformed recovery payload", tenantID, map[string]any{
+			"error": err.Error(),
+		})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
@@ -134,6 +143,9 @@ func (h *BackpressureHandler) HandleReportRecovery(w http.ResponseWriter, r *htt
 	res, err := h.feat.Service.ReportRecovery(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "RECOVERY_REPORT_FAILED"))
+		observability.LogWarn(ctx, "backpressure-ingress", "report recovery rejected", input.TenantID, map[string]any{
+			"error": err.Error(),
+		})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
@@ -176,6 +188,9 @@ func (h *BackpressureHandler) HandleConfirmRecovery(w http.ResponseWriter, r *ht
 	var input contracts.ReportRecoveryInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "backpressure-ingress", "malformed confirm recovery payload", tenantID, map[string]any{
+			"error": err.Error(),
+		})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
 		return
 	}
@@ -190,6 +205,9 @@ func (h *BackpressureHandler) HandleConfirmRecovery(w http.ResponseWriter, r *ht
 	res, err := h.feat.Service.ConfirmRecovery(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "CONFIRM_RECOVERY_FAILED"))
+		observability.LogWarn(ctx, "backpressure-ingress", "confirm recovery rejected", input.TenantID, map[string]any{
+			"error": err.Error(),
+		})
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
@@ -235,6 +253,11 @@ func (h *BackpressureHandler) HandleGetState(w http.ResponseWriter, r *http.Requ
 	res, err := h.feat.Service.GetState(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "GET_STATE_FAILED"))
+		observability.LogWarn(ctx, "backpressure-ingress", "get state rejected or not found", tenantID, map[string]any{
+			"handler_id":    input.HandlerID,
+			"dependency_id": input.DependencyID,
+			"error":         err.Error(),
+		})
 		h.writeError(w, http.StatusNotFound, constants.ErrCodeNotFound, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
