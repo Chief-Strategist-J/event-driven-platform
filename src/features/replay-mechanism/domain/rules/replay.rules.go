@@ -9,27 +9,36 @@ import (
 )
 
 var (
-	ErrReplayOffsetRegression = errors.New("currentOffset cannot regress backwards")
-	ErrReplayExceedsEndOffset = errors.New("currentOffset cannot exceed run endOffset")
+	ErrReplayOffsetRegression     = errors.New("currentOffset cannot regress backwards")
+	ErrReplayExceedsEndOffset     = errors.New("currentOffset cannot exceed run endOffset")
 	ErrCannotPromoteBeforeCatchUp = errors.New("cannot promote replay run before caught-up state")
 	ErrCannotCutoverBeforePromoted = errors.New("cannot complete cutover before writer is promoted")
+	ErrUnrecognizedReplayMode     = errors.New("unrecognized replay run mode")
+	ErrUnrecognizedEffectType     = errors.New("unrecognized effect type")
 )
 
 func GenerateReplayConsumerGroup(targetProjection string, timestamp time.Time) string {
 	return fmt.Sprintf("replay.%s.%d", targetProjection, timestamp.Unix())
 }
 
-func ResolveEffectMode(mode contracts.ReplayRunMode, effectType contracts.EffectType) contracts.EffectMode {
-	if mode == contracts.ModeLive {
-		return contracts.EffectModeAllow
+func ResolveEffectMode(mode contracts.ReplayRunMode, effectType contracts.EffectType) (contracts.EffectMode, error) {
+	switch mode {
+	case contracts.ModeLive:
+		return contracts.EffectModeAllow, nil
+	case contracts.ModeRecover:
+		return contracts.EffectModeReconcile, nil
+	case contracts.ModeRebuild, contracts.ModeHydrate, contracts.ModeForensic, contracts.ModeRepair:
+		switch effectType {
+		case contracts.EffectSearchIndex, contracts.EffectCacheWrite:
+			return contracts.EffectModeAllow, nil
+		case contracts.EffectExternalPayment, contracts.EffectExternalNotification, contracts.EffectOutboxEvent:
+			return contracts.EffectModeSuppress, nil
+		default:
+			return contracts.EffectModeSuppress, ErrUnrecognizedEffectType
+		}
+	default:
+		return contracts.EffectModeSuppress, ErrUnrecognizedReplayMode
 	}
-	if mode == contracts.ModeRecover {
-		return contracts.EffectModeReconcile
-	}
-	if effectType == contracts.EffectSearchIndex || effectType == contracts.EffectCacheWrite {
-		return contracts.EffectModeAllow
-	}
-	return contracts.EffectModeSuppress
 }
 
 func EvaluateEffectDecision(mode contracts.EffectMode) contracts.EffectDecision {
@@ -59,4 +68,3 @@ func IsCaughtUp(currentOffset, endOffset int64) bool {
 	}
 	return currentOffset >= endOffset
 }
-

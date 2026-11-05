@@ -18,81 +18,114 @@ var (
 	ErrMissingIdempotencyKey   = errors.New("idempotencyKey is required for effect evaluation")
 )
 
-func ValidateCreateReplayRunInput(input CreateReplayRunInput) error {
-	if strings.TrimSpace(input.TenantID) == "" {
-		return ErrMissingTenantID
+func ValidateCreateReplayRunInput(input CreateReplayRunInput) (CreateReplayRunInput, error) {
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	input.SourceService = strings.TrimSpace(input.SourceService)
+	input.ExternalID = strings.TrimSpace(input.ExternalID)
+	input.CorrelationID = strings.TrimSpace(input.CorrelationID)
+	input.TargetProjection = strings.TrimSpace(input.TargetProjection)
+
+	if input.TenantID == "" {
+		return input, ErrMissingTenantID
 	}
-	if strings.TrimSpace(input.SourceService) == "" {
-		return ErrMissingSourceService
+	if input.SourceService == "" {
+		return input, ErrMissingSourceService
 	}
-	if strings.TrimSpace(input.ExternalID) == "" {
-		return ErrMissingExternalID
+	if input.ExternalID == "" {
+		return input, ErrMissingExternalID
 	}
-	if strings.TrimSpace(input.CorrelationID) == "" {
-		return ErrMissingCorrelationID
+	if input.CorrelationID == "" {
+		return input, ErrMissingCorrelationID
 	}
-	if strings.TrimSpace(input.TargetProjection) == "" {
-		return ErrMissingTargetProjection
+	if input.TargetProjection == "" {
+		return input, ErrMissingTargetProjection
 	}
 	switch input.Mode {
 	case ModeRebuild, ModeHydrate, ModeForensic, ModeRecover, ModeRepair, ModeLive:
 	default:
-		return ErrInvalidRunMode
+		return input, ErrInvalidRunMode
 	}
 	switch input.Scope {
 	case ScopeGlobalTopic, ScopeTimeWindow, ScopeAggregateSet:
 	default:
-		return ErrInvalidScope
+		return input, ErrInvalidScope
 	}
 	if input.StartOffset < 0 || input.EndOffset < input.StartOffset {
-		return ErrNegativeOffsetRange
+		return input, ErrNegativeOffsetRange
 	}
-	return nil
+	return input, nil
 }
 
-func ValidateAdvanceReplayInput(input AdvanceReplayInput) error {
-	if strings.TrimSpace(input.TenantID) == "" {
-		return ErrMissingTenantID
+func ValidateAdvanceReplayInput(input AdvanceReplayInput) (AdvanceReplayInput, error) {
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	input.SourceService = strings.TrimSpace(input.SourceService)
+	input.ExternalID = strings.TrimSpace(input.ExternalID)
+	input.CorrelationID = strings.TrimSpace(input.CorrelationID)
+	input.RunID = strings.TrimSpace(input.RunID)
+
+	if input.TenantID == "" {
+		return input, ErrMissingTenantID
 	}
-	if strings.TrimSpace(input.RunID) == "" {
-		return ErrMissingRunID
+	if input.RunID == "" {
+		return input, ErrMissingRunID
 	}
 	if input.CurrentOffset < 0 {
-		return ErrNegativeOffsetRange
+		return input, ErrNegativeOffsetRange
 	}
-	return nil
+	return input, nil
 }
 
-func ValidatePromoteReplayInput(input PromoteReplayInput) error {
-	if strings.TrimSpace(input.TenantID) == "" {
-		return ErrMissingTenantID
+func ValidatePromoteReplayInput(input PromoteReplayInput) (PromoteReplayInput, error) {
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	input.SourceService = strings.TrimSpace(input.SourceService)
+	input.ExternalID = strings.TrimSpace(input.ExternalID)
+	input.CorrelationID = strings.TrimSpace(input.CorrelationID)
+	input.RunID = strings.TrimSpace(input.RunID)
+	input.Reason = strings.TrimSpace(input.Reason)
+
+	if input.TenantID == "" {
+		return input, ErrMissingTenantID
 	}
-	if strings.TrimSpace(input.RunID) == "" {
-		return ErrMissingRunID
+	if input.RunID == "" {
+		return input, ErrMissingRunID
 	}
-	return nil
+	return input, nil
 }
 
-func ValidateCompleteCutoverInput(input CompleteCutoverInput) error {
-	if strings.TrimSpace(input.TenantID) == "" {
-		return ErrMissingTenantID
+func ValidateCompleteCutoverInput(input CompleteCutoverInput) (CompleteCutoverInput, error) {
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	input.SourceService = strings.TrimSpace(input.SourceService)
+	input.ExternalID = strings.TrimSpace(input.ExternalID)
+	input.CorrelationID = strings.TrimSpace(input.CorrelationID)
+	input.RunID = strings.TrimSpace(input.RunID)
+	input.Reason = strings.TrimSpace(input.Reason)
+
+	if input.TenantID == "" {
+		return input, ErrMissingTenantID
 	}
-	if strings.TrimSpace(input.RunID) == "" {
-		return ErrMissingRunID
+	if input.RunID == "" {
+		return input, ErrMissingRunID
 	}
-	return nil
+	return input, nil
 }
 
-func ValidateEvaluateEffectInput(input EvaluateEffectInput) error {
-	if strings.TrimSpace(input.TenantID) == "" {
-		return ErrMissingTenantID
-	}
-	if strings.TrimSpace(input.RunID) == "" {
-		return ErrMissingRunID
-	}
-	if strings.TrimSpace(input.IdempotencyKey) == "" {
-		return ErrMissingIdempotencyKey
-	}
-	return nil
-}
+func ValidateEvaluateEffectInput(input EvaluateEffectInput) (EvaluateEffectInput, error) {
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	input.SourceService = strings.TrimSpace(input.SourceService)
+	input.ExternalID = strings.TrimSpace(input.ExternalID)
+	input.CorrelationID = strings.TrimSpace(input.CorrelationID)
+	input.RunID = strings.TrimSpace(input.RunID)
+	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
+	input.PayloadDigest = strings.TrimSpace(input.PayloadDigest)
 
+	if input.TenantID == "" {
+		return input, ErrMissingTenantID
+	}
+	if input.RunID == "" {
+		return input, ErrMissingRunID
+	}
+	if input.IdempotencyKey == "" {
+		return input, ErrMissingIdempotencyKey
+	}
+	return input, nil
+}

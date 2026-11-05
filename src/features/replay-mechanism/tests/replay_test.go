@@ -40,38 +40,49 @@ func TestRuleGenerateReplayConsumerGroup(t *testing.T) {
 }
 
 func TestRuleResolveEffectMode_Rebuild(t *testing.T) {
-	mode := rules.ResolveEffectMode(contracts.ModeRebuild, contracts.EffectExternalPayment)
-	if mode != contracts.EffectModeSuppress {
-		t.Fatalf("expected SUPPRESS, got %s", mode)
+	mode, err := rules.ResolveEffectMode(contracts.ModeRebuild, contracts.EffectExternalPayment)
+	if err != nil || mode != contracts.EffectModeSuppress {
+		t.Fatalf("expected SUPPRESS and nil err, got %s, %v", mode, err)
 	}
-	notificationMode := rules.ResolveEffectMode(contracts.ModeRebuild, contracts.EffectExternalNotification)
-	if notificationMode != contracts.EffectModeSuppress {
-		t.Fatalf("expected SUPPRESS for notifications, got %s", notificationMode)
+	notificationMode, err := rules.ResolveEffectMode(contracts.ModeRebuild, contracts.EffectExternalNotification)
+	if err != nil || notificationMode != contracts.EffectModeSuppress {
+		t.Fatalf("expected SUPPRESS for notifications, got %s, %v", notificationMode, err)
 	}
 }
 
 func TestRuleResolveEffectMode_Recover(t *testing.T) {
-	mode := rules.ResolveEffectMode(contracts.ModeRecover, contracts.EffectExternalPayment)
-	if mode != contracts.EffectModeReconcile {
-		t.Fatalf("expected RECONCILE, got %s", mode)
+	mode, err := rules.ResolveEffectMode(contracts.ModeRecover, contracts.EffectExternalPayment)
+	if err != nil || mode != contracts.EffectModeReconcile {
+		t.Fatalf("expected RECONCILE and nil err, got %s, %v", mode, err)
 	}
 }
 
 func TestRuleResolveEffectMode_Live(t *testing.T) {
-	mode := rules.ResolveEffectMode(contracts.ModeLive, contracts.EffectExternalPayment)
-	if mode != contracts.EffectModeAllow {
-		t.Fatalf("expected ALLOW, got %s", mode)
+	mode, err := rules.ResolveEffectMode(contracts.ModeLive, contracts.EffectExternalPayment)
+	if err != nil || mode != contracts.EffectModeAllow {
+		t.Fatalf("expected ALLOW and nil err, got %s, %v", mode, err)
 	}
 }
 
 func TestRuleResolveEffectMode_SearchAndCacheAllowed(t *testing.T) {
-	searchMode := rules.ResolveEffectMode(contracts.ModeRebuild, contracts.EffectSearchIndex)
-	if searchMode != contracts.EffectModeAllow {
-		t.Fatalf("expected ALLOW for search index, got %s", searchMode)
+	searchMode, err := rules.ResolveEffectMode(contracts.ModeRebuild, contracts.EffectSearchIndex)
+	if err != nil || searchMode != contracts.EffectModeAllow {
+		t.Fatalf("expected ALLOW for search index, got %s, %v", searchMode, err)
 	}
-	cacheMode := rules.ResolveEffectMode(contracts.ModeRebuild, contracts.EffectCacheWrite)
-	if cacheMode != contracts.EffectModeAllow {
-		t.Fatalf("expected ALLOW for cache write, got %s", cacheMode)
+	cacheMode, err := rules.ResolveEffectMode(contracts.ModeRebuild, contracts.EffectCacheWrite)
+	if err != nil || cacheMode != contracts.EffectModeAllow {
+		t.Fatalf("expected ALLOW for cache write, got %s, %v", cacheMode, err)
+	}
+}
+
+func TestRuleResolveEffectMode_UnrecognizedRejects(t *testing.T) {
+	_, err := rules.ResolveEffectMode("UNKNOWN_MODE", contracts.EffectExternalPayment)
+	if err != rules.ErrUnrecognizedReplayMode {
+		t.Fatalf("expected ErrUnrecognizedReplayMode, got %v", err)
+	}
+	_, err = rules.ResolveEffectMode(contracts.ModeRebuild, "UNKNOWN_EFFECT")
+	if err != rules.ErrUnrecognizedEffectType {
+		t.Fatalf("expected ErrUnrecognizedEffectType, got %v", err)
 	}
 }
 
@@ -382,13 +393,13 @@ func TestServiceListRunsByTenant(t *testing.T) {
 }
 
 func TestSchemaValidation_RejectsMissingFields(t *testing.T) {
-	err := contracts.ValidateCreateReplayRunInput(contracts.CreateReplayRunInput{
+	_, err := contracts.ValidateCreateReplayRunInput(contracts.CreateReplayRunInput{
 		TenantID: "",
 	})
 	if err != contracts.ErrMissingTenantID {
 		t.Fatalf("expected ErrMissingTenantID, got %v", err)
 	}
-	err = contracts.ValidateCreateReplayRunInput(contracts.CreateReplayRunInput{
+	_, err = contracts.ValidateCreateReplayRunInput(contracts.CreateReplayRunInput{
 		TenantID:         "t",
 		SourceService:    "s",
 		ExternalID:       "e",
@@ -401,7 +412,7 @@ func TestSchemaValidation_RejectsMissingFields(t *testing.T) {
 }
 
 func TestSchemaValidation_RejectsNegativeOffsets(t *testing.T) {
-	err := contracts.ValidateCreateReplayRunInput(contracts.CreateReplayRunInput{
+	_, err := contracts.ValidateCreateReplayRunInput(contracts.CreateReplayRunInput{
 		TenantID:         "t",
 		SourceService:    "s",
 		ExternalID:       "e",
@@ -414,6 +425,32 @@ func TestSchemaValidation_RejectsNegativeOffsets(t *testing.T) {
 	})
 	if err != contracts.ErrNegativeOffsetRange {
 		t.Fatalf("expected ErrNegativeOffsetRange, got %v", err)
+	}
+}
+
+func TestSchemaValidation_NormalizesWhitespaceKeys(t *testing.T) {
+	normalized, err := contracts.ValidateCreateReplayRunInput(contracts.CreateReplayRunInput{
+		TenantID:         "  tenant-space  ",
+		SourceService:    "  service-space ",
+		ExternalID:       " ext-1 ",
+		CorrelationID:    " corr-1 ",
+		TargetProjection: " proj-1 ",
+		Mode:             contracts.ModeRebuild,
+		Scope:            contracts.ScopeGlobalTopic,
+		StartOffset:      0,
+		EndOffset:        100,
+	})
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	if normalized.TenantID != "tenant-space" {
+		t.Fatalf("expected trimmed tenant-space, got '%s'", normalized.TenantID)
+	}
+	if normalized.SourceService != "service-space" {
+		t.Fatalf("expected trimmed service-space, got '%s'", normalized.SourceService)
+	}
+	if normalized.ExternalID != "ext-1" {
+		t.Fatalf("expected trimmed ext-1, got '%s'", normalized.ExternalID)
 	}
 }
 

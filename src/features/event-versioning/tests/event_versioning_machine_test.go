@@ -9,7 +9,6 @@ import (
 	"event-driven-platform/src/features/event-versioning/domain/machines"
 )
 
-// Tier 0 Domain State Machine Table-Driven Tests (< 1ms, zero I/O)
 func TestUpcasterEngine_Tier0_ExecuteChain(t *testing.T) {
 	tests := []struct {
 		name          string
@@ -132,7 +131,6 @@ func TestUpcasterEngine_Tier0_ExecuteChain(t *testing.T) {
 			},
 			chain: []contracts.UpcasterRecord{
 				{FromVersion: 1, ToVersion: 2, TransformerName: "v1_to_v2", IsActive: true},
-				// missing step 2 -> 3
 			},
 			input: contracts.UpcastStepInput{
 				TenantID:      "tenant_test",
@@ -231,7 +229,6 @@ func TestUpcasterEngine_Tier0_ExecuteChain(t *testing.T) {
 	}
 }
 
-// Tier 4 Performance Benchmark for Hot-Path Upcast Loop
 func BenchmarkUpcasterEngine_ExecuteChain(b *testing.B) {
 	engine := machines.NewUpcasterEngine()
 	engine.RegisterTransformer("v1_to_v2", func(p map[string]any) (map[string]any, error) {

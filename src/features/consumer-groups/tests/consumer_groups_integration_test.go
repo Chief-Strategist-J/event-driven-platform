@@ -131,7 +131,6 @@ func TestConsumerGroups_Integration_ImmutabilityTriggers(t *testing.T) {
 		t.Fatalf("failed inserting baseline member record: %v", err)
 	}
 
-	// Unlawful modification of immutable public_id
 	_, err = db.ExecContext(ctx,
 		"UPDATE consumer_group_member SET public_id = $1 WHERE tenant_id = $2 AND id = $3",
 		"cgm_tampered12345678901234", tenantID, validUUID,
@@ -158,7 +157,6 @@ func TestConsumerGroups_Integration_PostgresAdapterLifecycle(t *testing.T) {
 	memberID := "billing-pod-1"
 	instanceID := "billing-pod-1-inst"
 
-	// 1. Register Member
 	memberRec, err := svc.RegisterMember(ctx, contracts.RegisterMemberInput{
 		TenantID:           tenantID,
 		SourceService:      "billing-service",
@@ -177,7 +175,6 @@ func TestConsumerGroups_Integration_PostgresAdapterLifecycle(t *testing.T) {
 		t.Fatalf("expected JOINING status, got %s", memberRec.Status)
 	}
 
-	// 2. Process Heartbeat -> STABLE
 	heartbeatRes, err := svc.ProcessHeartbeat(ctx, contracts.HeartbeatInput{
 		TenantID:   tenantID,
 		GroupID:    groupID,
@@ -191,7 +188,6 @@ func TestConsumerGroups_Integration_PostgresAdapterLifecycle(t *testing.T) {
 		t.Fatalf("expected STABLE status, got %s", heartbeatRes.Status)
 	}
 
-	// 3. Sync Rebalance
 	assigned := []contracts.PartitionAssignment{
 		{Topic: "billing.events", Partition: 0, Epoch: 1},
 		{Topic: "billing.events", Partition: 1, Epoch: 1},
@@ -216,7 +212,6 @@ func TestConsumerGroups_Integration_PostgresAdapterLifecycle(t *testing.T) {
 		t.Fatalf("expected public ID on rebalance log")
 	}
 
-	// 4. List Members
 	members, err := svc.ListMembers(ctx, tenantID, groupID)
 	if err != nil {
 		t.Fatalf("failed listing members: %v", err)

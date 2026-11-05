@@ -54,7 +54,6 @@ func getOrderingIntegrationDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// 1. Mandatory Physical Check Constraint Rejection per 09-test-writing.md Tier 1 & 05-db-writing-rules.md
 func TestEventOrderingProtection_Integration_PhysicalCheckConstraints(t *testing.T) {
 	db := getOrderingIntegrationDB(t)
 	defer db.Close()
@@ -63,7 +62,6 @@ func TestEventOrderingProtection_Integration_PhysicalCheckConstraints(t *testing
 	testUUID, _ := utils.GenerateUUIDv7()
 
 	t.Run("RejectMalformedPublicID", func(t *testing.T) {
-		// Invariant: public_id must match regex ^seq_[0-9a-zA-Z]{26}$
 		_, err := db.ExecContext(ctx, `
 			INSERT INTO aggregate_sequence_tracker (
 				id, public_id, tenant_id, source_service, external_id, correlation_id,
@@ -81,7 +79,6 @@ func TestEventOrderingProtection_Integration_PhysicalCheckConstraints(t *testing
 	})
 
 	t.Run("RejectInvalidHoldReasonEnum", func(t *testing.T) {
-		// Invariant: hold_reason IN ('GAP_DETECTED', 'INTEGRITY_MISMATCH', 'OPERATOR_HOLD', '')
 		_, err := db.ExecContext(ctx, `
 			INSERT INTO aggregate_sequence_tracker (
 				id, public_id, tenant_id, source_service, external_id, correlation_id,
@@ -100,7 +97,6 @@ func TestEventOrderingProtection_Integration_PhysicalCheckConstraints(t *testing
 	})
 }
 
-// 2. Physical Immutability Trigger Verification
 func TestEventOrderingProtection_Integration_ImmutabilityTriggers(t *testing.T) {
 	db := getOrderingIntegrationDB(t)
 	defer db.Close()
@@ -110,7 +106,6 @@ func TestEventOrderingProtection_Integration_ImmutabilityTriggers(t *testing.T) 
 	publicID := "seq_0192e2b08c2979a0971084519a"
 	tenantID := fmt.Sprintf("tenant_imm_%d", time.Now().UnixNano())
 
-	// Insert baseline valid tracker record
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO aggregate_sequence_tracker (
 			id, public_id, tenant_id, source_service, external_id, correlation_id,
@@ -125,7 +120,6 @@ func TestEventOrderingProtection_Integration_ImmutabilityTriggers(t *testing.T) 
 		t.Fatalf("failed inserting baseline tracker: %v", err)
 	}
 
-	// Attempt updating immutable public_id
 	_, err = db.ExecContext(ctx, `
 		UPDATE aggregate_sequence_tracker
 		SET public_id = 'seq_0192e2b08c2979a0971084519b'
@@ -137,7 +131,6 @@ func TestEventOrderingProtection_Integration_ImmutabilityTriggers(t *testing.T) 
 	}
 }
 
-// 3. Real PostgreSQL Sequence Hold, Buffering, and Drain Execution
 func TestEventOrderingProtection_Integration_PostgresSequenceHoldAndDrain(t *testing.T) {
 	db := getOrderingIntegrationDB(t)
 	defer db.Close()
@@ -152,7 +145,6 @@ func TestEventOrderingProtection_Integration_PostgresSequenceHoldAndDrain(t *tes
 	aggType := "invoice"
 	aggID := fmt.Sprintf("inv_%d", time.Now().UnixNano())
 
-	// 1. Process Event V1 -> Applies
 	res1, err := svc.EvaluateAndApply(ctx, contracts.IngestEventSequenceInput{
 		TenantID:         tenantID,
 		SourceService:    "invoice-service",
@@ -171,7 +163,6 @@ func TestEventOrderingProtection_Integration_PostgresSequenceHoldAndDrain(t *tes
 		t.Fatalf("expected ActionApply on v1, got action: %s, err: %v", res1.Action, err)
 	}
 
-	// 2. Process Out-of-Order Event V3 (Gap of V2 missing) -> Held in real PostgreSQL
 	res3, err := svc.EvaluateAndApply(ctx, contracts.IngestEventSequenceInput{
 		TenantID:         tenantID,
 		SourceService:    "invoice-service",
@@ -190,7 +181,6 @@ func TestEventOrderingProtection_Integration_PostgresSequenceHoldAndDrain(t *tes
 		t.Fatalf("expected ActionGapHeld on out-of-order v3, got: %+v, err: %v", res3, err)
 	}
 
-	// Verify held event buffered in sequence_held_event table
 	var heldCount int
 	err = db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM sequence_held_event 
@@ -200,7 +190,6 @@ func TestEventOrderingProtection_Integration_PostgresSequenceHoldAndDrain(t *tes
 		t.Fatalf("expected 1 held event in PostgreSQL, got %d (err: %v)", heldCount, err)
 	}
 
-	// 3. Delayed Event V2 Arrives -> Applies and unblocks gap
 	res2, err := svc.EvaluateAndApply(ctx, contracts.IngestEventSequenceInput{
 		TenantID:         tenantID,
 		SourceService:    "invoice-service",
@@ -219,7 +208,6 @@ func TestEventOrderingProtection_Integration_PostgresSequenceHoldAndDrain(t *tes
 		t.Fatalf("expected ActionApply on arriving v2, got: %+v, err: %v", res2, err)
 	}
 
-	// 4. Drain Held Events in real PostgreSQL -> V3 is sequentially applied and unheld
 	drainRes, err := svc.DrainHeldEvents(ctx, contracts.DrainHeldEventsInput{
 		TenantID:      tenantID,
 		ConsumerGroup: group,
@@ -235,7 +223,6 @@ func TestEventOrderingProtection_Integration_PostgresSequenceHoldAndDrain(t *tes
 		t.Fatalf("unexpected drain result: %+v", drainRes)
 	}
 
-	// Verify buffer drained to 0 in PostgreSQL
 	err = db.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM sequence_held_event 
 		WHERE tenant_id = $1 AND consumer_group = $2 AND handler_id = $3 AND aggregate_id = $4;

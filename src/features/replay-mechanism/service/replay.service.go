@@ -34,10 +34,12 @@ func (s *ReplayService) CreateReplayRun(ctx context.Context, input contracts.Cre
 		attribute.String("scope", string(input.Scope)),
 	)
 
-	if err := contracts.ValidateCreateReplayRunInput(input); err != nil {
+	validInput, err := contracts.ValidateCreateReplayRunInput(input)
+	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
 		return nil, err
 	}
+	input = validInput
 
 	recordID, err := utils.GenerateUUIDv7()
 	if err != nil {
@@ -161,10 +163,12 @@ func (s *ReplayService) AdvanceReplay(ctx context.Context, input contracts.Advan
 		attribute.Int64("current_offset", input.CurrentOffset),
 	)
 
-	if err := contracts.ValidateAdvanceReplayInput(input); err != nil {
+	validInput, err := contracts.ValidateAdvanceReplayInput(input)
+	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
 		return nil, err
 	}
+	input = validInput
 
 	existing, err := s.repo.GetReplayRun(ctx, input.TenantID, input.RunID)
 	if err != nil {
@@ -206,10 +210,12 @@ func (s *ReplayService) PromoteReplay(ctx context.Context, input contracts.Promo
 		attribute.String("run_id", input.RunID),
 	)
 
-	if err := contracts.ValidatePromoteReplayInput(input); err != nil {
+	validInput, err := contracts.ValidatePromoteReplayInput(input)
+	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
 		return nil, err
 	}
+	input = validInput
 
 	existing, err := s.repo.GetReplayRun(ctx, input.TenantID, input.RunID)
 	if err != nil {
@@ -264,10 +270,12 @@ func (s *ReplayService) CompleteCutover(ctx context.Context, input contracts.Com
 		attribute.String("run_id", input.RunID),
 	)
 
-	if err := contracts.ValidateCompleteCutoverInput(input); err != nil {
+	validInput, err := contracts.ValidateCompleteCutoverInput(input)
+	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
 		return nil, err
 	}
+	input = validInput
 
 	existing, err := s.repo.GetReplayRun(ctx, input.TenantID, input.RunID)
 	if err != nil {
@@ -376,10 +384,12 @@ func (s *ReplayService) EvaluateEffect(ctx context.Context, input contracts.Eval
 		attribute.String("effect_type", string(input.EffectType)),
 	)
 
-	if err := contracts.ValidateEvaluateEffectInput(input); err != nil {
+	validInput, err := contracts.ValidateEvaluateEffectInput(input)
+	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
 		return nil, err
 	}
+	input = validInput
 
 	run, err := s.repo.GetReplayRun(ctx, input.TenantID, input.RunID)
 	if err != nil {
@@ -387,7 +397,11 @@ func (s *ReplayService) EvaluateEffect(ctx context.Context, input contracts.Eval
 		return nil, err
 	}
 
-	mode := rules.ResolveEffectMode(run.Mode, input.EffectType)
+	mode, err := rules.ResolveEffectMode(run.Mode, input.EffectType)
+	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "INVALID_EFFECT_MODE"))
+		return nil, err
+	}
 	decision := rules.EvaluateEffectDecision(mode)
 
 	effID, _ := utils.GenerateUUIDv7()

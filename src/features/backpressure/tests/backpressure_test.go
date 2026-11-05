@@ -360,7 +360,7 @@ func TestServiceListByTenant(t *testing.T) {
 }
 
 func TestSchemaValidation_MissingTenantID(t *testing.T) {
-	err := contracts.ValidateReportSaturationInput(contracts.ReportSaturationInput{
+	_, err := contracts.ValidateReportSaturationInput(contracts.ReportSaturationInput{
 		TenantID: "",
 		Signal:   contracts.SaturationSignal{HandlerID: "h", DependencyID: "d"},
 	})
@@ -370,7 +370,7 @@ func TestSchemaValidation_MissingTenantID(t *testing.T) {
 }
 
 func TestSchemaValidation_MissingDependencyID(t *testing.T) {
-	err := contracts.ValidateReportSaturationInput(contracts.ReportSaturationInput{
+	_, err := contracts.ValidateReportSaturationInput(contracts.ReportSaturationInput{
 		TenantID:      "t",
 		SourceService: "s",
 		ExternalID:    "e",
@@ -379,6 +379,34 @@ func TestSchemaValidation_MissingDependencyID(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for missing dependencyId")
+	}
+}
+
+func TestSchemaValidation_NormalizesWhitespace(t *testing.T) {
+	normalized, err := contracts.ValidateReportSaturationInput(contracts.ReportSaturationInput{
+		TenantID:      "  tenant-bp  ",
+		SourceService: "  svc-bp  ",
+		ExternalID:    " ext-bp ",
+		CorrelationID: " corr-bp ",
+		Signal: contracts.SaturationSignal{
+			HandlerID:    " handler-bp ",
+			DependencyID: " dep-bp ",
+		},
+	})
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	if normalized.TenantID != "tenant-bp" {
+		t.Fatalf("expected tenant-bp, got '%s'", normalized.TenantID)
+	}
+	if normalized.SourceService != "svc-bp" {
+		t.Fatalf("expected svc-bp, got '%s'", normalized.SourceService)
+	}
+	if normalized.Signal.HandlerID != "handler-bp" {
+		t.Fatalf("expected handler-bp, got '%s'", normalized.Signal.HandlerID)
+	}
+	if normalized.Signal.DependencyID != "dep-bp" {
+		t.Fatalf("expected dep-bp, got '%s'", normalized.Signal.DependencyID)
 	}
 }
 

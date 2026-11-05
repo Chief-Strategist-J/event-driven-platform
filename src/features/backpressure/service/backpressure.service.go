@@ -34,13 +34,15 @@ func (s *BackpressureService) ReportSaturation(ctx context.Context, input contra
 		attribute.String("pause_reason", string(input.PauseReason)),
 	)
 
-	if err := contracts.ValidateReportSaturationInput(input); err != nil {
+	validInput, err := contracts.ValidateReportSaturationInput(input)
+	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
 		observability.LogWarn(ctx, "backpressure", "report saturation validation failed", input.TenantID, map[string]any{
 			"error": err.Error(),
 		})
 		return nil, err
 	}
+	input = validInput
 
 	eval := rules.EvaluateSaturation(input.Signal)
 	if !eval.IsSaturated {
@@ -145,13 +147,15 @@ func (s *BackpressureService) ReportRecovery(ctx context.Context, input contract
 		attribute.String("dependency_id", input.DependencyID),
 	)
 
-	if err := contracts.ValidateReportRecoveryInput(input); err != nil {
+	validInput, err := contracts.ValidateReportRecoveryInput(input)
+	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
 		observability.LogWarn(ctx, "backpressure", "report recovery validation failed", input.TenantID, map[string]any{
 			"error": err.Error(),
 		})
 		return nil, err
 	}
+	input = validInput
 
 	existing, getErr := s.repo.GetBackpressureRecord(ctx, input.TenantID, input.HandlerID, input.DependencyID)
 	if getErr != nil {
@@ -226,13 +230,15 @@ func (s *BackpressureService) ConfirmRecovery(ctx context.Context, input contrac
 		attribute.String("dependency_id", input.DependencyID),
 	)
 
-	if err := contracts.ValidateReportRecoveryInput(input); err != nil {
+	validInput, err := contracts.ValidateReportRecoveryInput(input)
+	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
 		observability.LogWarn(ctx, "backpressure", "confirm recovery validation failed", input.TenantID, map[string]any{
 			"error": err.Error(),
 		})
 		return nil, err
 	}
+	input = validInput
 
 	existing, getErr := s.repo.GetBackpressureRecord(ctx, input.TenantID, input.HandlerID, input.DependencyID)
 	if getErr != nil {
@@ -299,13 +305,15 @@ func (s *BackpressureService) GetState(ctx context.Context, input contracts.GetB
 		attribute.String("dependency_id", input.DependencyID),
 	)
 
-	if err := contracts.ValidateGetBackpressureStateInput(input); err != nil {
+	validInput, err := contracts.ValidateGetBackpressureStateInput(input)
+	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
 		observability.LogWarn(ctx, "backpressure", "get backpressure state validation failed", input.TenantID, map[string]any{
 			"error": err.Error(),
 		})
 		return nil, err
 	}
+	input = validInput
 
 	rec, getErr := s.repo.GetBackpressureRecord(ctx, input.TenantID, input.HandlerID, input.DependencyID)
 	if getErr != nil {

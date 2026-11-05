@@ -36,7 +36,6 @@ func getBackpressureTestDB(t *testing.T) *sql.DB {
 	return db
 }
 
-// 1. PHYSICAL DATABASE CONSTRAINT INTEGRATION TESTS (09-test-writing.md Tier 3)
 func TestBackpressure_Integration_PhysicalCheckConstraints(t *testing.T) {
 	db := getBackpressureTestDB(t)
 	defer db.Close()
@@ -134,7 +133,6 @@ func TestBackpressure_Integration_PhysicalCheckConstraints(t *testing.T) {
 	})
 }
 
-// 2. REAL POSTGRESQL STATE LIFECYCLE & AUDIT LOG IMMUTABILITY
 func TestBackpressure_Integration_LifecycleAndAuditImmutability(t *testing.T) {
 	db := getBackpressureTestDB(t)
 	defer db.Close()
@@ -149,7 +147,6 @@ func TestBackpressure_Integration_LifecycleAndAuditImmutability(t *testing.T) {
 
 	corrUUID, _ := utils.GenerateUUIDv7()
 
-	// Step 1: Report Saturation
 	satInput := contracts.ReportSaturationInput{
 		TenantID:      tenantID,
 		SourceService: "payment-service",
@@ -175,7 +172,6 @@ func TestBackpressure_Integration_LifecycleAndAuditImmutability(t *testing.T) {
 		t.Fatalf("expected concurrency_limit >= 1, got %d", satRecord.ConcurrencyLimit)
 	}
 
-	// Verify persistence directly in DB
 	var dbState string
 	var dbLimit int64
 	err = db.QueryRowContext(ctx,
@@ -189,7 +185,6 @@ func TestBackpressure_Integration_LifecycleAndAuditImmutability(t *testing.T) {
 		t.Fatalf("mismatched postgres state: state=%s, limit=%d", dbState, dbLimit)
 	}
 
-	// Step 2: Report Recovery
 	recInput := contracts.ReportRecoveryInput{
 		TenantID:      tenantID,
 		SourceService: "payment-service",
@@ -207,7 +202,6 @@ func TestBackpressure_Integration_LifecycleAndAuditImmutability(t *testing.T) {
 		t.Fatalf("expected state RECOVERING, got %s", recRecord.State)
 	}
 
-	// Step 3: Confirm Recovery (Normal)
 	confRecord, err := svc.ConfirmRecovery(ctx, recInput)
 	if err != nil {
 		t.Fatalf("failed to confirm recovery against real postgres: %v", err)
@@ -216,7 +210,6 @@ func TestBackpressure_Integration_LifecycleAndAuditImmutability(t *testing.T) {
 		t.Fatalf("expected state NORMAL, got %s", confRecord.State)
 	}
 
-	// Step 4: Verify Audit Log count and trigger-enforced Immutability
 	var auditCount int
 	err = db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM backpressure_audit_log WHERE tenant_id = $1 AND handler_id = $2",
@@ -229,7 +222,6 @@ func TestBackpressure_Integration_LifecycleAndAuditImmutability(t *testing.T) {
 		t.Fatalf("expected 3 audit log records (saturation, recovery, confirm), got %d", auditCount)
 	}
 
-	// Attempt mutation on backpressure_audit_log (Must be blocked by database trigger)
 	_, mutErr := db.ExecContext(ctx,
 		"UPDATE backpressure_audit_log SET reason = 'tampered' WHERE tenant_id = $1",
 		tenantID,
@@ -242,7 +234,6 @@ func TestBackpressure_Integration_LifecycleAndAuditImmutability(t *testing.T) {
 	}
 }
 
-// 3. CONCURRENT WORKER STRESS TEST (09-test-writing.md Tier 4 Concurrency Invariant)
 func TestBackpressure_Integration_ConcurrentSaturationContention(t *testing.T) {
 	db := getBackpressureTestDB(t)
 	defer db.Close()
@@ -293,7 +284,6 @@ func TestBackpressure_Integration_ConcurrentSaturationContention(t *testing.T) {
 		t.Fatalf("unexpected concurrent worker saturation error: %v", err)
 	}
 
-	// Verify exactly one state record remains for the unique handler/dependency tuple
 	var recordCount int
 	err := db.QueryRowContext(ctx,
 		"SELECT COUNT(*) FROM backpressure_state WHERE tenant_id = $1 AND handler_id = $2 AND dependency_id = $3",
@@ -307,7 +297,6 @@ func TestBackpressure_Integration_ConcurrentSaturationContention(t *testing.T) {
 	}
 }
 
-// 4. DISTRIBUTED TRACING & ERROR TELEMETRY COMPLIANCE (10-tracing-writing.md)
 func TestBackpressure_TracingCompliance(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(
@@ -326,7 +315,7 @@ func TestBackpressure_TracingCompliance(t *testing.T) {
 		exporter.Reset()
 
 		invalidInput := contracts.ReportSaturationInput{
-			TenantID: "", // Missing mandatory tenant
+			TenantID: "", 
 		}
 
 		_, err := svc.ReportSaturation(ctx, invalidInput)
@@ -344,12 +333,10 @@ func TestBackpressure_TracingCompliance(t *testing.T) {
 			t.Fatalf("expected span name 'backpressure.report_saturation', got '%s'", rootSpan.Name)
 		}
 
-		// Verify 10-tracing-writing.md rule: Status must be ERROR on failure
 		if rootSpan.Status.Code.String() != "Error" {
 			t.Fatalf("expected span status Error, got %s", rootSpan.Status.Code.String())
 		}
 
-		// Verify error event is present on span
 		if len(rootSpan.Events) == 0 {
 			t.Fatalf("expected span to have recorded error event")
 		}
@@ -405,7 +392,6 @@ func TestBackpressure_TracingCompliance(t *testing.T) {
 			t.Fatalf("span 'backpressure.report_saturation' not found")
 		}
 
-		// Verify span attributes
 		attrMap := make(map[string]any)
 		for _, attr := range targetSpan.Attributes {
 			attrMap[string(attr.Key)] = attr.Value.AsInterface()

@@ -79,3 +79,4 @@ This catalog documents failure modes across the replay lifecycle, derived from t
 | **F12.1** | Table rename lock acquisition blocks queries | **OUTAGE** | `ALTER TABLE RENAME` holds exclusive lock while waiting on active long-running queries. | Set `lock_timeout = '2s'` and use atomic view swap or routing proxy pointer update. | Lock queue latency monitor. |
 | **F14.1** | Erased customer reappears in rebuilt view | **COMPLIANCE** | Crypto-shredded records decrypted or unmasked during historical replay. | Replay runner checks crypto-shredding keystore; missing key yields erased/redacted state. | GDPR privacy scanner. |
 | **F14.2** | Replay target with production PII in lower env | **COMPLIANCE** | Replaying production archive in staging without data anonymization. | Orchestrator restricts production archive access to production VPC networks only. | IAM permission guardrails. |
+

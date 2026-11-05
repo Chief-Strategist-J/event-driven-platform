@@ -6,62 +6,79 @@ import (
 )
 
 var (
-	ErrMissingHandlerID    = errors.New("handlerId is required")
-	ErrMissingDependencyID = errors.New("dependencyId is required")
-	ErrMissingTenantID     = errors.New("tenantId is required")
+	ErrMissingHandlerID     = errors.New("handlerId is required")
+	ErrMissingDependencyID  = errors.New("dependencyId is required")
+	ErrMissingTenantID      = errors.New("tenantId is required")
 	ErrMissingSourceService = errors.New("sourceService is required")
-	ErrMissingExternalID   = errors.New("externalId is required")
+	ErrMissingExternalID    = errors.New("externalId is required")
 	ErrMissingCorrelationID = errors.New("correlationId is required")
 )
 
-func ValidateReportSaturationInput(input ReportSaturationInput) error {
-	if strings.TrimSpace(input.TenantID) == "" {
-		return ErrMissingTenantID
+func ValidateReportSaturationInput(input ReportSaturationInput) (ReportSaturationInput, error) {
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	input.SourceService = strings.TrimSpace(input.SourceService)
+	input.ExternalID = strings.TrimSpace(input.ExternalID)
+	input.CorrelationID = strings.TrimSpace(input.CorrelationID)
+	input.Signal.HandlerID = strings.TrimSpace(input.Signal.HandlerID)
+	input.Signal.DependencyID = strings.TrimSpace(input.Signal.DependencyID)
+
+	if input.TenantID == "" {
+		return input, ErrMissingTenantID
 	}
-	if strings.TrimSpace(input.SourceService) == "" {
-		return ErrMissingSourceService
+	if input.SourceService == "" {
+		return input, ErrMissingSourceService
 	}
-	if strings.TrimSpace(input.ExternalID) == "" {
-		return ErrMissingExternalID
+	if input.ExternalID == "" {
+		return input, ErrMissingExternalID
 	}
-	if strings.TrimSpace(input.CorrelationID) == "" {
-		return ErrMissingCorrelationID
+	if input.CorrelationID == "" {
+		return input, ErrMissingCorrelationID
 	}
-	if strings.TrimSpace(input.Signal.HandlerID) == "" {
-		return ErrMissingHandlerID
+	if input.Signal.HandlerID == "" {
+		return input, ErrMissingHandlerID
 	}
-	if strings.TrimSpace(input.Signal.DependencyID) == "" {
-		return ErrMissingDependencyID
+	if input.Signal.DependencyID == "" {
+		return input, ErrMissingDependencyID
 	}
-	return nil
+	return input, nil
 }
 
-func ValidateReportRecoveryInput(input ReportRecoveryInput) error {
-	if strings.TrimSpace(input.TenantID) == "" {
-		return ErrMissingTenantID
+func ValidateReportRecoveryInput(input ReportRecoveryInput) (ReportRecoveryInput, error) {
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	input.SourceService = strings.TrimSpace(input.SourceService)
+	input.ExternalID = strings.TrimSpace(input.ExternalID)
+	input.CorrelationID = strings.TrimSpace(input.CorrelationID)
+	input.HandlerID = strings.TrimSpace(input.HandlerID)
+	input.DependencyID = strings.TrimSpace(input.DependencyID)
+
+	if input.TenantID == "" {
+		return input, ErrMissingTenantID
 	}
-	if strings.TrimSpace(input.SourceService) == "" {
-		return ErrMissingSourceService
+	if input.SourceService == "" {
+		return input, ErrMissingSourceService
 	}
-	if strings.TrimSpace(input.HandlerID) == "" {
-		return ErrMissingHandlerID
+	if input.HandlerID == "" {
+		return input, ErrMissingHandlerID
 	}
-	if strings.TrimSpace(input.DependencyID) == "" {
-		return ErrMissingDependencyID
+	if input.DependencyID == "" {
+		return input, ErrMissingDependencyID
 	}
-	return nil
+	return input, nil
 }
 
-func ValidateGetBackpressureStateInput(input GetBackpressureStateInput) error {
-	if strings.TrimSpace(input.TenantID) == "" {
-		return ErrMissingTenantID
-	}
-	if strings.TrimSpace(input.HandlerID) == "" {
-		return ErrMissingHandlerID
-	}
-	if strings.TrimSpace(input.DependencyID) == "" {
-		return ErrMissingDependencyID
-	}
-	return nil
-}
+func ValidateGetBackpressureStateInput(input GetBackpressureStateInput) (GetBackpressureStateInput, error) {
+	input.TenantID = strings.TrimSpace(input.TenantID)
+	input.HandlerID = strings.TrimSpace(input.HandlerID)
+	input.DependencyID = strings.TrimSpace(input.DependencyID)
 
+	if input.TenantID == "" {
+		return input, ErrMissingTenantID
+	}
+	if input.HandlerID == "" {
+		return input, ErrMissingHandlerID
+	}
+	if input.DependencyID == "" {
+		return input, ErrMissingDependencyID
+	}
+	return input, nil
+}
