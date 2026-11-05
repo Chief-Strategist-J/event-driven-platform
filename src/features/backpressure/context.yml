@@ -1,2 +1,40 @@
 feature: backpressure
-mode: stateless_hexagonal
+owner: platform-team
+description: >
+  Adaptive backpressure control — pause, ramp, and recover Kafka consumer partitions
+  per (handler, dependency) pair. Implements invariants BP-01 through BP-12 from
+  the production system design tree. Tracks NORMAL → SATURATED → RECOVERING state
+  machine with full audit trail.
+
+boundaries:
+  - Backpressure state decisions are scoped per (tenant_id, handler_id, dependency_id).
+  - Service imports only BackpressureRepositoryPort; no concrete adapters.
+  - All SQL lives in infrastructure/queries/backpressure.queries.go as Flow* constants.
+  - Zero inline SQL; zero comments in source files.
+
+ports:
+  driven:
+    - BackpressureRepositoryPort (infrastructure/ports/backpressure.repository.port.go)
+  driving:
+    - BackpressureService methods exposed through BackpressureFeature facade (index.go)
+
+state_machine:
+  initial: NORMAL
+  transitions:
+    - from: NORMAL       event: SATURATION_DETECTED  to: SATURATED
+    - from: SATURATED    event: RECOVERY_STARTED     to: RECOVERING
+    - from: RECOVERING   event: RECOVERY_CONFIRMED   to: NORMAL
+    - from: RECOVERING   event: SATURATION_DETECTED  to: SATURATED
+
+invariants:
+  - BP-01: memory bounded by bytes (live heap vs limit)
+  - BP-02: pause scoped to saturated (handler, dependency)
+  - BP-03: every pause has reason + maximum duration
+  - BP-04: resume is gradual (25% ramp)
+  - BP-05: scaling blocked when dependency saturated
+  - BP-09: ordering class decides coalesce/shed policy
+  - BP-12: backpressure is observable as explicit state
+
+database_tables:
+  - backpressure_state        (migration 0010)
+  - backpressure_audit_log    (migration 0010)

@@ -31,6 +31,9 @@ import (
 	offsetAdapters "event-driven-platform/src/features/offset-management/infrastructure/adapters"
 	offsetPorts "event-driven-platform/src/features/offset-management/infrastructure/ports"
 	offsetService "event-driven-platform/src/features/offset-management/service"
+	bpAdapters "event-driven-platform/src/features/backpressure/infrastructure/adapters"
+	bpPorts "event-driven-platform/src/features/backpressure/infrastructure/ports"
+	bpService "event-driven-platform/src/features/backpressure/service"
 	consumerAdapters "event-driven-platform/src/features/idempotent-consumers/infrastructure/adapters"
 	consumerService "event-driven-platform/src/features/idempotent-consumers/service"
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
@@ -120,6 +123,8 @@ func describeService() chassis.ServiceSpec {
 			groupSvc := groupService.NewConsumerGroupsService(groupRepo)
 			offsetRepo := offsetAdapters.NewPostgresOffsetManagementAdapter(db)
 			offsetSvc := offsetService.NewOffsetManagementService(offsetRepo)
+			bpRepo := bpAdapters.NewBackpressurePostgresRepositoryAdapter(db)
+			bpSvc := bpService.NewBackpressureService(bpRepo)
 
 			return chassis.Services{
 				Registry: map[string]any{
@@ -133,6 +138,8 @@ func describeService() chassis.ServiceSpec {
 					"groupService":      groupSvc,
 					"offsetRepo":        offsetRepo,
 					"offsetService":     offsetSvc,
+					"bpRepo":            bpRepo,
+					"bpService":         bpSvc,
 				},
 			}, nil
 		},
@@ -186,6 +193,9 @@ func describeService() chassis.ServiceSpec {
 			}
 			if offsetRepo, exists := instances["offsetRepo"].(offsetPorts.OffsetManagementRepositoryPort); exists && offsetRepo != nil {
 				routers.RegisterOffsetManagementRoutes(router, offsetRepo)
+			}
+			if bpRepo, exists := instances["bpRepo"].(bpPorts.BackpressureRepositoryPort); exists && bpRepo != nil {
+				routers.RegisterBackpressureRoutes(router, bpRepo)
 			}
 		},
 		RegisterDaemons: func(lifecycle *chassis.Lifecycle, services chassis.Services) {
