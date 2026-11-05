@@ -18,6 +18,7 @@ type Transition struct {
 
 var allowedTransitions = []Transition{
 	{From: contracts.StateNormal, Event: contracts.EventSaturationDetected, To: contracts.StateSaturated},
+	{From: contracts.StateSaturated, Event: contracts.EventSaturationDetected, To: contracts.StateSaturated},
 	{From: contracts.StateSaturated, Event: contracts.EventRecoveryStarted, To: contracts.StateRecovering},
 	{From: contracts.StateRecovering, Event: contracts.EventRecoveryConfirmed, To: contracts.StateNormal},
 	{From: contracts.StateRecovering, Event: contracts.EventSaturationDetected, To: contracts.StateSaturated},

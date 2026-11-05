@@ -49,7 +49,11 @@ func InitGlobalTracer(ctx context.Context, serviceName, collectorEndpoint string
 		return nil, fmt.Errorf("failed to initialize resource: %w", err)
 	}
 
-	bsp := sdktrace.NewBatchSpanProcessor(exporter)
+	bsp := sdktrace.NewBatchSpanProcessor(
+		exporter,
+		sdktrace.WithBatchTimeout(500*time.Millisecond),
+		sdktrace.WithExportTimeout(3*time.Second),
+	)
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 		sdktrace.WithResource(res),

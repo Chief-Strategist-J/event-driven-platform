@@ -788,3 +788,505 @@ paths:
           description: Rebalance synced and partition assignment updated
         "400":
           description: Validation error
+
+  /api/v1/offsets/commit:
+    post:
+      summary: Commit Topic Partition Offset
+      operationId: commitOffset
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+        - name: x-correlation-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - groupId
+                - topic
+                - partition
+                - offset
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string }
+                groupId: { type: string }
+                topic: { type: string }
+                partition: { type: integer, minimum: 0 }
+                offset: { type: integer, minimum: 0 }
+                logEndOffset: { type: integer, minimum: 0 }
+                metadata: { type: string }
+      responses:
+        "200":
+          description: Offset committed successfully
+        "400":
+          description: Validation error
+
+  /api/v1/offsets/rewind:
+    post:
+      summary: Rewind Partition Offset for Recovery
+      operationId: rewindOffset
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - groupId
+                - topic
+                - partition
+                - targetOffset
+                - reason
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string }
+                groupId: { type: string }
+                topic: { type: string }
+                partition: { type: integer, minimum: 0 }
+                targetOffset: { type: integer, minimum: 0 }
+                reason: { type: string }
+                operatorId: { type: string }
+      responses:
+        "200":
+          description: Offset rewound successfully
+        "400":
+          description: Validation error
+
+  /api/v1/offsets/fast-forward:
+    post:
+      summary: Fast Forward Partition Offset Skipping Poison Messages
+      operationId: fastForwardOffset
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - groupId
+                - topic
+                - partition
+                - targetOffset
+                - reason
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string }
+                groupId: { type: string }
+                topic: { type: string }
+                partition: { type: integer, minimum: 0 }
+                targetOffset: { type: integer, minimum: 0 }
+                reason: { type: string }
+                operatorId: { type: string }
+      responses:
+        "200":
+          description: Offset fast-forwarded successfully
+        "400":
+          description: Validation error
+
+  /api/v1/backpressure/saturation:
+    post:
+      summary: Ingest Saturation Signal and Transition Backpressure State
+      operationId: reportBackpressureSaturation
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - pauseReason
+                - signal
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string }
+                pauseReason:
+                  type: string
+                  enum: [EXHAUSTED_CONCURRENCY, DOWNSTREAM_5XX, SLOW_DEPENDENCY, MEMORY_HIGH, OPERATOR_FORCE_PAUSE]
+                observedLag: { type: integer, minimum: 0 }
+                thresholdLag: { type: integer, minimum: 0 }
+                signal:
+                  type: object
+                  additionalProperties: false
+                  required:
+                    - handlerId
+                    - dependencyId
+                  properties:
+                    handlerId: { type: string }
+                    dependencyId: { type: string }
+                    currentConcurrency: { type: integer, minimum: 0 }
+                    errorRatePercent: { type: number, minimum: 0, maximum: 100 }
+                    latencyP99Ms: { type: integer, minimum: 0 }
+                    observedAt: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Saturation signal recorded and state transitioned
+        "400":
+          description: Validation error
+
+  /api/v1/backpressure/recovery:
+    post:
+      summary: Report Dependency Recovery and Initiate Ramp-Up
+      operationId: reportBackpressureRecovery
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - handlerId
+                - dependencyId
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string }
+                handlerId: { type: string }
+                dependencyId: { type: string }
+                currentConcurrency: { type: integer, minimum: 0 }
+                errorRatePercent: { type: number, minimum: 0, maximum: 100 }
+                latencyP99Ms: { type: integer, minimum: 0 }
+                observedAt: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Recovery ramp initiated
+        "400":
+          description: Validation error
+
+  /api/v1/backpressure/recovery/confirm:
+    post:
+      summary: Confirm Stable Health and Transition Backpressure to Normal
+      operationId: confirmBackpressureRecovery
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - handlerId
+                - dependencyId
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string }
+                handlerId: { type: string }
+                dependencyId: { type: string }
+                currentConcurrency: { type: integer, minimum: 0 }
+                errorRatePercent: { type: number, minimum: 0, maximum: 100 }
+                latencyP99Ms: { type: integer, minimum: 0 }
+                observedAt: { type: string, format: date-time }
+      responses:
+        "200":
+          description: Normal state confirmed and concurrency limits restored
+        "400":
+          description: Validation error
+
+  /api/v1/backpressure/state:
+    get:
+      summary: Query Current Backpressure State for Handler and Dependency
+      operationId: getBackpressureState
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: true
+          schema: { type: string }
+        - name: handler_id
+          in: query
+          required: true
+          schema: { type: string }
+        - name: dependency_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Current backpressure tracking state
+        "400":
+          description: Validation error
+        "404":
+          description: State not found
+
+  /api/v1/replay/runs:
+    post:
+      summary: Create New Replay Run with Side-Car Consumer Group
+      operationId: createReplayRun
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - reason
+                - targetProjection
+                - targetTopic
+                - startOffset
+                - stopOffset
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string }
+                reason:
+                  type: string
+                  enum: [REBUILD, HYDRATE, FORENSIC, RECOVER, REPAIR]
+                targetProjection: { type: string }
+                targetTopic: { type: string }
+                startOffset: { type: integer, minimum: 0 }
+                stopOffset: { type: integer, minimum: -1 }
+                createdBy: { type: string }
+                initialLag: { type: integer, minimum: 0 }
+                liveLagThreshold: { type: integer, minimum: 0 }
+      responses:
+        "201":
+          description: Replay run created in INITIALIZING state
+        "400":
+          description: Validation error
+    get:
+      summary: Fetch Replay Run Details
+      operationId: getReplayRun
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: true
+          schema: { type: string }
+        - name: run_id
+          in: query
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Replay run details
+        "404":
+          description: Replay run not found
+
+  /api/v1/replay/runs/start:
+    post:
+      summary: Transition Replay Run from Initializing to Streaming
+      operationId: startReplayStreaming
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - runId
+              properties:
+                runId: { type: string }
+      responses:
+        "200":
+          description: Streaming phase started
+        "400":
+          description: Validation error
+
+  /api/v1/replay/runs/advance:
+    post:
+      summary: Advance Replay Offsets and Increment Progress
+      operationId: advanceReplay
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - runId
+                - currentOffset
+                - partition
+              properties:
+                tenantId: { type: string }
+                runId: { type: string }
+                currentOffset: { type: integer, minimum: 0 }
+                partition: { type: integer, minimum: 0 }
+                eventsReplayed: { type: integer, minimum: 0 }
+                lag: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Replay run progress updated
+        "400":
+          description: Validation error
+
+  /api/v1/replay/runs/promote:
+    post:
+      summary: Promote Replay Run to Caught Up when Lag Below Threshold
+      operationId: promoteReplay
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - runId
+                - currentLag
+              properties:
+                tenantId: { type: string }
+                runId: { type: string }
+                currentLag: { type: integer, minimum: 0 }
+      responses:
+        "200":
+          description: Replay run promoted to CAUGHT_UP
+        "400":
+          description: Validation error
+
+  /api/v1/replay/runs/cutover:
+    post:
+      summary: Complete Atomic Cutover of Shadow Projection
+      operationId: completeReplayCutover
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - runId
+                - cutoverConfirmed
+              properties:
+                tenantId: { type: string }
+                runId: { type: string }
+                cutoverConfirmed: { type: boolean }
+      responses:
+        "200":
+          description: Cutover completed and run transitioned to COMPLETED
+        "400":
+          description: Validation error
+
+  /api/v1/replay/effects/evaluate:
+    post:
+      summary: Evaluate Side-Effect Routing Gateway for Replay Run
+      operationId: evaluateReplayEffect
+      parameters:
+        - name: x-tenant-id
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - runId
+                - effectType
+                - destination
+                - payload
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string }
+                runId: { type: string }
+                effectType: { type: string }
+                destination: { type: string }
+                payload: { type: string }
+      responses:
+        "200":
+          description: Effect evaluation result returned (DISPATCH, MOCK, SUPPRESS, RECORD_SHADOW)
+        "400":
+          description: Validation error

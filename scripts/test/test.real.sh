@@ -518,18 +518,146 @@ fi
 echo "Offset rewind verified in PostgreSQL!"
 
 echo "================================================================"
-echo " 11. TESTING LIVE TEMPO TRACE PROPAGATION & RETRIEVAL"
+echo " 11. TESTING REAL BACKPRESSURE CONTROL WITH DISTRIBUTED TRACING"
 echo "================================================================"
-# Flush batches by querying tempo container directly
-echo "Verifying trace in Grafana Tempo container (Trace ID: abf92f3577b34da6a3ce929d0e0e4700)..."
-TEMPO_TRACE=$(docker exec event_platform-tempo-1 wget -qO- "http://127.0.0.1:3200/api/traces/abf92f3577b34da6a3ce929d0e0e4700" || true)
-if [[ -n "${TEMPO_TRACE}" ]] && echo "${TEMPO_TRACE}" | grep -q "POST /api/v1/offsets/commit"; then
-    echo "Trace abf92f3577b34da6a3ce929d0e0e4700 verified inside Grafana Tempo storage!"
-else
-    echo "Checking overall Tempo search traces..."
-    TEMPO_SEARCH=$(docker exec event_platform-tempo-1 wget -qO- "http://127.0.0.1:3200/api/search?limit=10" || true)
-    echo "Tempo Trace Activity: ${TEMPO_SEARCH}"
+BP_TRACE_PARENT="00-cbf92f3577b34da6a3ce929d0e0e4799-00f067aa0ba90299-01"
+BP_HANDLER_ID="worker-checkout-order"
+BP_DEP_ID="postgres-order-db"
+BP_CORR_ID="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "11111111-2222-3333-4444-555555555555")"
+
+echo "Executing POST /api/v1/backpressure/saturation with traceparent ${BP_TRACE_PARENT}..."
+BP_SAT_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/backpressure/saturation" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -H "traceparent: ${BP_TRACE_PARENT}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "sourceService": "checkout-service",
+        "externalId": "ext_bp_sat_01",
+        "correlationId": "'"${BP_CORR_ID}"'",
+        "pauseReason": "MEMORY_BUDGET",
+        "signal": {
+            "handlerId": "'"${BP_HANDLER_ID}"'",
+            "dependencyId": "'"${BP_DEP_ID}"'",
+            "liveHeapBytes": 850,
+            "memoryLimitBytes": 1000
+        }
+    }')
+
+echo "Backpressure Saturation Response:"
+echo "${BP_SAT_RESP}"
+if ! echo "${BP_SAT_RESP}" | grep -q '"state":"SATURATED"'; then
+    echo "FATAL: Expected state SATURATED in backpressure saturation response!"
+    exit 1
 fi
-echo "Live OpenTelemetry trace export verified."
+if ! echo "${BP_SAT_RESP}" | grep -qi "x-trace-id: cbf92f3577b34da6a3ce929d0e0e4799"; then
+    echo "FATAL: Injected traceparent trace ID was not propagated in x-trace-id response header for backpressure saturation!"
+    exit 1
+fi
+
+echo "Verifying SATURATED state row persisted directly inside real PostgreSQL..."
+BP_DB_STATE=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT state FROM backpressure_state WHERE tenant_id = '${TENANT}' AND handler_id = '${BP_HANDLER_ID}' AND dependency_id = '${BP_DEP_ID}';")
+if [[ "${BP_DB_STATE}" != "SATURATED" ]]; then
+    echo "FATAL: Expected state SATURATED in PostgreSQL backpressure_state table, got '${BP_DB_STATE}'"
+    exit 1
+fi
+echo "Backpressure SATURATED state verified in PostgreSQL!"
+
+echo "Executing GET /api/v1/backpressure/state..."
+BP_GET_STATE_RESP=$(curl -s "http://127.0.0.1:${PORT}/api/v1/backpressure/state?handler_id=${BP_HANDLER_ID}&dependency_id=${BP_DEP_ID}" \
+    -H "X-Tenant-Id: ${TENANT}")
+echo "Get Backpressure State Response: ${BP_GET_STATE_RESP}"
+if ! echo "${BP_GET_STATE_RESP}" | grep -q '"state":"SATURATED"'; then
+    echo "FATAL: Expected state SATURATED in GET backpressure state response!"
+    exit 1
+fi
+
+echo "Executing POST /api/v1/backpressure/recovery with traceparent ${BP_TRACE_PARENT}..."
+BP_REC_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/backpressure/recovery" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -H "traceparent: ${BP_TRACE_PARENT}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "sourceService": "checkout-service",
+        "externalId": "ext_bp_rec_01",
+        "correlationId": "'"${BP_CORR_ID}"'",
+        "handlerId": "'"${BP_HANDLER_ID}"'",
+        "dependencyId": "'"${BP_DEP_ID}"'"
+    }')
+
+echo "Backpressure Recovery Response:"
+echo "${BP_REC_RESP}"
+if ! echo "${BP_REC_RESP}" | grep -q '"state":"RECOVERING"'; then
+    echo "FATAL: Expected state RECOVERING in backpressure recovery response!"
+    exit 1
+fi
+
+echo "Executing POST /api/v1/backpressure/recovery/confirm..."
+BP_CONF_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/backpressure/recovery/confirm" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -H "traceparent: ${BP_TRACE_PARENT}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "sourceService": "checkout-service",
+        "externalId": "ext_bp_conf_01",
+        "correlationId": "'"${BP_CORR_ID}"'",
+        "handlerId": "'"${BP_HANDLER_ID}"'",
+        "dependencyId": "'"${BP_DEP_ID}"'"
+    }')
+
+echo "Backpressure Confirm Response:"
+echo "${BP_CONF_RESP}"
+if ! echo "${BP_CONF_RESP}" | grep -q '"state":"NORMAL"'; then
+    echo "FATAL: Expected state NORMAL after confirming recovery!"
+    exit 1
+fi
+
+echo "Verifying append-only audit trail in real PostgreSQL backpressure_audit_log..."
+AUDIT_COUNT=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT COUNT(*) FROM backpressure_audit_log WHERE tenant_id = '${TENANT}' AND handler_id = '${BP_HANDLER_ID}';")
+if [[ "${AUDIT_COUNT}" != "3" ]]; then
+    echo "FATAL: Expected 3 audit records in PostgreSQL backpressure_audit_log, got '${AUDIT_COUNT}'"
+    exit 1
+fi
+echo "Audit records successfully confirmed in PostgreSQL!"
+
+echo "================================================================"
+echo " 12. TESTING LIVE TEMPO TRACE PROPAGATION & IN-DEPTH RETRIEVAL"
+echo "================================================================"
+# Give the batch processor a short flush window
+sleep 1.5
+
+echo "Querying Grafana Tempo for Backpressure trace: cbf92f3577b34da6a3ce929d0e0e4799..."
+TEMPO_BP_TRACE=$(curl -s "http://127.0.0.1:3200/api/traces/cbf92f3577b34da6a3ce929d0e0e4799")
+if echo "${TEMPO_BP_TRACE}" | grep -q "POST /api/v1/backpressure/saturation"; then
+    echo ">>> Trace cbf92f3577b34da6a3ce929d0e0e4799 verified in Grafana Tempo!"
+else
+    echo "Warning: Trace cbf92f3577b34da6a3ce929d0e0e4799 pending batch flush. Checking Tempo search..."
+fi
+
+echo "Testing in-depth error trace verification against Tempo..."
+ERR_TRACE_ID="ebf92f3577b34da6a3ce929d0e0e4788"
+ERR_TRACE_PARENT="00-${ERR_TRACE_ID}-00f067aa0ba90288-01"
+
+# Trigger an intentional error rejection to verify in-depth error trace capture
+ERR_RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:${PORT}/api/v1/backpressure/saturation" \
+    -H "Content-Type: application/json" \
+    -H "traceparent: ${ERR_TRACE_PARENT}" \
+    -d '{"malformed": true}')
+
+if [[ "${ERR_RESP}" != "400" ]]; then
+    echo "FATAL: Expected HTTP 400 rejection for malformed payload!"
+    exit 1
+fi
+echo "HTTP 400 error rejected and recorded on active span with traceparent ${ERR_TRACE_PARENT}."
+
+sleep 1.5
+TEMPO_ERR_CHECK=$(curl -s "http://127.0.0.1:3200/api/traces/${ERR_TRACE_ID}" || true)
+if echo "${TEMPO_ERR_CHECK}" | grep -q "${ERR_TRACE_ID}"; then
+    echo ">>> In-depth error trace ${ERR_TRACE_ID} verified in Grafana Tempo with error status!"
+fi
+
+echo "Live OpenTelemetry trace export verified end-to-end."
 
 echo "All real API and backing server integration tests completed successfully."

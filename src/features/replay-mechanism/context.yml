@@ -1,2 +1,49 @@
 feature: replay-mechanism
-mode: stateless_hexagonal
+owner: platform-team
+description: >
+  Historical event replay engine — orchestrates replay runs across scopes
+  (GLOBAL_TOPIC, TIME_WINDOW, AGGREGATE_SET), enforces dedicated ephemeral consumer groups
+  (RP-01), suppresses or reconciles outbound side-effects via Effect Gateway (RP-02, RP-03),
+  and coordinates promotion and cutover without live stream disruption.
+
+boundaries:
+  - Replay state and effect logs are scoped per tenant_id.
+  - Replay runner never shares consumer group id with live production groups (RP-01).
+  - External effects default to SUPPRESS in REBUILD, HYDRATE, and FORENSIC modes (RP-02).
+  - All SQL queries reside in infrastructure/queries/replay.queries.go as Flow* constants.
+  - Zero inline SQL; zero inline comments.
+
+ports:
+  driven:
+    - ReplayRepositoryPort (infrastructure/ports/replay.repository.port.go)
+  driving:
+    - ReplayService methods exposed via ReplayFeature facade (index.go)
+
+state_machine:
+  initial: INITIALIZING
+  transitions:
+    - from: INITIALIZING   event: START_STREAMING    to: STREAMING
+    - from: STREAMING      event: FOLLOW_LIVE        to: FOLLOWING
+    - from: STREAMING      event: CATCH_UP_REACHED   to: CAUGHT_UP
+    - from: FOLLOWING      event: CATCH_UP_REACHED   to: CAUGHT_UP
+    - from: CAUGHT_UP       event: PROMOTE_WRITER     to: PROMOTED
+    - from: PROMOTED       event: COMPLETE_CUTOVER   to: COMPLETED
+    - from: INITIALIZING   event: ABORT_RUN          to: ABORTED
+    - from: STREAMING      event: ABORT_RUN          to: ABORTED
+    - from: FOLLOWING      event: ABORT_RUN          to: ABORTED
+    - from: CAUGHT_UP       event: ABORT_RUN          to: ABORTED
+    - from: PROMOTED       event: ABORT_RUN          to: ABORTED
+
+invariants:
+  - RP-01: Replay never touches production consumer group
+  - RP-02: Effects fail closed (SUPPRESS by default)
+  - RP-03: Single effect path via Effect Gateway
+  - RP-06: Deterministic handlers with injected event time
+  - RP-07: Write ownership hands off; never dropped
+  - RP-08: Rollback stays cheap via dual-run observation window
+  - RP-10: Run manifest is immutable and complete
+
+database_tables:
+  - replay_run           (migration 0011)
+  - replay_effect_log    (migration 0011)
+  - replay_audit_log     (migration 0011)

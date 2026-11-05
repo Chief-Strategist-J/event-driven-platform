@@ -34,6 +34,9 @@ import (
 	bpAdapters "event-driven-platform/src/features/backpressure/infrastructure/adapters"
 	bpPorts "event-driven-platform/src/features/backpressure/infrastructure/ports"
 	bpService "event-driven-platform/src/features/backpressure/service"
+	replayAdapters "event-driven-platform/src/features/replay-mechanism/infrastructure/adapters"
+	replayPorts "event-driven-platform/src/features/replay-mechanism/infrastructure/ports"
+	replayService "event-driven-platform/src/features/replay-mechanism/service"
 	consumerAdapters "event-driven-platform/src/features/idempotent-consumers/infrastructure/adapters"
 	consumerService "event-driven-platform/src/features/idempotent-consumers/service"
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
@@ -61,12 +64,19 @@ func describeService() chassis.ServiceSpec {
 		DependsOn: []chassis.DownstreamDependency{},
 		Contracts: chassis.Contracts{
 			APISchemas:     []string{"src/api/contracts/openapi/v1.yaml"},
-			ProducedTopics: []string{},
-			ConsumedTopics: []string{},
+			ProducedTopics: []string{
+				"platform.events.outbox",
+				"platform.events.retry",
+				"platform.events.dlq",
+			},
+			ConsumedTopics: []string{
+				"platform.events.ingest",
+				"platform.events.retry",
+			},
 		},
 		Migrations: func() chassis.MigrationSet {
 			return chassis.MigrationSet{
-				Version: 2,
+				Version: 11,
 				Apply: func(ctx context.Context) error {
 					dbURL := os.Getenv("DATABASE_URL")
 					if dbURL == "" {
@@ -125,6 +135,8 @@ func describeService() chassis.ServiceSpec {
 			offsetSvc := offsetService.NewOffsetManagementService(offsetRepo)
 			bpRepo := bpAdapters.NewBackpressurePostgresRepositoryAdapter(db)
 			bpSvc := bpService.NewBackpressureService(bpRepo)
+			replayRepo := replayAdapters.NewReplayPostgresRepositoryAdapter(db)
+			replaySvc := replayService.NewReplayService(replayRepo)
 
 			return chassis.Services{
 				Registry: map[string]any{
@@ -140,6 +152,8 @@ func describeService() chassis.ServiceSpec {
 					"offsetService":     offsetSvc,
 					"bpRepo":            bpRepo,
 					"bpService":         bpSvc,
+					"replayRepo":        replayRepo,
+					"replayService":     replaySvc,
 				},
 			}, nil
 		},
@@ -197,6 +211,13 @@ func describeService() chassis.ServiceSpec {
 			if bpRepo, exists := instances["bpRepo"].(bpPorts.BackpressureRepositoryPort); exists && bpRepo != nil {
 				routers.RegisterBackpressureRoutes(router, bpRepo)
 			}
+			if replayRepo, exists := instances["replayRepo"].(replayPorts.ReplayRepositoryPort); exists && replayRepo != nil {
+				routers.RegisterReplayRoutes(router, replayRepo)
+			}
+		},
+		RegisterConsumers: func(_ any, _ chassis.Services) {},
+		Jobs: func() []chassis.JobSpec {
+			return []chassis.JobSpec{}
 		},
 		RegisterDaemons: func(lifecycle *chassis.Lifecycle, services chassis.Services) {
 			instances, ok := services.Registry.(map[string]any)

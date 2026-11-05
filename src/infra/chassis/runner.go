@@ -104,6 +104,17 @@ func Run(spec ServiceSpec, args []string, env []string) int {
 		if app.Spec.RegisterDaemons != nil {
 			app.Spec.RegisterDaemons(lifecycle, app.Services)
 		}
+		if shutdownTracer != nil {
+			lifecycle.AddComponent("telemetry-flusher", func(ctx context.Context) error {
+				<-ctx.Done()
+				shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				log.Println("Flushing telemetry spans before process termination...")
+				return shutdownTracer(shutCtx)
+			}, func(_ context.Context) error {
+				return nil
+			})
+		}
 	case "migrate":
 		if spec.Migrations != nil {
 			mig := spec.Migrations()
