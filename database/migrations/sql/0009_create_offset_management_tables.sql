@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS consumer_stored_offset (
     log_end_offset BIGINT NOT NULL DEFAULT 0,
     lag BIGINT NOT NULL DEFAULT 0,
     commit_epoch BIGINT NOT NULL DEFAULT 1,
+    version BIGINT NOT NULL DEFAULT 1,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -86,6 +87,7 @@ BEGIN
     IF OLD.id <> NEW.id OR OLD.public_id <> NEW.public_id OR OLD.tenant_id <> NEW.tenant_id OR OLD.created_at <> NEW.created_at THEN
         RAISE EXCEPTION 'Immutable identifier modification rejected on consumer_stored_offset';
     END IF;
+    NEW.version = OLD.version + 1;
     NEW.updated_at = CURRENT_TIMESTAMP;
     RETURN NEW;
 END;

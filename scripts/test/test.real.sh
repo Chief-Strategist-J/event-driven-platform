@@ -623,7 +623,86 @@ fi
 echo "Audit records successfully confirmed in PostgreSQL!"
 
 echo "================================================================"
-echo " 12. TESTING LIVE TEMPO TRACE PROPAGATION & IN-DEPTH RETRIEVAL"
+echo " 12. TESTING REAL REPLAY MECHANISM & EFFECT GATEWAY"
+echo "================================================================"
+REPLAY_TRACE_PARENT="00-dbf92f3577b34da6a3ce929d0e0e4755-00f067aa0ba90255-01"
+REPLAY_CORR_ID="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || echo "22222222-3333-4444-5555-666666666666")"
+
+echo "Executing POST /api/v1/replay/runs with traceparent ${REPLAY_TRACE_PARENT}..."
+REPLAY_CREATE_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/replay/runs" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -H "traceparent: ${REPLAY_TRACE_PARENT}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "sourceService": "order-service",
+        "externalId": "ext_rpl_real_01",
+        "correlationId": "'"${REPLAY_CORR_ID}"'",
+        "targetProjection": "orders_real_view",
+        "mode": "REBUILD",
+        "scope": "GLOBAL_TOPIC",
+        "startOffset": 0,
+        "endOffset": 500
+    }')
+
+echo "Replay Run Creation Response:"
+echo "${REPLAY_CREATE_RESP}"
+if ! echo "${REPLAY_CREATE_RESP}" | grep -q '"state":"INITIALIZING"'; then
+    echo "FATAL: Expected state INITIALIZING in replay creation response!"
+    exit 1
+fi
+if ! echo "${REPLAY_CREATE_RESP}" | grep -qi "x-trace-id: dbf92f3577b34da6a3ce929d0e0e4755"; then
+    echo "FATAL: Injected traceparent trace ID was not propagated in x-trace-id header for replay run!"
+    exit 1
+fi
+
+REPLAY_RUN_ID=$(echo "${REPLAY_CREATE_RESP}" | grep -o '"id":"[^"]*' | head -n 1 | cut -d'"' -f4)
+echo "Created Replay Run ID: ${REPLAY_RUN_ID}"
+
+echo "Executing POST /api/v1/replay/runs/start..."
+REPLAY_START_RESP=$(curl -s -X POST "http://127.0.0.1:${PORT}/api/v1/replay/runs/start" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "runId": "'"${REPLAY_RUN_ID}"'"
+    }')
+echo "Replay Start Streaming Response: ${REPLAY_START_RESP}"
+if ! echo "${REPLAY_START_RESP}" | grep -q '"state":"STREAMING"'; then
+    echo "FATAL: Expected state STREAMING in start replay response!"
+    exit 1
+fi
+
+echo "Executing POST /api/v1/replay/effects/evaluate (Testing Effect Gateway)..."
+EFFECT_RESP=$(curl -s -X POST "http://127.0.0.1:${PORT}/api/v1/replay/effects/evaluate" \
+    -H "Content-Type: application/json" \
+    -H "X-Tenant-Id: ${TENANT}" \
+    -d '{
+        "tenantId": "'"${TENANT}"'",
+        "sourceService": "order-service",
+        "externalId": "ext_eff_real_01",
+        "correlationId": "'"${REPLAY_CORR_ID}"'",
+        "runId": "'"${REPLAY_RUN_ID}"'",
+        "effectType": "EXTERNAL_PAYMENT",
+        "idempotencyKey": "pay_real_idem_01",
+        "payloadDigest": "sha256-abcdef"
+    }')
+echo "Effect Gateway Decision: ${EFFECT_RESP}"
+if ! echo "${EFFECT_RESP}" | grep -q '"decision":"SUPPRESSED"'; then
+    echo "FATAL: Expected SUPPRESSED effect decision during REBUILD mode!"
+    exit 1
+fi
+
+echo "Verifying replay_run state in real PostgreSQL..."
+RPL_DB_STATE=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT state FROM replay_run WHERE tenant_id = '${TENANT}' AND id = '${REPLAY_RUN_ID}';")
+if [[ "${RPL_DB_STATE}" != "STREAMING" ]]; then
+    echo "FATAL: Expected state STREAMING in PostgreSQL replay_run table, got '${RPL_DB_STATE}'"
+    exit 1
+fi
+echo "Replay Run verified in PostgreSQL!"
+
+echo "================================================================"
+echo " 13. TESTING LIVE TEMPO TRACE PROPAGATION & IN-DEPTH RETRIEVAL"
 echo "================================================================"
 # Give the batch processor a short flush window
 sleep 1.5

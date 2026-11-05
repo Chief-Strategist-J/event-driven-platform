@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -42,6 +41,7 @@ import (
 	outboxAdapters "event-driven-platform/src/features/transactional-outbox/infrastructure/adapters"
 	outboxService "event-driven-platform/src/features/transactional-outbox/service"
 	"event-driven-platform/src/infra/chassis"
+	"event-driven-platform/src/infra/config"
 	"event-driven-platform/src/infra/database"
 )
 
@@ -78,11 +78,11 @@ func describeService() chassis.ServiceSpec {
 			return chassis.MigrationSet{
 				Version: 11,
 				Apply: func(ctx context.Context) error {
-					dbURL := os.Getenv("DATABASE_URL")
-					if dbURL == "" {
-						return nil
+					cfg, err := config.LoadConfig("")
+					if err != nil {
+						return err
 					}
-					db, err := sql.Open("postgres", dbURL)
+					db, err := sql.Open("postgres", cfg.Database.URL)
 					if err != nil {
 						return err
 					}
@@ -92,18 +92,15 @@ func describeService() chassis.ServiceSpec {
 			}
 		},
 		BuildServices: func(deps chassis.Dependencies) (chassis.Services, error) {
-			schemaRegistryURL := os.Getenv("SCHEMA_REGISTRY_URL")
-			if schemaRegistryURL == "" {
-				schemaRegistryURL = "http://127.0.0.1:8082/apis/registry/v2"
+			cfg, err := config.LoadConfig("")
+			if err != nil {
+				return chassis.Services{}, fmt.Errorf("failed to load validated config: %w", err)
 			}
-			schemaRepo := schemaAdapters.NewApicurioSchemaRegistryAdapter(schemaRegistryURL)
+
+			schemaRepo := schemaAdapters.NewApicurioSchemaRegistryAdapter(cfg.SchemaRegistry.URL)
 			schemaSvc := schemaService.NewSchemaRegistryService(schemaRepo)
 
-			dbURL := os.Getenv("DATABASE_URL")
-			if dbURL == "" {
-				dbURL = "postgres://postgres:postgres@127.0.0.1:5432/event_store?sslmode=disable"
-			}
-			db, err := sql.Open("postgres", dbURL)
+			db, err := sql.Open("postgres", cfg.Database.URL)
 			if err != nil {
 				return chassis.Services{}, fmt.Errorf("failed connecting to postgres: %w", err)
 			}
@@ -117,11 +114,7 @@ func describeService() chassis.ServiceSpec {
 			groupRepo := groupAdapters.NewPostgresConsumerGroupsAdapter(db)
 
 			var producer producers.ProducerPort
-			kafkaBrokersEnv := os.Getenv("KAFKA_BROKERS")
-			if kafkaBrokersEnv == "" {
-				kafkaBrokersEnv = "127.0.0.1:9092"
-			}
-			brokers := strings.Split(kafkaBrokersEnv, ",")
+			brokers := config.GetBrokerList(cfg.Broker.KafkaBrokers)
 			producer = kafkaProducer.NewKafkaProducerAdapter(kafkaProducer.DefaultKafkaProducerConfig(brokers))
 
 			outboxSvc := outboxService.NewOutboxService(outboxRepo, producer)
