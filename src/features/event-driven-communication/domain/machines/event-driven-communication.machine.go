@@ -43,3 +43,4 @@ func (m *SagaStateMachine) TransitionStep(
 	next.State = contracts.SagaStateCompensating
 	return next, true, nil
 }
+

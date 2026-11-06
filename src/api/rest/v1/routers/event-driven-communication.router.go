@@ -17,3 +17,4 @@ func RegisterEventCommunicationRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /api/v1/communication/sagas/compensate", h.HandleTriggerCompensation)
 	mux.HandleFunc("POST /api/v1/communication/commands/dispatch", h.HandleDispatchAsyncCommand)
 }
+

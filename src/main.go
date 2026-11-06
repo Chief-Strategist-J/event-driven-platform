@@ -220,6 +220,7 @@ func describeService() chassis.ServiceSpec {
 				routers.RegisterEncryptionRoutes(router, dbConn)
 				routers.RegisterEventAuthorizationRoutes(router, dbConn)
 				routers.RegisterDomainEventRoutes(router, dbConn)
+				routers.RegisterEventOperationsDashboardRoutes(router, dbConn)
 				routers.RegisterEventCommunicationRoutes(router, dbConn)
 			}
 		},

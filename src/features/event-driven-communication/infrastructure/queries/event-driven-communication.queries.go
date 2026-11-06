@@ -81,3 +81,4 @@ INSERT INTO async_command_reply_ledger (
 )
 ON CONFLICT (tenant_id, command_id) DO NOTHING;
 `
+

@@ -3014,3 +3014,70 @@ paths:
           description: Command dispatched to outbox
         "400":
           description: Validation error
+
+  /api/v1/ops/hops/report:
+    post:
+      summary: Report Telemetry and Lag for Pipeline Hop
+      operationId: reportHopTelemetry
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - external_id
+                - flow_name
+                - hop_code
+                - tier
+                - status
+                - lag_seconds
+                - oldest_held_age_seconds
+                - runbook_url
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                flow_name: { type: string }
+                hop_code: { type: string, enum: [H1_OUTBOX, H2_RELAY, H3_KAFKA, H4_CONSUMER, H5_AUTH_VIEW, H6_DERIVED_STORE] }
+                tier: { type: string, enum: [T0, T1, T2] }
+                status: { type: string, enum: [OK, LAGGING, STALLED, STOPPED, PAUSED, UNKNOWN] }
+                pause_reason: { type: string, enum: [NONE, BREAKER_OPEN, BACKPRESSURE, OPERATOR_HALT, REBALANCE, CORRUPT_HEAD] }
+                lag_seconds: { type: number }
+                oldest_held_age_seconds: { type: number }
+                runbook_url: { type: string }
+      responses:
+        "200":
+          description: Hop telemetry recorded
+        "400":
+          description: Validation error
+
+  /api/v1/ops/triage/localize:
+    post:
+      summary: Localize Incident Bottleneck across Flow Hops
+      operationId: triageFlow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - external_id
+                - flow_name
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                flow_name: { type: string }
+      responses:
+        "200":
+          description: Triage localization outcome
+        "404":
+          description: Flow not found

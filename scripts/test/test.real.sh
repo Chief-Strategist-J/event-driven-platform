@@ -1592,4 +1592,69 @@ if [[ "${DB_AGG_VERSION}" != "1" ]]; then
 fi
 echo "Domain Event Design verified in PostgreSQL!"
 
+echo "================================================================"
+echo " 24. TESTING REAL EVENT OPERATIONS DASHBOARD & INCIDENT TRIAGE"
+echo "================================================================"
+OPS_FLOW="checkout_flow_$(date +%s)"
+
+echo "Reporting H4 Consumer paused hop via POST /api/v1/ops/hops/report..."
+HOP_REP_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/ops/hops/report" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "checkout-worker",
+        "external_id": "ext_hop_rep_01",
+        "correlation_id": "'$(uuidgen)'",
+        "flow_name": "'"${OPS_FLOW}"'",
+        "hop_code": "H4_CONSUMER",
+        "tier": "T0",
+        "status": "PAUSED",
+        "pause_reason": "BACKPRESSURE",
+        "lag_seconds": 45.5,
+        "oldest_held_age_seconds": 12.0,
+        "runbook_url": "https://wiki.platform.local/ops/backpressure"
+    }')
+echo "Hop Report Response:"
+echo "${HOP_REP_RESP}"
+if ! echo "${HOP_REP_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for reporting hop telemetry!"
+    exit 1
+fi
+
+echo "Triaging broken flow via POST /api/v1/ops/triage/localize..."
+TRIAGE_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/ops/triage/localize" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "ops-dashboard",
+        "external_id": "ext_triage_01",
+        "correlation_id": "'$(uuidgen)'",
+        "incident_id": "inc_chk_99",
+        "flow_name": "'"${OPS_FLOW}"'",
+        "triaged_by": "oncall_sre@company.org"
+    }')
+echo "Triage Response:"
+echo "${TRIAGE_RESP}"
+if ! echo "${TRIAGE_RESP}" | grep -q '"localized_hop":"H4_CONSUMER"'; then
+    echo "FATAL: Expected localized hop H4_CONSUMER in triage response!"
+    exit 1
+fi
+if ! echo "${TRIAGE_RESP}" | grep -q 'c_ctl_action_link'; then
+    echo "FATAL: Expected C-CTL action link in triage response!"
+    exit 1
+fi
+
+echo "Verifying ops pipeline hop and triage logs in PostgreSQL..."
+DB_HOP_STATUS=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT status FROM ops_pipeline_hop_ledger WHERE tenant_id = '${MT_TENANT}' AND flow_name = '${OPS_FLOW}' AND hop_code = 'H4_CONSUMER';")
+if [[ "${DB_HOP_STATUS}" != "PAUSED" ]]; then
+    echo "FATAL: Expected hop status in DB to be PAUSED, got '${DB_HOP_STATUS}'"
+    exit 1
+fi
+DB_ITL_COUNT=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT count(*) FROM ops_incident_triage_log WHERE tenant_id = '${MT_TENANT}' AND incident_id = 'inc_chk_99';")
+if [[ "${DB_ITL_COUNT}" != "1" ]]; then
+    echo "FATAL: Expected 1 triage log in ops_incident_triage_log, got '${DB_ITL_COUNT}'"
+    exit 1
+fi
+echo "Event Operations Dashboard verified in real PostgreSQL!"
+
 echo "All real API and backing server integration tests completed successfully."

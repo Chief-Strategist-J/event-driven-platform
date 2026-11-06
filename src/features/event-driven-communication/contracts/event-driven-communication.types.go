@@ -118,3 +118,4 @@ type AsyncCommandReply struct {
 	ReplyPayload  string         `json:"reply_payload"`
 	CreatedAt     time.Time      `json:"created_at"`
 }
+

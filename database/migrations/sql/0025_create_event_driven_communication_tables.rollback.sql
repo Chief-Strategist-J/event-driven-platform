@@ -8,3 +8,4 @@ DROP TABLE IF EXISTS async_command_reply_ledger;
 DROP TABLE IF EXISTS saga_step_ledger;
 DROP TABLE IF EXISTS saga_instance_ledger;
 DROP TABLE IF EXISTS saga_definition_ledger;
+

@@ -100,3 +100,4 @@ func TestEventCommunication_PostgresLifecycle(t *testing.T) {
 	assert.Equal(t, 1, stepRes.NextStepIndex)
 	assert.Equal(t, contracts.SagaStateInProgress, stepRes.SagaState)
 }
+

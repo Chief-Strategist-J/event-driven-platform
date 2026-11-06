@@ -139,3 +139,4 @@ DROP TRIGGER IF EXISTS trg_async_reply_no_update ON async_command_reply_ledger;
 CREATE TRIGGER trg_async_reply_no_update
     BEFORE UPDATE OR DELETE ON async_command_reply_ledger
     FOR EACH ROW EXECUTE FUNCTION trg_prevent_async_reply_mutation();
+

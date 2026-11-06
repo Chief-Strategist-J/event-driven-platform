@@ -287,3 +287,4 @@ func (s *EventCommunicationService) DispatchAsyncCommand(
 		ReplyToTopic: req.ReplyToTopic,
 	}, nil
 }
+

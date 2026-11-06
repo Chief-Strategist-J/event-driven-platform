@@ -11,3 +11,4 @@ func NewService(db *sql.DB) *service.EventCommunicationService {
 	repo := adapters.NewPostgresEventCommunicationAdapter(db)
 	return service.NewEventCommunicationService(repo)
 }
+

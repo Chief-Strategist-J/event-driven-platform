@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS ops_incident_triage_log (
     flow_name VARCHAR(128) NOT NULL,
     localized_hop VARCHAR(32) NOT NULL,
     severity VARCHAR(16) NOT NULL,
-    triage_action VARCHAR(64) NOT NULL,
+    triage_action VARCHAR(256) NOT NULL,
     c_ctl_action_link VARCHAR(256) NOT NULL,
     triaged_by VARCHAR(128) NOT NULL,
     triaged_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,

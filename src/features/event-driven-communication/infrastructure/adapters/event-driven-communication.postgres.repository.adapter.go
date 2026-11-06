@@ -389,3 +389,4 @@ func (a *PostgresEventCommunicationAdapter) SaveCommandReply(
 	}
 	return nil
 }
+

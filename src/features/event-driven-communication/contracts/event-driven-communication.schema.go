@@ -63,3 +63,4 @@ type DispatchAsyncCommandResult struct {
 	Status       string `json:"status"`
 	ReplyToTopic string `json:"reply_to_topic"`
 }
+

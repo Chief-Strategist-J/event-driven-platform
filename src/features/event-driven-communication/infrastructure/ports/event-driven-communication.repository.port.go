@@ -31,3 +31,4 @@ type EventCommunicationRepositoryPort interface {
 	UpdateStepState(ctx context.Context, params UpdateStepParams) error
 	SaveCommandReply(ctx context.Context, reply contracts.AsyncCommandReply) error
 }
+
