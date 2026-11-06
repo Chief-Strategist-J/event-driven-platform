@@ -40,3 +40,4 @@ Event-driven distributed architectures stream and store personally identifiable 
 ## Consequences
 - **Positive**: Strict GDPR/CCPA crypto-shredding compliance on append-only streams, zero cross-subject ciphertext transplantation, bounded KMS API overhead, explicit error classification.
 - **Negative**: Added CPU overhead for AES-256-GCM AEAD operations, reduced compression ratios for encrypted message fields, blind index management overhead.
+

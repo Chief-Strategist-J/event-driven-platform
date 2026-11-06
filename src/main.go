@@ -218,6 +218,8 @@ func describeService() chassis.ServiceSpec {
 				routers.RegisterSchemaEvolutionRoutes(router, dbConn)
 				routers.RegisterAuditTrailRoutes(router, dbConn)
 				routers.RegisterEncryptionRoutes(router, dbConn)
+				routers.RegisterEventAuthorizationRoutes(router, dbConn)
+				routers.RegisterDomainEventRoutes(router, dbConn)
 			}
 		},
 		RegisterConsumers: func(_ any, _ chassis.Services) {},

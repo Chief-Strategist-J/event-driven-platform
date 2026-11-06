@@ -2696,3 +2696,201 @@ paths:
           description: Keyed blind index hash returned
         "400":
           description: Validation error
+
+  /api/v1/auth/policies:
+    post:
+      summary: Register Access Control Policy
+      operationId: createAuthorizationPolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - principal_type
+                - principal_id
+                - resource_type
+                - resource_pattern
+                - resource_name
+                - operation
+                - permission
+              properties:
+                tenant_id: { type: string }
+                principal_type: { type: string, enum: [USER, WORKLOAD, SERVICE] }
+                principal_id: { type: string }
+                resource_type: { type: string, enum: [TOPIC, CONSUMER_GROUP] }
+                resource_pattern: { type: string, enum: [LITERAL, PREFIX] }
+                resource_name: { type: string }
+                operation: { type: string, enum: [READ, WRITE, ADMIN] }
+                permission: { type: string, enum: [ALLOW, DENY] }
+      responses:
+        "201":
+          description: Policy registered successfully
+        "400":
+          description: Validation error
+
+  /api/v1/auth/evaluate:
+    post:
+      summary: Evaluate Principal Access Control
+      operationId: evaluateAuthorizationAccess
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - principal_id
+                - resource_type
+                - resource_name
+                - operation
+              properties:
+                tenant_id: { type: string }
+                principal_id: { type: string }
+                resource_type: { type: string, enum: [TOPIC, CONSUMER_GROUP] }
+                resource_name: { type: string }
+                operation: { type: string, enum: [READ, WRITE, ADMIN] }
+      responses:
+        "200":
+          description: Access allowed
+        "403":
+          description: Access denied
+
+  /api/v1/domain-events/envelope/build:
+    post:
+      summary: Build and Commit Canonical Domain Event Envelope
+      operationId: buildCanonicalEnvelope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - event_type
+                - aggregate_type
+                - aggregate_id
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                event_type: { type: string }
+                aggregate_type: { type: string }
+                aggregate_id: { type: string }
+                expected_version: { type: integer }
+                version_increment: { type: integer }
+                effective_at: { type: string, format: date-time }
+                causation_id: { type: string }
+                correlation_id: { type: string }
+                causation_depth: { type: integer }
+                transaction_group_id: { type: string }
+                group_size: { type: integer }
+                payload: { type: object }
+      responses:
+        "200":
+          description: Canonical envelope built and aggregate version reserved
+        "400":
+          description: Invalid event type syntax, CRUD verb, or causal depth
+        "409":
+          description: OCC version conflict on aggregate root
+        "422":
+          description: Aggregate root is in terminal closed state
+
+  /api/v1/domain-events/catalog:
+    post:
+      summary: Register Approved Domain Event in Catalog
+      operationId: registerCatalogEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - event_type
+                - owning_aggregate
+                - semantics_class
+                - visibility
+                - pii_classification
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                event_type: { type: string }
+                owning_aggregate: { type: string }
+                semantics_class: { type: string, enum: [STATE, DELTA, NOTIFICATION] }
+                visibility: { type: string, enum: [PRIVATE, PUBLIC] }
+                pii_classification: { type: string, enum: [NONE, CONFIDENTIAL, RESTRICTED] }
+                schema_fingerprint: { type: string }
+      responses:
+        "201":
+          description: Domain event registered in catalog
+        "400":
+          description: Validation error
+
+  /api/v1/domain-events/aggregates/reserve-version:
+    post:
+      summary: Atomically Reserve Monotonic Aggregate Version
+      operationId: reserveAggregateVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - aggregate_type
+                - aggregate_id
+                - expected_version
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                aggregate_type: { type: string }
+                aggregate_id: { type: string }
+                expected_version: { type: integer }
+                version_increment: { type: integer }
+                mark_terminal: { type: boolean }
+      responses:
+        "200":
+          description: Aggregate version reserved successfully
+        "409":
+          description: OCC conflict
+        "422":
+          description: Aggregate root is terminal
+
+  /api/v1/domain-events/causality/verify:
+    post:
+      summary: Verify Causal Lineage and Prevent Causal Loops
+      operationId: verifyCausalChain
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - event_id
+                - causation_id
+                - causation_depth
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                event_id: { type: string }
+                causation_id: { type: string }
+                causation_depth: { type: integer }
+                event_type: { type: string }
+                aggregate_id: { type: string }
+      responses:
+        "200":
+          description: Causal chain is valid without cycles
+        "422":
+          description: Causal loop or depth limit exceeded

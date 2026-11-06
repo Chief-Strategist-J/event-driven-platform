@@ -1322,4 +1322,212 @@ if [[ "${DB_AUD_COUNT}" != "1" ]]; then
 fi
 echo "Audit trail verified in PostgreSQL!"
 
+echo "================================================================"
+echo " 21. TESTING REAL ENVELOPE ENCRYPTION & CRYPTO-SHREDDING"
+echo "================================================================"
+ENC_SUB_ID="subject_$(date +%s)"
+ENC_AGG_ID="agg_$(date +%s)"
+
+echo "Executing POST /api/v1/encryption/encrypt for subject ${ENC_SUB_ID}..."
+ENC_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/encryption/encrypt" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "subject_id": "'"${ENC_SUB_ID}"'",
+        "aggregate_id": "'"${ENC_AGG_ID}"'",
+        "field_path": "customer.national_id",
+        "plaintext": "CONFIDENTIAL-SSN-999-00-1234"
+    }')
+echo "Encryption Response:"
+echo "${ENC_RESP}"
+if ! echo "${ENC_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for field encryption!"
+    exit 1
+fi
+
+ENC_CIPHERTEXT=$(echo "${ENC_RESP}" | grep -o '"ciphertext":"[^"]*' | cut -d'"' -f4)
+ENC_NONCE=$(echo "${ENC_RESP}" | grep -o '"nonce":"[^"]*' | cut -d'"' -f4)
+ENC_TAG=$(echo "${ENC_RESP}" | grep -o '"tag":"[^"]*' | cut -d'"' -f4)
+ENC_KEY_REF=$(echo "${ENC_RESP}" | grep -o '"key_ref":"[^"]*' | cut -d'"' -f4)
+
+if [ -z "${ENC_CIPHERTEXT}" ] || [ -z "${ENC_KEY_REF}" ]; then
+    echo "FATAL: Failed to extract ciphertext or key_ref from encryption response!"
+    exit 1
+fi
+echo "Field encrypted successfully with key_ref: ${ENC_KEY_REF}"
+
+echo "Executing POST /api/v1/encryption/decrypt before shredding..."
+DEC_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/encryption/decrypt" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "subject_id": "'"${ENC_SUB_ID}"'",
+        "aggregate_id": "'"${ENC_AGG_ID}"'",
+        "field_path": "customer.national_id",
+        "consumer_role": "DATA_READER",
+        "encrypted_value": {
+            "scheme_version": "v1-aes-256-gcm",
+            "key_ref": "'"${ENC_KEY_REF}"'",
+            "nonce": "'"${ENC_NONCE}"'",
+            "ciphertext": "'"${ENC_CIPHERTEXT}"'",
+            "tag": "'"${ENC_TAG}"'"
+        }
+    }')
+echo "Decryption Response:"
+echo "${DEC_RESP}"
+if ! echo "${DEC_RESP}" | grep -q 'CONFIDENTIAL-SSN-999-00-1234'; then
+    echo "FATAL: Expected decrypted plaintext to match original secret!"
+    exit 1
+fi
+echo "Decryption verified successfully!"
+
+echo "Executing POST /api/v1/encryption/blind-index..."
+BLIND_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/encryption/blind-index" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "field_class": "email",
+        "raw_value": "user.test@example.com"
+    }')
+echo "Blind Index Response:"
+echo "${BLIND_RESP}"
+if ! echo "${BLIND_RESP}" | grep -q 'blind_index_hash'; then
+    echo "FATAL: Expected blind index hash in response!"
+    exit 1
+fi
+
+echo "Executing POST /api/v1/encryption/erasure (GDPR RTBF crypto-shredding)..."
+SHRED_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/encryption/erasure" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "subject_id": "'"${ENC_SUB_ID}"'",
+        "reason": "GDPR_RTBF",
+        "requested_by": "dpo@company.org"
+    }')
+echo "Erasure Response:"
+echo "${SHRED_RESP}"
+if ! echo "${SHRED_RESP}" | grep -q 'SHREDDED'; then
+    echo "FATAL: Expected status SHREDDED in response!"
+    exit 1
+fi
+
+echo "Verifying that subsequent decryption yields ERASED..."
+POST_SHRED_DEC_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/encryption/decrypt" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "subject_id": "'"${ENC_SUB_ID}"'",
+        "aggregate_id": "'"${ENC_AGG_ID}"'",
+        "field_path": "customer.national_id",
+        "consumer_role": "DATA_READER",
+        "encrypted_value": {
+            "scheme_version": "v1-aes-256-gcm",
+            "key_ref": "'"${ENC_KEY_REF}"'",
+            "nonce": "'"${ENC_NONCE}"'",
+            "ciphertext": "'"${ENC_CIPHERTEXT}"'",
+            "tag": "'"${ENC_TAG}"'"
+        }
+    }')
+echo "Post-Shred Decryption Response:"
+echo "${POST_SHRED_DEC_RESP}"
+if ! echo "${POST_SHRED_DEC_RESP}" | grep -q 'ERASED'; then
+    echo "FATAL: Expected outcome ERASED after crypto-shredding!"
+    exit 1
+fi
+echo "Crypto-shredding verified: key permanently erased and PII unrecoverable!"
+
+echo "Verifying encryption and shredding ledgers in PostgreSQL..."
+DB_DEK_STATE=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT state FROM encryption_dek_ledger WHERE tenant_id = '${MT_TENANT}' AND subject_id = '${ENC_SUB_ID}';")
+if [[ "${DB_DEK_STATE}" != "SHREDDED" ]]; then
+    echo "FATAL: Expected DEK state in DB to be SHREDDED, got '${DB_DEK_STATE}'"
+    exit 1
+fi
+DB_CSA_COUNT=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT count(*) FROM crypto_shredding_audit_ledger WHERE tenant_id = '${MT_TENANT}' AND subject_id = '${ENC_SUB_ID}';")
+if [[ "${DB_CSA_COUNT}" != "1" ]]; then
+    echo "FATAL: Expected 1 audit log in crypto_shredding_audit_ledger, got '${DB_CSA_COUNT}'"
+    exit 1
+fi
+echo "PostgreSQL state and audit records verified for encryption!"
+
+echo "================================================================"
+echo " 22. TESTING REAL EVENT AUTHORIZATION & FAIL-CLOSED PBAC"
+echo "================================================================"
+AUTH_TOPIC="orders.customer.placed.v1"
+AUTH_PRINCIPAL="order-worker-service"
+
+echo "Executing POST /api/v1/auth/evaluate prior to policy provisioning (DEFAULT DENY)..."
+EVAL_DENY_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/auth/evaluate" \
+    -H "Content-Type: application/json" \
+    -H "X-User-ID: rogue_inbound_identity" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "real-test-suite",
+        "external_id": "ext_auth_eval_01",
+        "correlation_id": "'$(uuidgen)'",
+        "principal_id": "'"${AUTH_PRINCIPAL}"'",
+        "principal_type": "SERVICE",
+        "resource_type": "TOPIC",
+        "resource_name": "'"${AUTH_TOPIC}"'",
+        "operation": "PUBLISH"
+    }')
+echo "Default Deny Response:"
+echo "${EVAL_DENY_RESP}"
+if ! echo "${EVAL_DENY_RESP}" | grep -q '"decision":"DENIED"'; then
+    echo "FATAL: Expected decision DENIED under default deny!"
+    exit 1
+fi
+
+echo "Provisioning active ALLOW policy via POST /api/v1/auth/policies..."
+POLICY_PROV_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/auth/policies" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "real-test-suite",
+        "external_id": "ext_auth_pol_01",
+        "correlation_id": "'$(uuidgen)'",
+        "policy_name": "allow_order_worker_publish",
+        "principal_id": "'"${AUTH_PRINCIPAL}"'",
+        "principal_type": "SERVICE",
+        "resource_type": "TOPIC",
+        "resource_pattern": "orders.customer.*",
+        "operation": "PUBLISH",
+        "effect": "ALLOW"
+    }')
+echo "Policy Provision Response:"
+echo "${POLICY_PROV_RESP}"
+if ! echo "${POLICY_PROV_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for policy provisioning!"
+    exit 1
+fi
+
+echo "Re-evaluating POST /api/v1/auth/evaluate with active policy (EXPECT ALLOWED)..."
+EVAL_ALLOW_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/auth/evaluate" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "real-test-suite",
+        "external_id": "ext_auth_eval_02",
+        "correlation_id": "'$(uuidgen)'",
+        "principal_id": "'"${AUTH_PRINCIPAL}"'",
+        "principal_type": "SERVICE",
+        "resource_type": "TOPIC",
+        "resource_name": "'"${AUTH_TOPIC}"'",
+        "operation": "PUBLISH"
+    }')
+echo "Allow Evaluation Response:"
+echo "${EVAL_ALLOW_RESP}"
+if ! echo "${EVAL_ALLOW_RESP}" | grep -q '"decision":"ALLOWED"'; then
+    echo "FATAL: Expected decision ALLOWED after policy provisioning!"
+    exit 1
+fi
+
+echo "Verifying append-only auth audit records in PostgreSQL..."
+DB_AUTH_AUDIT_COUNT=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT count(*) FROM auth_audit_log WHERE tenant_id = '${MT_TENANT}' AND principal_id = '${AUTH_PRINCIPAL}';")
+if [[ "${DB_AUTH_AUDIT_COUNT}" -lt "2" ]]; then
+    echo "FATAL: Expected at least 2 audit entries in auth_audit_log, got '${DB_AUTH_AUDIT_COUNT}'"
+    exit 1
+fi
+echo "Event authorization verified in real PostgreSQL!"
+
 echo "All real API and backing server integration tests completed successfully."

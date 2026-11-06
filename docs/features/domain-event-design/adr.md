@@ -1,7 +1,7 @@
-# ADR: Standardized Domain Event Envelope, Monotonic UUIDv7, and Wire Formatting
+# ADR: Standardized Domain Event Envelope, Monotonic UUIDv7, and Causality Governance
 
 * **Status:** Accepted
-* **Date:** 2026-11-04
+* **Date:** 2026-11-06
 * **Deciders:** Lead Systems Architect & Platform Core Engineering
 * **Feature Scope:** `src/features/domain-event-design/`, `src/shared/types/`, and `messaging/engine/client/`
 
@@ -9,19 +9,22 @@
 
 ## 1. Context and Problem Statement
 
-Downstream consumers in an asynchronous event-driven system depend on strict invariants to preserve causal ordering, avoid duplicate effects, and maintain distributed traces across service boundaries. When domain events are defined with ad-hoc payloads or unformatted timestamps:
+Downstream consumers in an asynchronous event-driven system depend on strict invariants to preserve causal ordering, avoid duplicate effects, prevent infinite causal loops, and maintain distributed traces across service boundaries. When domain events are defined with ad-hoc payloads or unformatted timestamps:
 - Timezones mismatch and clock drift leads to erroneous out-of-order evaluations.
-- Causation and correlation IDs are lost, rendering root-cause analysis impossible.
+- Causation and correlation IDs are lost, rendering root-cause analysis and loop detection impossible.
 - Producers use CRUD verbs (`OrderUpdated`, `ItemDeleted`), turning events into anemic state notifications that leak internal persistence models instead of capturing immutable domain facts.
+- Multi-aggregate commands create race conditions where downstream consumers react to partial business transactions.
 
 ---
 
 ## 2. Decision Drivers
 
-* **Monotonic Chronological Ordering**: Event identifiers must be time-ordered at the boundary without distributed lock overhead.
-* **Strict Temporal Integrity**: Timestamps must be standardized in UTC RFC 3339 format to avoid timezone translation errors.
-* **Trace Context Propagation**: W3C traceparent and span identifiers must be embedded directly in the message envelope.
-* **Causality & Gap Detection**: Envelopes must enforce causation ID, correlation ID, tenant ID, and monotonic aggregate sequence numbers.
+* **Monotonic Chronological Ordering & Identity**: Event identifiers must be time-ordered at the boundary using UUIDv7 without distributed lock overhead.
+* **Gapless Aggregate Versioning (DE-02)**: Aggregate versions must increment monotonically ($v \to v+1$ or $v \to v+K$) enforced by an authoritative OCC lock ledger.
+* **Semantics Class Governance (DE-03)**: Every event type explicitly declares its semantics class (`STATE`, `DELTA`, `NOTIFICATION`).
+* **Fact-Time Reference Data (DE-04)**: Historical domain facts must include snapshot reference data at the time of the event (unit price, applied tax rate, currency) so consumers never look up mutable reference data.
+* **Causal Loop Detection**: Envelopes must enforce `causation_depth` and causal lineage tracking to abort recursive loops ($A \to B \to A$) at a bounded depth ($\le 16$).
+* **Multi-Aggregate Completeness Barrier**: Events emitted across multiple aggregates in one command declare `transaction_group_id` and `group_size` so consumers can wait for group completeness.
 
 ---
 
@@ -32,7 +35,7 @@ Downstream consumers in an asynchronous event-driven system depend on strict inv
 * **Option 2: CloudEvents Specification without Validation**
   - *Cons:* Generic attribute bag lacking strict platform rules (no aggregate sequence numbers, no enforced UUIDv7 validation, loose timestamp formats).
 * **Option 3: Hexagonal Event Envelope (`EventEnvelope[T any]`) with Strict Validation**
-  - *Pros:* Strongly typed generic envelope; validates UUIDv7, RFC 3339 UTC, positive aggregate sequence, and `<domain>.<aggregate>.<fact>.v<N>` naming syntax at deserialization time.
+  - *Pros:* Strongly typed generic envelope; validates UUIDv7, RFC 3339 UTC, gapless aggregate sequence, past-tense naming syntax, causation depth, and multi-aggregate groups at serialization time.
 
 ---
 
@@ -40,19 +43,28 @@ Downstream consumers in an asynchronous event-driven system depend on strict inv
 
 We selected **Option 3: Hexagonal Event Envelope (`EventEnvelope[T any]`) with Strict Validation**.
 
-### Envelope Structure (`src/shared/types/envelope.types.go`)
+### Envelope Structure (`src/features/domain-event-design/contracts/domain-event-design.types.go`)
 
 ```json
 {
   "event_id": "0194857b-7b2a-7963-8a9d-5a8b2413e001",
-  "type": "commerce.order.placed.v1",
+  "event_type": "commerce.order.placed.v1",
   "schema_version": "1.0.0",
+  "aggregate_type": "commerce.order",
   "aggregate_id": "ord_99812",
-  "aggregate_seq": 1,
-  "occurred_at": "2026-11-04T10:00:00.000000000Z",
+  "aggregate_version": 1,
+  "tenant_id": "tenant_enterprise_01",
+  "effective_at": "2026-11-06T16:00:00.000000000Z",
+  "recorded_at": "2026-11-06T16:00:00.000000000Z",
   "causation_id": "cmd_81238",
   "correlation_id": "req_019283",
-  "tenant_id": "tenant_enterprise_01",
+  "causation_depth": 1,
+  "transaction_group_id": "txg_0194857b",
+  "group_size": 1,
+  "semantics_class": "STATE",
+  "visibility": "PRIVATE",
+  "pii_classification": "NONE",
+  "source_service": "order-service",
   "trace_context": {
     "traceId": "4bf92f3577b34da6a3ce929d0e0e4736",
     "spanId": "00f067aa0ba902b7"
@@ -61,11 +73,13 @@ We selected **Option 3: Hexagonal Event Envelope (`EventEnvelope[T any]`) with S
 }
 ```
 
-### Invariants Enforced (`messaging/engine/client/`)
+### Invariants Enforced
 1. **Event Identifier (`event_id`)**: Must parse as an RFC 9562 UUIDv7. Non-v7 UUIDs and arbitrary strings are rejected.
-2. **Type Naming Convention (`type`)**: Must match regex `^[a-z][a-z0-9\-]*\.[a-z][a-z0-9\-]*\.[a-z][a-z0-9\-]*\.v[0-9]+$`. CRUD verbs are disallowed.
-3. **Timestamp (`occurred_at`)**: Strictly RFC 3339 UTC ending with `Z`.
-4. **Aggregate Sequence (`aggregate_seq`)**: Strictly `>= 1` to permit out-of-order and gap detection in projection rebuilds.
+2. **Type Naming Convention (`event_type`)**: Must match regex `^[a-z][a-z0-9\-]*\.[a-z][a-z0-9\-]*\.[a-z][a-z0-9\-]*\.v[0-9]+$`. CRUD verbs are disallowed.
+3. **Timestamps (`effective_at`, `recorded_at`)**: Strictly RFC 3339 UTC ending with `Z`.
+4. **Aggregate Version (`aggregate_version`)**: Strictly $\ge 1$ and gapless.
+5. **Causation Depth (`causation_depth`)**: Strictly $\ge 0$ and $\le 16$.
+6. **Terminal Aggregate Lock**: If aggregate has emitted a terminal event (`is_terminal = true`), all further version reservations fail with 422 Unprocessable Entity.
 
 ---
 
@@ -74,9 +88,9 @@ We selected **Option 3: Hexagonal Event Envelope (`EventEnvelope[T any]`) with S
 ### Positive
 * Single source of truth for all events across the fleet.
 * Zero index fragmentation when persisting events in B-Tree or LSM database tables.
-* Decoupled domain payload via Go generics (`EventEnvelope[T any]`).
+* Decoupled domain payload via Go generics.
+* Bounded loop detection and multi-aggregate completeness guards.
 
 ### Negative / Tradeoffs
-* Wire overhead of metadata attributes (~150-200 bytes per event).
+* Wire overhead of metadata attributes (~200-250 bytes per event).
 * Strict deserialization rejects events from non-compliant external producers (requires an anti-corruption layer).
-

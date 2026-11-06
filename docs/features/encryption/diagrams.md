@@ -106,3 +106,4 @@ sequenceDiagram
     DEK_DB-->>SVC: Status: SHREDDED
     SVC-->>CONSUMER: Return Status: ERASED (Zero Plaintext Leaked)
 ```
+

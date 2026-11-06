@@ -1,2 +1,220 @@
 feature: domain-event-design
 mode: stateless_hexagonal
+owner: platform-core
+
+entities:
+  - entity: domain_event_catalog_ledger
+    table: domain_event_catalog_ledger
+    fields:
+      - name: id
+        type: bigserial
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(36)
+        null: no
+        constraint: UNIQUE, immutable, format 'dec_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: yes
+      - name: correlation_id
+        type: varchar(128)
+        null: yes
+      - name: event_type
+        type: varchar(128)
+        null: no
+      - name: owning_aggregate
+        type: varchar(64)
+        null: no
+      - name: semantics_class
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('STATE', 'DELTA', 'NOTIFICATION')
+      - name: visibility
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('PRIVATE', 'PUBLIC')
+      - name: pii_classification
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('NONE', 'CONFIDENTIAL', 'RESTRICTED')
+      - name: schema_fingerprint
+        type: varchar(64)
+        null: no
+      - name: is_active
+        type: boolean
+        null: no
+        default: true
+      - name: is_deleted
+        type: boolean
+        null: no
+        default: false
+      - name: deleted_at
+        type: timestamptz
+        null: yes
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+
+  - entity: aggregate_root_version_ledger
+    table: aggregate_root_version_ledger
+    fields:
+      - name: id
+        type: bigserial
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(36)
+        null: no
+        constraint: UNIQUE, immutable, format 'agg_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: yes
+      - name: correlation_id
+        type: varchar(128)
+        null: yes
+      - name: aggregate_type
+        type: varchar(64)
+        null: no
+      - name: aggregate_id
+        type: varchar(64)
+        null: no
+      - name: current_version
+        type: bigint
+        null: no
+        constraint: CHECK >= 0
+      - name: is_terminal
+        type: boolean
+        null: no
+        default: false
+      - name: is_deleted
+        type: boolean
+        null: no
+        default: false
+      - name: deleted_at
+        type: timestamptz
+        null: yes
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+
+  - entity: transaction_group_ledger
+    table: transaction_group_ledger
+    fields:
+      - name: id
+        type: bigserial
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(36)
+        null: no
+        constraint: UNIQUE, immutable, format 'txg_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: yes
+      - name: correlation_id
+        type: varchar(128)
+        null: yes
+      - name: transaction_group_id
+        type: varchar(64)
+        null: no
+      - name: expected_group_size
+        type: integer
+        null: no
+        constraint: CHECK > 0
+      - name: received_count
+        type: integer
+        null: no
+        default: 1
+        constraint: CHECK >= 1
+      - name: is_complete
+        type: boolean
+        null: no
+        default: false
+      - name: is_deleted
+        type: boolean
+        null: no
+        default: false
+      - name: deleted_at
+        type: timestamptz
+        null: yes
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: completed_at
+        type: timestamptz
+        null: yes
+
+  - entity: causal_chain_log
+    table: causal_chain_log
+    fields:
+      - name: id
+        type: bigserial
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(36)
+        null: no
+        constraint: UNIQUE, immutable, format 'csl_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: yes
+      - name: correlation_id
+        type: varchar(128)
+        null: yes
+      - name: event_id
+        type: varchar(64)
+        null: no
+      - name: causation_id
+        type: varchar(64)
+        null: no
+      - name: causation_depth
+        type: integer
+        null: no
+        constraint: CHECK >= 0
+      - name: causation_path_hash
+        type: varchar(64)
+        null: no
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP

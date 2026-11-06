@@ -32,3 +32,4 @@
 | E9.2 | DR region lacks KMS key grant | OUTAGE | Region failover succeeds but services cannot decrypt data | Cross-region KMS multi-region key replication |
 | E10.1 | Single shared KEK used across all service workloads | SECURITY | Compromised peripheral service decrypts core customer data | Role-gated KEK policies and field-class decryption entitlements |
 | E12.1 | Crypto library upgrade alters AAD serialization silently | OUTAGE | Historical ciphertexts fail authentication tag check | Cross-version golden ciphertext test suite in CI |
+

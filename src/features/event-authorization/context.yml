@@ -1,2 +1,54 @@
-feature: event-authorization
-mode: stateless_hexagonal
+entity: event_authorization
+owner: platform-security-team
+tables:
+  - name: auth_policy_ledger
+    fields:
+      - name: id             type: uuid          null: no   default: uuidv7()            constraint: PK, UNIQUE(tenant_id, id), immutable
+      - name: public_id      type: varchar(32)   null: no   constraint: UNIQUE, immutable, format '^pol_[0-9a-z]{16,26}$'
+      - name: tenant_id      type: varchar(64)   null: no   constraint: immutable, btrim
+      - name: source_service type: varchar(64)   null: no   constraint: btrim
+      - name: external_id    type: varchar(128)  null: no   constraint: UNIQUE(tenant_id, source_service, external_id), btrim
+      - name: correlation_id type: uuid          null: no   constraint: immutable
+      - name: policy_name    type: varchar(128)  null: no   constraint: UNIQUE(tenant_id, policy_name), btrim
+      - name: principal_id   type: varchar(128)  null: no   constraint: btrim
+      - name: principal_type type: varchar(32)   null: no   constraint: IN ('SERVICE', 'USER', 'ROLE', 'GROUP')
+      - name: resource_type  type: varchar(32)   null: no   constraint: IN ('TOPIC', 'CONSUMER_GROUP', 'FIELD', 'SCHEMA')
+      - name: resource_pattern type: varchar(256) null: no  constraint: btrim
+      - name: operation      type: varchar(32)   null: no   constraint: IN ('PUBLISH', 'SUBSCRIBE', 'VIEW_PII', 'MANAGE', '*')
+      - name: effect         type: varchar(16)   null: no   constraint: IN ('ALLOW', 'DENY')
+      - name: state          type: varchar(32)   null: no   default: 'ACTIVE'            constraint: IN ('ACTIVE', 'DISABLED', 'REVOKED')
+      - name: created_at     type: timestamptz   null: no   default: CURRENT_TIMESTAMP
+      - name: updated_at     type: timestamptz   null: no   default: CURRENT_TIMESTAMP
+
+  - name: auth_audit_log
+    fields:
+      - name: id             type: uuid          null: no   default: uuidv7()            constraint: PK, UNIQUE(tenant_id, id), immutable
+      - name: public_id      type: varchar(32)   null: no   constraint: UNIQUE, immutable, format '^aal_[0-9a-z]{16,26}$'
+      - name: tenant_id      type: varchar(64)   null: no   constraint: immutable, btrim
+      - name: source_service type: varchar(64)   null: no   constraint: btrim
+      - name: external_id    type: varchar(128)  null: no   constraint: btrim
+      - name: correlation_id type: uuid          null: no   constraint: immutable
+      - name: principal_id   type: varchar(128)  null: no   constraint: btrim
+      - name: principal_type type: varchar(32)   null: no   constraint: IN ('SERVICE', 'USER', 'ROLE', 'GROUP')
+      - name: resource_type  type: varchar(32)   null: no   constraint: IN ('TOPIC', 'CONSUMER_GROUP', 'FIELD', 'SCHEMA')
+      - name: resource_name  type: varchar(256)  null: no   constraint: btrim
+      - name: operation      type: varchar(32)   null: no   constraint: IN ('PUBLISH', 'SUBSCRIBE', 'VIEW_PII', 'MANAGE', '*')
+      - name: decision       type: varchar(16)   null: no   constraint: IN ('ALLOWED', 'DENIED')
+      - name: matched_policy_id type: varchar(32) null: no  constraint: matched_policy_id = 'NONE' OR format '^pol_[0-9a-z]{16,26}$'
+      - name: reason         type: varchar(256)  null: no   constraint: btrim
+      - name: evaluated_at   type: timestamptz   null: no   default: CURRENT_TIMESTAMP
+
+invariants:
+  - AZ-01: Identity is never trusted from plain headers
+  - AZ-02: Tokens are audience-restricted per hop
+  - AZ-03: Default deny everywhere
+  - AZ-04: Single writer per aggregate stream
+  - AZ-05: Authorization for business actions happens at command time on authoritative state
+  - AZ-06: Events are authorized facts; consumers never trust event fields for privileged targets blindly
+  - AZ-07: Field-level access enforced by keys
+  - AZ-08: Revocation has an SLO
+  - AZ-09: Control-plane actions are separately authorized and audited
+  - AZ-10: Authorization configuration is code with drift detection
+  - AZ-11: Every deny and privileged allow is auditable
+pii: [none]
+source_of_truth: db

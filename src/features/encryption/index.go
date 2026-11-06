@@ -37,3 +37,4 @@ func NewService(db *sql.DB, masterSecret ...string) *service.EncryptionService {
 func NewPostgresEncryptionRepositoryAdapter(db *sql.DB) ports.EncryptionRepositoryPort {
 	return adapters.NewPostgresEncryptionRepositoryAdapter(db)
 }
+

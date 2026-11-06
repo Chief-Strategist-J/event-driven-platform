@@ -22,9 +22,12 @@ import (
 )
 
 func getTestDB(t *testing.T) *sql.DB {
-	dsn := os.Getenv("DATABASE_URL")
+	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://postgres:postgres@127.0.0.1:5432/event_platform?sslmode=disable"
+		dsn = os.Getenv("DATABASE_URL")
+	}
+	if dsn == "" {
+		dsn = "postgres://postgres:postgres@127.0.0.1:5432/event_store?sslmode=disable"
 	}
 	db, err := sql.Open("postgres", dsn)
 	if err != nil {
