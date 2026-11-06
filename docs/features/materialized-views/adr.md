@@ -79,3 +79,113 @@ In event-driven architectures, read models and materialized views are decoupled 
 ### Negative Consequences / Operational Trade-Offs
 * Additional storage overhead for projection version records and held event quarantine queues.
 * Rebuild execution requires temporary 2x storage footprint for shadow tables until old tables are decommissioned.
+
+---
+
+## 6. Detailed Architectural Decision Models & Interaction Blueprints
+
+### 6.1 Version Monotonicity & Quarantine Decision Logic (§5)
+Every projection mutation must pass through the deterministic decision matrix prior to acquiring a database write lock:
+
+```mermaid
+flowchart TD
+    START(["Receive Event (Seq: S, Hash: H)"]) --> FETCH["Fetch State (Current: V, LastHash: LH)"]
+    FETCH --> COND1{"Is S <= V?"}
+
+    COND1 -->|Yes| COND2{"Is S == V?"}
+    COND2 -->|Yes| COND_HASH{"Is H == LH?"}
+    COND_HASH -->|Yes| RES_DUP["Decision: DUPLICATE_NOOP<br/>Return Success (No DB Mutation)"]
+    COND_HASH -->|No| RES_INTEG["Decision: INTEGRITY_CONFLICT<br/>Quarantine Aggregate + Raise Alert F5.1<br/>(Split-Brain / Payload Tampering)"]
+    COND2 -->|No| RES_STALE["Decision: STALE_DROP<br/>Log Warning & Discard Safely"]
+
+    COND1 -->|No| COND3{"Is S == V + 1?"}
+    COND3 -->|Yes| RES_APPLY["Decision: APPLY<br/>Execute Atomic UPSERT<br/>Set current_version = S"]
+    COND3 -->|No| RES_GAP["Decision: GAP_HOLD<br/>Insert into materialized_view_held_events<br/>Quarantine until gap resolves"]
+
+    RES_APPLY --> CHECK_HELD{"Are there held events<br/>for Seq == S + 1?"}
+    CHECK_HELD -->|Yes| PROCESS_HELD["Pop next held event<br/>Re-evaluate under Decision Loop"]
+    CHECK_HELD -->|No| COMPLETE(["Pipeline Complete"])
+    PROCESS_HELD --> COND3
+```
+
+### 6.2 Zero-Downtime Blue/Green Table Rename DDL Sequence (MV-10)
+To avoid blocking concurrent queries during view schema migration or backfills, the table promotion step runs in an explicit short-lived transaction with a 2-second lock timeout:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Op as Rebuild Operator
+    participant PG as PostgreSQL Engine
+    participant Active as active_table (orders_view)
+    participant Shadow as shadow_table (orders_view_shadow)
+    participant Readers as API Readers (SELECT)
+
+    Note over Op,PG: Pre-Condition: Stream Catchup Lag < 100 rows
+    Readers->>Active: Concurrent Read Queries (AccessShareLock)
+    Op->>PG: BEGIN TRANSACTION;
+    Op->>PG: SET LOCAL lock_timeout = '2s';
+    Op->>PG: LOCK TABLE orders_view IN ACCESS EXCLUSIVE MODE;
+    Note over PG: Waits for active in-flight SELECTs to complete (<2s)
+    Op->>PG: ALTER TABLE orders_view RENAME TO orders_view_old;
+    Op->>PG: ALTER TABLE orders_view_shadow RENAME TO orders_view;
+    Op->>PG: COMMIT;
+    Note over PG: Lock Released. Total write blocking window < 15ms
+    Readers->>Active: Subsequent SELECTs automatically route to NEW table
+    Op->>PG: DROP TABLE orders_view_old;
+    Note over Op: Rebuild Lifecycle Complete
+```
+
+### 6.3 Polyglot Storage Guarding Mechanics (MV-01, MV-04, MV-05)
+Derived stores must enforce identical monotonicity without independent authority:
+
+```mermaid
+flowchart TD
+    subgraph EventStream ["Incoming Event (Seq: 42)"]
+        IN["Projection Event Payload"]
+    end
+
+    subgraph PostgresBranch ["PostgreSQL Primary Authority (MV-01)"]
+        P_QUERY["UPDATE materialized_view_projection_state<br/>SET current_version = 42, payload_hash = $H<br/>WHERE aggregate_id = $ID AND current_version = 41"]
+        P_CHECK{"Rows Affected == 1?"}
+        P_SUCCESS["Commit Transaction<br/>Advance In-Database Position"]
+        P_FAIL["Rollback Transaction<br/>Return 409 Conflict (Zero-Row Failure)"]
+
+        P_QUERY --> P_CHECK
+        P_CHECK -->|Yes| P_SUCCESS
+        P_CHECK -->|No| P_FAIL
+    end
+
+    subgraph RedisBranch ["Valkey / Redis Atomic CAS (MV-01)"]
+        R_LUA["EVAL script:<br/>local curr = redis.call('HGET', KEYS[1], 'v')<br/>if not curr or tonumber(curr) + 1 == tonumber(ARGV[1]) then<br/>  redis.call('HSET', KEYS[1], 'v', ARGV[1], 'data', ARGV[2])<br/>  return 1<br/>end<br/>return 0"]
+        R_CHECK{"Script Return == 1?"}
+        R_OK["Cache Updated"]
+        R_REJECT["Reject Regression / Trigger Re-Sync"]
+
+        R_LUA --> R_CHECK
+        R_CHECK -->|Yes| R_OK
+        R_CHECK -->|No| R_REJECT
+    end
+
+    subgraph OpenSearchBranch ["OpenSearch External Versioning (MV-01)"]
+        OS_REQ["PUT /customer_search/_doc/cust-101?version=42&version_type=external_gte<br/>{ 'name': 'Alice', 'version': 42 }"]
+        OS_CHECK{"HTTP Status?"}
+        OS_OK["200 OK / 201 Created<br/>Document Indexed"]
+        OS_CONFLICT["409 VersionConflictEngineException<br/>Stale Document Dropped Safely"]
+
+        OS_REQ --> OS_CHECK
+        OS_CHECK -->|200/201| OS_OK
+        OS_CHECK -->|409| OS_CONFLICT
+    end
+
+    IN --> P_QUERY
+    P_SUCCESS --> R_LUA
+    P_SUCCESS --> OS_REQ
+```
+
+---
+
+## 7. Operational Defenses & Verification
+
+* **Full Diagram Inventory**: Complete 9-diagram operational suite is cataloged in [Materialized Views Diagrams](file:///home/btpl-lap-22/live/System-Architect/event-driven-platform/docs/features/materialized-views/diagrams.md).
+* **Failure Catalog**: Complete 18-scenario forensic catalog is maintained in [Materialized Views Failure Cases](file:///home/btpl-lap-22/live/System-Architect/event-driven-platform/docs/features/materialized-views/failure-cases.md).
+* **CI Verification Gate**: Every commit verifies version monotonicity guards, state machine transitions, and zero inline comments.
