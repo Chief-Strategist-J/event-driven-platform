@@ -1819,3 +1819,106 @@ paths:
           description: Invalid phase transition
         "409":
           description: Concurrency mismatch or terminal state
+  /api/v1/materialized-views/contributions:
+    post:
+      summary: Apply Aggregate Delta Contribution (V-AGG)
+      operationId: applyViewAggContribution
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - view_name
+                - aggregate_type
+                - aggregate_id
+                - source_event_id
+                - source_seq
+                - delta_amount
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                view_name: { type: string }
+                aggregate_type: { type: string }
+                aggregate_id: { type: string }
+                source_event_id: { type: string }
+                source_seq: { type: integer }
+                delta_amount: { type: number }
+                is_reversal: { type: boolean }
+      responses:
+        "201":
+          description: Aggregate contribution recorded
+        "400":
+          description: Validation error
+        "409":
+          description: Duplicate contribution event conflict
+
+  /api/v1/materialized-views/periods:
+    post:
+      summary: Record Financial Reporting Period Event (V-REPORT)
+      operationId: recordViewPeriodEvent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - view_name
+                - period_key
+                - amount
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                view_name: { type: string }
+                period_key: { type: string }
+                amount: { type: number }
+                event_time: { type: string }
+      responses:
+        "200":
+          description: Period event recorded (base or late adjustment)
+        "400":
+          description: Validation error
+
+  /api/v1/materialized-views/query:
+    post:
+      summary: Query Materialized View with Consistency Token (Read-Your-Own-Writes)
+      operationId: queryViewWithConsistencyToken
+      parameters:
+        - name: x-consistency-token
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - view_name
+                - aggregate_type
+                - aggregate_id
+              properties:
+                tenant_id: { type: string }
+                view_name: { type: string }
+                aggregate_type: { type: string }
+                aggregate_id: { type: string }
+                consistency_token: { type: string }
+                timeout_budget_ms: { type: integer }
+      responses:
+        "200":
+          description: Projection state returned with satisfaction and pending indicators
+        "400":
+          description: Validation error
+        "404":
+          description: Aggregate not found

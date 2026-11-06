@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,7 +41,7 @@ func TestPartitionIntegration_PostgresLifecycle(t *testing.T) {
 
 	top := contracts.TopicTopology{
 		ID:                    uuid.New(),
-		PublicID:              "prt_" + uuid.New().String()[:16],
+		PublicID:              "prt_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:20],
 		TenantID:              tenantID,
 		SourceService:         "order-service",
 		ExternalID:            "ext_" + uuid.New().String()[:8],
@@ -70,7 +71,7 @@ func TestPartitionIntegration_PostgresLifecycle(t *testing.T) {
 
 	rec := contracts.MigrationRunbookRecord{
 		ID:               uuid.New(),
-		PublicID:         "pmg_" + uuid.New().String()[:16],
+		PublicID:         "pmg_" + strings.ReplaceAll(uuid.New().String(), "-", "")[:20],
 		TenantID:         tenantID,
 		SourceService:    "order-service",
 		ExternalID:       "ext_mig_" + uuid.New().String()[:8],

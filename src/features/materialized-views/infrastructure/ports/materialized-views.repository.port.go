@@ -22,4 +22,11 @@ type ViewRepositoryPort interface {
 	InitiateRebuild(ctx context.Context, log contracts.RebuildLogRecord) error
 	GetRebuildLog(ctx context.Context, tenantID string, rebuildID string) (*contracts.RebuildLogRecord, error)
 	UpdateRebuildPhase(ctx context.Context, tenantID string, rebuildID string, phase contracts.RebuildPhase, cursor int64) error
+
+	RecordContribution(ctx context.Context, contrib contracts.AggContributionRecord) error
+	GetAggregateContributionTotal(ctx context.Context, tenantID string, viewName string, aggType string, aggID string) (float64, error)
+	UpsertPeriodLedger(ctx context.Context, period contracts.PeriodLedgerRecord) error
+	GetPeriodLedger(ctx context.Context, tenantID string, viewName string, periodKey string) (*contracts.PeriodLedgerRecord, error)
+	ApplyPeriodAdjustment(ctx context.Context, tenantID string, viewName string, periodKey string, adjustment float64) error
 }
+

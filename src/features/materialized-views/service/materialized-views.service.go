@@ -185,6 +185,33 @@ func (s *ViewService) ApplyProjection(ctx context.Context, in contracts.ApplyPro
 			return nil, err
 		}
 
+	case contracts.DecisionIntegrityConflict:
+		corrUUID, _ := uuid.Parse(norm.CorrelationID)
+		pubID := fmt.Sprintf("mvh_integ_%s", uuid.New().String()[:16])
+
+		held := contracts.HeldEventRecord{
+			ID:            uuid.New(),
+			PublicID:      pubID,
+			TenantID:      norm.TenantID,
+			SourceService: norm.SourceService,
+			ExternalID:    norm.ExternalID,
+			CorrelationID: corrUUID,
+			ViewName:      norm.ViewName,
+			AggregateType: norm.AggregateType,
+			AggregateID:   norm.AggregateID,
+			ExpectedSeq:   evaluation.ExpectedSeq,
+			ReceivedSeq:   evaluation.IncomingSeq,
+			EventPayload:  norm.PayloadRaw,
+			HeldUntil:     time.Now().UTC().Add(24 * time.Hour),
+			CreatedAt:     time.Now().UTC(),
+		}
+
+		if err := s.repo.QuarantineHeldEvent(ctx, held); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
+		}
+
 	case contracts.DecisionDuplicate, contracts.DecisionStaleDrop:
 	}
 
@@ -289,3 +316,206 @@ func (s *ViewService) AdvanceRebuild(ctx context.Context, in contracts.AdvanceRe
 	log.Phase = nextPhase
 	return log, nil
 }
+
+func (s *ViewService) ApplyContribution(ctx context.Context, in contracts.ApplyContributionInput) (*contracts.AggContributionRecord, error) {
+	ctx, span := s.tracer.Start(ctx, "ViewService.ApplyContribution")
+	defer span.End()
+
+	eventUUID, err := uuid.Parse(in.SourceEventID)
+	if err != nil {
+		err := errors.NewValidationError("source_event_id must be a valid UUID")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+
+	corrUUID, err := uuid.Parse(in.CorrelationID)
+	if err != nil {
+		corrUUID = uuid.New()
+	}
+
+	delta := rules.CalculateContributionDelta(in.DeltaAmount, in.IsReversal)
+	now := time.Now().UTC()
+	pubID := fmt.Sprintf("mvac_%s", uuid.New().String()[:18])
+
+	contrib := contracts.AggContributionRecord{
+		ID:            uuid.New(),
+		PublicID:      pubID,
+		TenantID:      in.TenantID,
+		SourceService: in.SourceService,
+		ExternalID:    in.ExternalID,
+		CorrelationID: corrUUID,
+		ViewName:      in.ViewName,
+		AggregateType: in.AggregateType,
+		AggregateID:   in.AggregateID,
+		SourceEventID: eventUUID,
+		SourceSeq:     in.SourceSeq,
+		DeltaAmount:   delta,
+		IsReversal:    in.IsReversal,
+		Version:       1,
+		CreatedAt:     now,
+	}
+
+	if err := s.repo.RecordContribution(ctx, contrib); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+
+	return &contrib, nil
+}
+
+func (s *ViewService) ReconcileAggregateContributions(
+	ctx context.Context,
+	tenantID string,
+	viewName string,
+	aggType string,
+	aggID string,
+) (float64, error) {
+	ctx, span := s.tracer.Start(ctx, "ViewService.ReconcileAggregateContributions")
+	defer span.End()
+
+	total, err := s.repo.GetAggregateContributionTotal(ctx, tenantID, viewName, aggType, aggID)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return 0, err
+	}
+
+	return total, nil
+}
+
+func (s *ViewService) RecordPeriodEvent(ctx context.Context, in contracts.RecordPeriodEventInput) (*contracts.PeriodLedgerRecord, error) {
+	ctx, span := s.tracer.Start(ctx, "ViewService.RecordPeriodEvent")
+	defer span.End()
+
+	period, err := s.repo.GetPeriodLedger(ctx, in.TenantID, in.ViewName, in.PeriodKey)
+	now := time.Now().UTC()
+
+	if err != nil {
+		corrUUID, _ := uuid.Parse(in.CorrelationID)
+		if corrUUID == uuid.Nil {
+			corrUUID = uuid.New()
+		}
+		pubID := fmt.Sprintf("mvpl_%s", uuid.New().String()[:18])
+
+		newPeriod := contracts.PeriodLedgerRecord{
+			ID:                 uuid.New(),
+			PublicID:           pubID,
+			TenantID:           in.TenantID,
+			SourceService:      in.SourceService,
+			ExternalID:         in.ExternalID,
+			CorrelationID:      corrUUID,
+			ViewName:           in.ViewName,
+			PeriodKey:          in.PeriodKey,
+			PeriodStatus:       contracts.PeriodStatusOpen,
+			BaseAmount:         in.Amount,
+			AdjustmentAmount:   0.0000,
+			ClosingPositionLSN: "",
+			Version:            1,
+			CreatedAt:          now,
+			UpdatedAt:          now,
+		}
+
+		if err := s.repo.UpsertPeriodLedger(ctx, newPeriod); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
+		}
+
+		return &newPeriod, nil
+	}
+
+	isAdj, err := rules.EvaluatePeriodEventApplication(period.PeriodStatus, in.Amount)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+
+	if isAdj {
+		if err := s.repo.ApplyPeriodAdjustment(ctx, in.TenantID, in.ViewName, in.PeriodKey, in.Amount); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
+		}
+		period.AdjustmentAmount += in.Amount
+	} else {
+		period.BaseAmount += in.Amount
+		period.UpdatedAt = now
+		if err := s.repo.UpsertPeriodLedger(ctx, *period); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
+		}
+	}
+
+	return period, nil
+}
+
+func (s *ViewService) QueryViewWithConsistencyToken(ctx context.Context, in contracts.QueryViewInput) (*contracts.QueryViewOutput, error) {
+	ctx, span := s.tracer.Start(ctx, "ViewService.QueryViewWithConsistencyToken")
+	defer span.End()
+
+	var requiredSeq int64
+	if in.ConsistencyToken != "" {
+		_, seq, err := rules.ParseConsistencyToken(in.ConsistencyToken)
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			return nil, err
+		}
+		requiredSeq = seq
+	}
+
+	state, err := s.repo.GetProjectionState(ctx, in.TenantID, in.ViewName, in.AggregateType, in.AggregateID)
+	var currentVersion int64
+	if err == nil && state != nil {
+		currentVersion = state.CurrentVersion
+	}
+
+	if requiredSeq > 0 && currentVersion < requiredSeq {
+		budget := in.TimeoutBudgetMs
+		if budget <= 0 {
+			budget = 50
+		}
+		if budget > 200 {
+			budget = 200
+		}
+
+		deadline := time.Now().Add(time.Duration(budget) * time.Millisecond)
+		for time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			st, err := s.repo.GetProjectionState(ctx, in.TenantID, in.ViewName, in.AggregateType, in.AggregateID)
+			if err == nil && st != nil && st.CurrentVersion >= requiredSeq {
+				return &contracts.QueryViewOutput{
+					ViewName:       in.ViewName,
+					AggregateID:    in.AggregateID,
+					CurrentVersion: st.CurrentVersion,
+					IsSatisfied:    true,
+					IsPending:      false,
+					State:          st,
+				}, nil
+			}
+		}
+
+		return &contracts.QueryViewOutput{
+			ViewName:       in.ViewName,
+			AggregateID:    in.AggregateID,
+			CurrentVersion: currentVersion,
+			IsSatisfied:    false,
+			IsPending:      true,
+			State:          state,
+		}, nil
+	}
+
+	return &contracts.QueryViewOutput{
+		ViewName:       in.ViewName,
+		AggregateID:    in.AggregateID,
+		CurrentVersion: currentVersion,
+		IsSatisfied:    true,
+		IsPending:      false,
+		State:          state,
+	}, nil
+}
+

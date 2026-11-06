@@ -55,11 +55,56 @@ const (
 type ProjectionDecision string
 
 const (
-	DecisionApply     ProjectionDecision = "APPLY"
-	DecisionDuplicate ProjectionDecision = "DUPLICATE_NOOP"
-	DecisionStaleDrop ProjectionDecision = "STALE_DROP"
-	DecisionGapHold   ProjectionDecision = "GAP_HOLD"
+	DecisionApply             ProjectionDecision = "APPLY"
+	DecisionDuplicate         ProjectionDecision = "DUPLICATE_NOOP"
+	DecisionStaleDrop         ProjectionDecision = "STALE_DROP"
+	DecisionGapHold           ProjectionDecision = "GAP_HOLD"
+	DecisionIntegrityConflict ProjectionDecision = "INTEGRITY_CONFLICT"
 )
+
+type PeriodStatus string
+
+const (
+	PeriodStatusOpen   PeriodStatus = "OPEN"
+	PeriodStatusFrozen PeriodStatus = "FROZEN"
+	PeriodStatusClosed PeriodStatus = "CLOSED"
+)
+
+type AggContributionRecord struct {
+	ID            uuid.UUID `json:"id"`
+	PublicID      string    `json:"public_id"`
+	TenantID      string    `json:"tenant_id"`
+	SourceService string    `json:"source_service"`
+	ExternalID    string    `json:"external_id"`
+	CorrelationID uuid.UUID `json:"correlation_id"`
+	ViewName      string    `json:"view_name"`
+	AggregateType string    `json:"aggregate_type"`
+	AggregateID   string    `json:"aggregate_id"`
+	SourceEventID uuid.UUID `json:"source_event_id"`
+	SourceSeq     int64     `json:"source_seq"`
+	DeltaAmount   float64   `json:"delta_amount"`
+	IsReversal    bool      `json:"is_reversal"`
+	Version       int64     `json:"version"`
+	CreatedAt     time.Time `json:"created_at"`
+}
+
+type PeriodLedgerRecord struct {
+	ID                 uuid.UUID    `json:"id"`
+	PublicID           string       `json:"public_id"`
+	TenantID           string       `json:"tenant_id"`
+	SourceService      string       `json:"source_service"`
+	ExternalID         string       `json:"external_id"`
+	CorrelationID      uuid.UUID    `json:"correlation_id"`
+	ViewName           string       `json:"view_name"`
+	PeriodKey          string       `json:"period_key"`
+	PeriodStatus       PeriodStatus `json:"period_status"`
+	BaseAmount         float64      `json:"base_amount"`
+	AdjustmentAmount   float64      `json:"adjustment_amount"`
+	ClosingPositionLSN string       `json:"closing_position_lsn"`
+	Version            int64        `json:"version"`
+	CreatedAt          time.Time    `json:"created_at"`
+	UpdatedAt          time.Time    `json:"updated_at"`
+}
 
 type ViewRegistryRecord struct {
 	ID              uuid.UUID       `json:"id"`
@@ -190,3 +235,47 @@ type ProjectionEvaluation struct {
 	GapSize        int64              `json:"gap_size"`
 	IsQuarantined  bool               `json:"is_quarantined"`
 }
+
+type ApplyContributionInput struct {
+	TenantID      string  `json:"tenant_id"`
+	SourceService string  `json:"source_service"`
+	ExternalID    string  `json:"external_id"`
+	CorrelationID string  `json:"correlation_id"`
+	ViewName      string  `json:"view_name"`
+	AggregateType string  `json:"aggregate_type"`
+	AggregateID   string  `json:"aggregate_id"`
+	SourceEventID string  `json:"source_event_id"`
+	SourceSeq     int64   `json:"source_seq"`
+	DeltaAmount   float64 `json:"delta_amount"`
+	IsReversal    bool    `json:"is_reversal"`
+}
+
+type RecordPeriodEventInput struct {
+	TenantID      string    `json:"tenant_id"`
+	SourceService string    `json:"source_service"`
+	ExternalID    string    `json:"external_id"`
+	CorrelationID string    `json:"correlation_id"`
+	ViewName      string    `json:"view_name"`
+	PeriodKey     string    `json:"period_key"`
+	Amount        float64   `json:"amount"`
+	EventTime     time.Time `json:"event_time"`
+}
+
+type QueryViewInput struct {
+	TenantID         string `json:"tenant_id"`
+	ViewName         string `json:"view_name"`
+	AggregateType    string `json:"aggregate_type"`
+	AggregateID      string `json:"aggregate_id"`
+	ConsistencyToken string `json:"consistency_token"`
+	TimeoutBudgetMs  int64  `json:"timeout_budget_ms"`
+}
+
+type QueryViewOutput struct {
+	ViewName       string                 `json:"view_name"`
+	AggregateID    string                 `json:"aggregate_id"`
+	CurrentVersion int64                  `json:"current_version"`
+	IsSatisfied    bool                   `json:"is_satisfied"`
+	IsPending      bool                   `json:"is_pending"`
+	State          *ProjectionStateRecord `json:"state,omitempty"`
+}
+

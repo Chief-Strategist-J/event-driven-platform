@@ -136,3 +136,4 @@ func TestMaterializedViewsIntegration_PostgresLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, contracts.RebuildPhaseHistoricalReplay, advancedLog.Phase)
 }
+

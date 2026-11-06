@@ -436,3 +436,155 @@ func (a *PostgresViewRepositoryAdapter) UpdateRebuildPhase(
 
 	return nil
 }
+
+func (a *PostgresViewRepositoryAdapter) RecordContribution(ctx context.Context, contrib contracts.AggContributionRecord) error {
+	ctx, span := a.tracer.Start(ctx, "PostgresViewRepositoryAdapter.RecordContribution")
+	defer span.End()
+
+	_, err := a.db.ExecContext(ctx, queries.FlowInsertAggContribution,
+		contrib.ID,
+		contrib.PublicID,
+		contrib.TenantID,
+		contrib.SourceService,
+		contrib.ExternalID,
+		contrib.CorrelationID,
+		contrib.ViewName,
+		contrib.AggregateType,
+		contrib.AggregateID,
+		contrib.SourceEventID,
+		contrib.SourceSeq,
+		contrib.DeltaAmount,
+		contrib.IsReversal,
+		contrib.Version,
+		contrib.CreatedAt,
+	)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return database.MapDatabaseError(err)
+	}
+
+	return nil
+}
+
+func (a *PostgresViewRepositoryAdapter) GetAggregateContributionTotal(
+	ctx context.Context,
+	tenantID string,
+	viewName string,
+	aggType string,
+	aggID string,
+) (float64, error) {
+	ctx, span := a.tracer.Start(ctx, "PostgresViewRepositoryAdapter.GetAggregateContributionTotal")
+	defer span.End()
+
+	var total float64
+	row := a.db.QueryRowContext(ctx, queries.FlowSumAggContributionsByAggregate, tenantID, viewName, aggType, aggID)
+	if err := row.Scan(&total); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return 0, database.MapDatabaseError(err)
+	}
+
+	return total, nil
+}
+
+func (a *PostgresViewRepositoryAdapter) UpsertPeriodLedger(ctx context.Context, period contracts.PeriodLedgerRecord) error {
+	ctx, span := a.tracer.Start(ctx, "PostgresViewRepositoryAdapter.UpsertPeriodLedger")
+	defer span.End()
+
+	_, err := a.db.ExecContext(ctx, queries.FlowUpsertPeriodLedger,
+		period.ID,
+		period.PublicID,
+		period.TenantID,
+		period.SourceService,
+		period.ExternalID,
+		period.CorrelationID,
+		period.ViewName,
+		period.PeriodKey,
+		string(period.PeriodStatus),
+		period.BaseAmount,
+		period.AdjustmentAmount,
+		period.ClosingPositionLSN,
+		period.Version,
+		period.CreatedAt,
+		period.UpdatedAt,
+	)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return database.MapDatabaseError(err)
+	}
+
+	return nil
+}
+
+func (a *PostgresViewRepositoryAdapter) GetPeriodLedger(
+	ctx context.Context,
+	tenantID string,
+	viewName string,
+	periodKey string,
+) (*contracts.PeriodLedgerRecord, error) {
+	ctx, span := a.tracer.Start(ctx, "PostgresViewRepositoryAdapter.GetPeriodLedger")
+	defer span.End()
+
+	row := a.db.QueryRowContext(ctx, queries.FlowSelectPeriodLedgerByPeriodKey, tenantID, viewName, periodKey)
+	var p contracts.PeriodLedgerRecord
+	var status string
+
+	err := row.Scan(
+		&p.ID,
+		&p.PublicID,
+		&p.TenantID,
+		&p.SourceService,
+		&p.ExternalID,
+		&p.CorrelationID,
+		&p.ViewName,
+		&p.PeriodKey,
+		&status,
+		&p.BaseAmount,
+		&p.AdjustmentAmount,
+		&p.ClosingPositionLSN,
+		&p.Version,
+		&p.CreatedAt,
+		&p.UpdatedAt,
+	)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, errors.NewNotFoundError("period ledger record not found")
+		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, database.MapDatabaseError(err)
+	}
+
+	p.PeriodStatus = contracts.PeriodStatus(status)
+	return &p, nil
+}
+
+func (a *PostgresViewRepositoryAdapter) ApplyPeriodAdjustment(
+	ctx context.Context,
+	tenantID string,
+	viewName string,
+	periodKey string,
+	adjustment float64,
+) error {
+	ctx, span := a.tracer.Start(ctx, "PostgresViewRepositoryAdapter.ApplyPeriodAdjustment")
+	defer span.End()
+
+	res, err := a.db.ExecContext(ctx, queries.FlowUpdatePeriodLedgerAdjustment, tenantID, viewName, periodKey, adjustment)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return database.MapDatabaseError(err)
+	}
+
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return database.MapDatabaseError(err)
+	}
+	if rows == 0 {
+		return errors.NewNotFoundError("period ledger record not found")
+	}
+
+	return nil
+}

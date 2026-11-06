@@ -17,4 +17,7 @@ func RegisterMaterializedViewsRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /api/v1/materialized-views/apply", h.HandleApplyProjection)
 	mux.HandleFunc("POST /api/v1/materialized-views/rebuild", h.HandleInitiateRebuild)
 	mux.HandleFunc("PUT /api/v1/materialized-views/rebuild/phase", h.HandleAdvanceRebuild)
+	mux.HandleFunc("POST /api/v1/materialized-views/contributions", h.HandleApplyContribution)
+	mux.HandleFunc("POST /api/v1/materialized-views/periods", h.HandleRecordPeriodEvent)
+	mux.HandleFunc("POST /api/v1/materialized-views/query", h.HandleQueryView)
 }

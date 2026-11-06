@@ -52,3 +52,4 @@ func (m *ViewRebuildStateMachine) Transition(current contracts.RebuildPhase, tar
 
 	return current, ErrInvalidRebuildTransition
 }
+

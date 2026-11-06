@@ -264,6 +264,131 @@ func (h *MaterializedViewsHandler) HandleAdvanceRebuild(w http.ResponseWriter, r
 	h.writeResponse(w, http.StatusOK, log, start, reqID, corrID, causationID)
 }
 
+func (h *MaterializedViewsHandler) HandleApplyContribution(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/materialized-views/contributions", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
+	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+	reqID := r.Header.Get(constants.HeaderXRequestID)
+	corrID := r.Header.Get(constants.HeaderXCorrelationID)
+	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	var input contracts.ApplyContributionInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+
+	if input.CorrelationID == "" {
+		input.CorrelationID = corrID
+	}
+	if input.SourceService == "" {
+		input.SourceService = "view-agg-consumer"
+	}
+	if input.ExternalID == "" {
+		input.ExternalID = "ext_contrib_" + corrID
+	}
+
+	record, err := h.svc.ApplyContribution(ctx, input)
+	if err != nil {
+		statusCode := http.StatusBadRequest
+		errCode := constants.ErrCodeValidationFailed
+		if strings.Contains(err.Error(), "conflict") || strings.Contains(err.Error(), "duplicate") {
+			statusCode = http.StatusConflict
+			errCode = constants.ErrCodeConflict
+		}
+		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+
+	h.writeResponse(w, http.StatusCreated, record, start, reqID, corrID, causationID)
+}
+
+func (h *MaterializedViewsHandler) HandleRecordPeriodEvent(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/materialized-views/periods", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
+	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+	reqID := r.Header.Get(constants.HeaderXRequestID)
+	corrID := r.Header.Get(constants.HeaderXCorrelationID)
+	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	var input contracts.RecordPeriodEventInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+
+	if input.CorrelationID == "" {
+		input.CorrelationID = corrID
+	}
+	if input.SourceService == "" {
+		input.SourceService = "view-reporting-consumer"
+	}
+	if input.ExternalID == "" {
+		input.ExternalID = "ext_period_" + corrID
+	}
+
+	record, err := h.svc.RecordPeriodEvent(ctx, input)
+	if err != nil {
+		statusCode := http.StatusBadRequest
+		errCode := constants.ErrCodeValidationFailed
+		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+
+	h.writeResponse(w, http.StatusOK, record, start, reqID, corrID, causationID)
+}
+
+func (h *MaterializedViewsHandler) HandleQueryView(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/materialized-views/query", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
+	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+	reqID := r.Header.Get(constants.HeaderXRequestID)
+	corrID := r.Header.Get(constants.HeaderXCorrelationID)
+	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	tokenHeader := r.Header.Get("x-consistency-token")
+
+	var input contracts.QueryViewInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+
+	if input.ConsistencyToken == "" && tokenHeader != "" {
+		input.ConsistencyToken = tokenHeader
+	}
+
+	out, err := h.svc.QueryViewWithConsistencyToken(ctx, input)
+	if err != nil {
+		statusCode := http.StatusBadRequest
+		errCode := constants.ErrCodeValidationFailed
+		if strings.Contains(err.Error(), "not found") {
+			statusCode = http.StatusNotFound
+			errCode = constants.ErrCodeNotFound
+		}
+		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+
+	h.writeResponse(w, http.StatusOK, out, start, reqID, corrID, causationID)
+}
+
 func (h *MaterializedViewsHandler) writeResponse(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {
 	w.WriteHeader(status)
 	resp := types.ApiResponse{

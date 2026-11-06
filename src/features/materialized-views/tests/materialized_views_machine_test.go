@@ -57,3 +57,4 @@ func TestViewRebuildStateMachine_InvalidTransitions(t *testing.T) {
 	_, err = sm.Transition(contracts.RebuildPhaseDecommissioned, contracts.RebuildPhaseInitiated)
 	assert.ErrorIs(t, err, machines.ErrRebuildTerminalState)
 }
+

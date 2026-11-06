@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"time"
 
 	"event-driven-platform/src/features/materialized-views/contracts"
@@ -46,14 +47,24 @@ func EvaluateProjectionVersion(
 	incomingHash := hex.EncodeToString(hasher.Sum(nil))
 
 	if incoming.AggregateSeq <= currentVersion {
-		if incoming.AggregateSeq == currentVersion && incomingHash == lastHash {
+		if incoming.AggregateSeq == currentVersion {
+			if incomingHash == lastHash {
+				return contracts.ProjectionEvaluation{
+					Decision:      contracts.DecisionDuplicate,
+					ExpectedSeq:   currentVersion + 1,
+					IncomingSeq:   incoming.AggregateSeq,
+					PayloadHash:   incomingHash,
+					GapSize:       0,
+					IsQuarantined: false,
+				}, nil
+			}
 			return contracts.ProjectionEvaluation{
-				Decision:      contracts.DecisionDuplicate,
+				Decision:      contracts.DecisionIntegrityConflict,
 				ExpectedSeq:   currentVersion + 1,
 				IncomingSeq:   incoming.AggregateSeq,
 				PayloadHash:   incomingHash,
 				GapSize:       0,
-				IsQuarantined: false,
+				IsQuarantined: true,
 			}, nil
 		}
 		return contracts.ProjectionEvaluation{
@@ -88,6 +99,42 @@ func EvaluateProjectionVersion(
 	}, nil
 }
 
+func ParseConsistencyToken(token string) (string, int64, error) {
+	if !strings.HasPrefix(token, "cv_tok_") {
+		return "", 0, errors.NewValidationError("invalid consistency token prefix")
+	}
+	parts := strings.Split(token, "_")
+	if len(parts) < 4 {
+		return "", 0, errors.NewValidationError("malformed consistency token")
+	}
+	seqStr := parts[len(parts)-1]
+	var seq int64
+	_, err := fmt.Sscanf(seqStr, "%d", &seq)
+	if err != nil || seq <= 0 {
+		return "", 0, errors.NewValidationError("invalid consistency token sequence")
+	}
+	viewName := strings.Join(parts[2:len(parts)-1], "_")
+	return viewName, seq, nil
+}
+
+func EvaluatePeriodEventApplication(status contracts.PeriodStatus, amount float64) (isAdjustment bool, err error) {
+	switch status {
+	case contracts.PeriodStatusOpen:
+		return false, nil
+	case contracts.PeriodStatusFrozen, contracts.PeriodStatusClosed:
+		return true, nil
+	default:
+		return false, errors.NewValidationError("unsupported period status")
+	}
+}
+
+func CalculateContributionDelta(amount float64, isReversal bool) float64 {
+	if isReversal {
+		return -amount
+	}
+	return amount
+}
+
 func CalculateFreshnessLag(materializedAt time.Time, now time.Time) time.Duration {
 	if materializedAt.IsZero() {
 		return 0
@@ -110,3 +157,4 @@ func IsFreshnessSLOBreached(materializedAt time.Time, sloMs int64, now time.Time
 func FormatConsistencyToken(viewName string, seq int64) string {
 	return fmt.Sprintf("cv_tok_%s_%d", viewName, seq)
 }
+

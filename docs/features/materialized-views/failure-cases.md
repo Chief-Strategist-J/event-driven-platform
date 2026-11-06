@@ -46,3 +46,4 @@ This failure catalog documents all failure modes across the materialized view li
 4. Once historical replay completes, worker transitions to `STREAM_CATCHUP`, consuming delta events from Kafka.
 5. When lag reaches near-zero, worker transitions to `PROMOTED`: an atomic transaction renames `{view_name}_shadow` $\rightarrow$ `{view_name}` while demoting the old table.
 6. Worker decommissions and drops the old table, transitioning to `DECOMMISSIONED_OLD`.
+

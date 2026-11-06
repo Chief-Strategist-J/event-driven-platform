@@ -132,3 +132,56 @@ func TestFormatConsistencyToken(t *testing.T) {
 	token := rules.FormatConsistencyToken("orders_summary", 42)
 	assert.Equal(t, "cv_tok_orders_summary_42", token)
 }
+
+func TestEvaluateProjectionVersion_IntegrityConflict(t *testing.T) {
+	input := contracts.ApplyProjectionInput{
+		TenantID:      "tenant-alpha",
+		ViewName:      "customer_360",
+		AggregateType: "customer",
+		AggregateID:   "cust-001",
+		AggregateSeq:  4,
+		EventID:       uuid.New().String(),
+		PayloadRaw:    `{"name":"Alice","tier":"DIAMOND_CHANGED"}`,
+	}
+
+	eval, err := rules.EvaluateProjectionVersion(4, "original-hash-at-v4", input)
+	require.NoError(t, err)
+	assert.Equal(t, contracts.DecisionIntegrityConflict, eval.Decision)
+	assert.True(t, eval.IsQuarantined)
+}
+
+func TestParseConsistencyToken(t *testing.T) {
+	viewName, seq, err := rules.ParseConsistencyToken("cv_tok_orders_summary_104")
+	require.NoError(t, err)
+	assert.Equal(t, "orders_summary", viewName)
+	assert.Equal(t, int64(104), seq)
+
+	_, _, err = rules.ParseConsistencyToken("invalid_prefix_104")
+	assert.Error(t, err)
+
+	_, _, err = rules.ParseConsistencyToken("cv_tok_orders_bad")
+	assert.Error(t, err)
+}
+
+func TestEvaluatePeriodEventApplication(t *testing.T) {
+	isAdj, err := rules.EvaluatePeriodEventApplication(contracts.PeriodStatusOpen, 100.0)
+	require.NoError(t, err)
+	assert.False(t, isAdj)
+
+	isAdj, err = rules.EvaluatePeriodEventApplication(contracts.PeriodStatusFrozen, 100.0)
+	require.NoError(t, err)
+	assert.True(t, isAdj)
+
+	isAdj, err = rules.EvaluatePeriodEventApplication(contracts.PeriodStatusClosed, 100.0)
+	require.NoError(t, err)
+	assert.True(t, isAdj)
+
+	_, err = rules.EvaluatePeriodEventApplication("UNKNOWN", 100.0)
+	assert.Error(t, err)
+}
+
+func TestCalculateContributionDelta(t *testing.T) {
+	assert.Equal(t, 50.0, rules.CalculateContributionDelta(50.0, false))
+	assert.Equal(t, -50.0, rules.CalculateContributionDelta(50.0, true))
+}
+
