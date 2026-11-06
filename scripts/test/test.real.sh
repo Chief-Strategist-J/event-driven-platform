@@ -842,4 +842,119 @@ if [[ "${DB_TNT_STATE}" != "SUSPENDED" ]]; then
 fi
 echo "Tenant isolation and lifecycle state verified in PostgreSQL!"
 
+echo "================================================================"
+echo "15. TESTING PARTITIONING STRATEGY & RUNBOOK"
+echo "================================================================"
+PRT_TOPIC="orders.events.partitioned"
+PRT_TRACE_PARENT="00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+
+echo "Executing POST /api/v1/partitioning/topologies..."
+TOPOLOGY_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/partitioning/topologies" \
+    -H "Content-Type: application/json" \
+    -H "traceparent: ${PRT_TRACE_PARENT}" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "topic_name": "'"${PRT_TOPIC}"'",
+        "topic_class": "K_ORDERED",
+        "partition_count": 16,
+        "replication_factor": 3,
+        "min_insync_replicas": 2,
+        "allow_in_place_expansion": false
+    }')
+echo "Topology Registration Response:"
+echo "${TOPOLOGY_RESP}"
+if ! echo "${TOPOLOGY_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for partition topic topology registration!"
+    exit 1
+fi
+
+echo "Verifying partition topic topology persisted in PostgreSQL..."
+DB_PRT_COUNT=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT partition_count FROM partition_topic_topology WHERE tenant_id = '${MT_TENANT}' AND topic_name = '${PRT_TOPIC}';")
+if [[ "${DB_PRT_COUNT}" != "16" ]]; then
+    echo "FATAL: Expected partition_count 16 in partition_topic_topology table, got '${DB_PRT_COUNT}'"
+    exit 1
+fi
+echo "Topic topology persisted correctly!"
+
+echo "Executing POST /api/v1/partitioning/keys/calculate..."
+KEY_CALC_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/partitioning/keys/calculate" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "topic_name": "'"${PRT_TOPIC}"'",
+        "topic_class": "K_ORDERED",
+        "partition_count": 16,
+        "aggregate_type": "Order",
+        "aggregate_id": "ord_9901"
+    }')
+echo "Key Calculation Response:"
+echo "${KEY_CALC_RESP}"
+if ! echo "${KEY_CALC_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for partition key calculation!"
+    exit 1
+fi
+
+echo "Executing POST /api/v1/partitioning/skew/evaluate..."
+SKEW_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/partitioning/skew/evaluate" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "topic_name": "'"${PRT_TOPIC}"'",
+        "partitions": [
+            {"partition_id": 0, "throughput_eps": 100, "lag_records": 10},
+            {"partition_id": 1, "throughput_eps": 120, "lag_records": 15},
+            {"partition_id": 2, "throughput_eps": 110, "lag_records": 12},
+            {"partition_id": 3, "throughput_eps": 115, "lag_records": 11}
+        ]
+    }')
+echo "Skew Evaluation Response:"
+echo "${SKEW_RESP}"
+if ! echo "${SKEW_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for skew evaluation!"
+    exit 1
+fi
+
+MIG_ID="mig_$(date +%s)"
+echo "Executing POST /api/v1/partitioning/migrations to plan dual-writing migration..."
+MIG_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/partitioning/migrations" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "migration_id": "'"${MIG_ID}"'",
+        "source_topic": "'"${PRT_TOPIC}"'",
+        "target_topic": "'"${PRT_TOPIC}"'.v2",
+        "source_partitions": 16,
+        "target_partitions": 32
+    }')
+echo "Migration Plan Response:"
+echo "${MIG_RESP}"
+if ! echo "${MIG_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for partition migration planning!"
+    exit 1
+fi
+
+echo "Advancing migration phase to PROVISIONING_TARGET..."
+PHASE_RESP=$(curl -s -i -X PUT "http://127.0.0.1:${PORT}/api/v1/partitioning/migrations/phase" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "migration_id": "'"${MIG_ID}"'",
+        "expected_phase": "PLANNED",
+        "target_phase": "PROVISIONING_TARGET"
+    }')
+echo "Phase Transition Response:"
+echo "${PHASE_RESP}"
+if ! echo "${PHASE_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for migration phase update!"
+    exit 1
+fi
+
+echo "Verifying migration runbook record updated in PostgreSQL..."
+DB_MIG_PHASE=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT phase FROM partition_migration_runbook_log WHERE tenant_id = '${MT_TENANT}' AND migration_id = '${MIG_ID}';")
+if [[ "${DB_MIG_PHASE}" != "PROVISIONING_TARGET" ]]; then
+    echo "FATAL: Expected PROVISIONING_TARGET in partition_migration_runbook_log table, got '${DB_MIG_PHASE}'"
+    exit 1
+fi
+echo "Partition migration runbook updated and verified in PostgreSQL!"
+
 echo "All real API and backing server integration tests completed successfully."

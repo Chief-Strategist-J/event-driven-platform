@@ -181,12 +181,19 @@ echo "================================================================"
 KAFKA_TOPIC="edp.public.outbox"
 echo "Polling Kafka topic ${KAFKA_TOPIC} for aggregate_id: ${TEST_AGG_ID}..."
 
-CONSUMED_RECORD=$("${DOCKER_BIN}" exec -i event_platform-kafka-1 /opt/kafka/bin/kafka-console-consumer.sh \
-  --bootstrap-server "${KAFKA_BOOTSTRAP}" \
-  --topic "${KAFKA_TOPIC}" \
-  --from-beginning \
-  --max-messages 5 \
-  --timeout-ms 10000 2>/dev/null || true)
+CONSUMED_RECORD=""
+for attempt in $(seq 1 10); do
+    CONSUMED_RECORD=$("${DOCKER_BIN}" exec event_platform-kafka-1 /opt/kafka/bin/kafka-console-consumer.sh \
+      --bootstrap-server "${KAFKA_BOOTSTRAP}" \
+      --topic "${KAFKA_TOPIC}" \
+      --from-beginning \
+      --timeout-ms 5000 2>/dev/null || true)
+
+    if echo "${CONSUMED_RECORD}" | grep -q "${TEST_AGG_ID}"; then
+        break
+    fi
+    sleep 1
+done
 
 if echo "${CONSUMED_RECORD}" | grep -q "${TEST_AGG_ID}"; then
     echo ">>> Successfully verified CDC record captured from PostgreSQL WAL to Kafka!"

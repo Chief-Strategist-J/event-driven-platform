@@ -13,3 +13,4 @@ DROP FUNCTION IF EXISTS fn_prevent_materialized_view_agg_contributions_mutation(
 
 DROP TABLE IF EXISTS materialized_view_period_ledger;
 DROP TABLE IF EXISTS materialized_view_agg_contributions;
+

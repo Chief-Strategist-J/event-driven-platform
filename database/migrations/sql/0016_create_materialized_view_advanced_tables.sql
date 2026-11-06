@@ -77,3 +77,4 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_prevent_materialized_view_agg_contributions_mutation
 BEFORE UPDATE OR DELETE ON materialized_view_agg_contributions
 FOR EACH ROW EXECUTE FUNCTION fn_prevent_materialized_view_agg_contributions_mutation();
+
