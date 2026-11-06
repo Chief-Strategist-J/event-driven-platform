@@ -156,9 +156,11 @@ type HeldEventRecord struct {
 	AggregateID   string    `json:"aggregate_id"`
 	ExpectedSeq   int64     `json:"expected_seq"`
 	ReceivedSeq   int64     `json:"received_seq"`
-	EventPayload  string    `json:"event_payload"`
-	HeldUntil     time.Time `json:"held_until"`
-	CreatedAt     time.Time `json:"created_at"`
+	EventID       uuid.UUID `json:"event_id"`
+	Payload       string    `json:"payload"`
+	HeldReason    string    `json:"held_reason"`
+	Status        string    `json:"status"`
+	HeldAt        time.Time `json:"held_at"`
 }
 
 type RebuildLogRecord struct {

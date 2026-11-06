@@ -1922,3 +1922,249 @@ paths:
           description: Validation error
         "404":
           description: Aggregate not found
+
+  /api/v1/consistency/watermarks:
+    post:
+      summary: Observe and Update Stream Watermark & Freshness Lag
+      operationId: observeWatermark
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - view_name
+                - stream_name
+                - partition_id
+                - high_watermark_offset
+                - consumer_offset
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                view_name: { type: string }
+                stream_name: { type: string }
+                partition_id: { type: integer }
+                high_watermark_offset: { type: integer }
+                consumer_offset: { type: integer }
+                freshness_lag_ms: { type: integer }
+      responses:
+        "201":
+          description: Watermark ledger record upserted
+        "400":
+          description: Validation error
+
+  /api/v1/consistency/views/{view_name}/watermark:
+    get:
+      summary: Retrieve Partition Watermarks for View
+      operationId: getViewWatermarks
+      parameters:
+        - name: view_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of partition watermark records
+        "500":
+          description: Internal error
+
+  /api/v1/consistency/evaluate:
+    post:
+      summary: Evaluate Three-Valued Consistency for Record
+      operationId: evaluateRecordConsistency
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - view_name
+                - aggregate_type
+                - aggregate_id
+              properties:
+                tenant_id: { type: string }
+                view_name: { type: string }
+                aggregate_type: { type: string }
+                aggregate_id: { type: string }
+                source_exists: { type: boolean }
+                view_exists: { type: boolean }
+                source_version: { type: integer }
+                view_version: { type: integer }
+                source_payload_hash: { type: string }
+                view_payload_hash: { type: string }
+                is_manual_write: { type: boolean }
+                target_shards_failed: { type: integer }
+                replica_lag_ms: { type: integer }
+                replica_lag_threshold: { type: integer }
+                query_error_occurred: { type: boolean }
+      responses:
+        "200":
+          description: Evaluation result (MATCH, MISMATCH, or UNKNOWN)
+        "400":
+          description: Validation error
+
+  /api/v1/consistency/views/{view_name}/incidents:
+    get:
+      summary: Retrieve Active Drift Incidents for View
+      operationId: getActiveDriftIncidents
+      parameters:
+        - name: view_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Active drift incidents
+        "500":
+          description: Internal error
+
+  /api/v1/consistency/incidents/{id}/heal:
+    post:
+      summary: Attempt Idempotent Version-Guarded Heal
+      operationId: attemptHealing
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Healing outcome
+        "400":
+          description: Validation error
+
+  /api/v1/consistency/sweeps/run:
+    post:
+      summary: Record Verification Sweep Check Run
+      operationId: recordCheckSweep
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - view_name
+                - check_type
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                correlation_id: { type: string }
+                view_name: { type: string }
+                check_type: { type: string }
+                evaluated_keys: { type: integer }
+                match_count: { type: integer }
+                mismatch_count: { type: integer }
+                unknown_count: { type: integer }
+                duration_ms: { type: integer }
+      responses:
+        "201":
+          description: Check sweep recorded
+        "400":
+          description: Validation error
+
+  /api/v1/consistency/views/{view_name}/sweeps:
+    get:
+      summary: List Audit Sweep History
+      operationId: listCheckRuns
+      parameters:
+        - name: view_name
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Check sweep history
+        "500":
+          description: Internal error
+
+  /api/v1/consistency/silences:
+    post:
+      summary: Register Alert Silence with Enforced Expiry
+      operationId: registerSilence
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - view_name
+                - owner_id
+                - reason
+                - expires_at
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                view_name: { type: string }
+                owner_id: { type: string }
+                reason: { type: string }
+                expires_at: { type: string, format: date-time }
+      responses:
+        "201":
+          description: Silence registered
+        "400":
+          description: Validation error
+
+  /api/v1/consistency/probes/canary:
+    post:
+      summary: Dispatch Synthetic Canary Probe Across Partitions
+      operationId: dispatchCanaryProbe
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - stream_name
+                - partition_id
+                - key
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                correlation_id: { type: string }
+                stream_name: { type: string }
+                partition_id: { type: integer }
+                key: { type: string }
+                payload: { type: string }
+      responses:
+        "200":
+          description: Canary probe dispatched and verified
+        "400":
+          description: Validation error

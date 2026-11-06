@@ -54,19 +54,19 @@ SET current_version = EXCLUDED.current_version,
 	FlowInsertHeldEvent = `
 INSERT INTO materialized_view_held_events (
     id, public_id, tenant_id, source_service, external_id, correlation_id,
-    view_name, aggregate_type, aggregate_id, expected_seq, received_seq,
-    event_payload, held_until, created_at
+    view_name, aggregate_type, aggregate_id, expected_version, received_version,
+    event_id, payload, held_reason, status, held_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 );`
 
 	FlowSelectHeldEventsByAggregate = `
 SELECT id, public_id, tenant_id, source_service, external_id, correlation_id,
-       view_name, aggregate_type, aggregate_id, expected_seq, received_seq,
-       event_payload, held_until, created_at
+       view_name, aggregate_type, aggregate_id, expected_version, received_version,
+       event_id, payload, held_reason, status, held_at
 FROM materialized_view_held_events
 WHERE tenant_id = $1 AND view_name = $2 AND aggregate_type = $3 AND aggregate_id = $4
-ORDER BY received_seq ASC;`
+ORDER BY received_version ASC;`
 
 	FlowDeleteHeldEventByID = `
 DELETE FROM materialized_view_held_events

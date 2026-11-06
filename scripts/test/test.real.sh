@@ -958,4 +958,89 @@ if [[ "${DB_MIG_PHASE}" != "PROVISIONING_TARGET" ]]; then
 fi
 echo "Partition migration runbook updated and verified in PostgreSQL!"
 
+echo "================================================================"
+echo "16. TESTING REAL MATERIALIZED VIEWS & AGGREGATE RECONCILIATION"
+echo "================================================================"
+MV_VIEW_NAME="account_balances_${PRT_TIMESTAMP}"
+MV_TRACE_PARENT="00-5bf92f3577b34da6a3ce929d0e0e4755-00f067aa0ba90255-01"
+
+echo "Executing POST /api/v1/materialized-views to register new view..."
+MV_REG_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/materialized-views" \
+    -H "Content-Type: application/json" \
+    -H "traceparent: ${MV_TRACE_PARENT}" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "view_name": "'"${MV_VIEW_NAME}"'",
+        "view_class": "V_STATE",
+        "primary_store": "POSTGRES",
+        "active_table_name": "'"${MV_VIEW_NAME}"'",
+        "freshness_slo_ms": 1500,
+        "consistency_mode": "EVENTUAL"
+    }')
+echo "Materialized View Registration Response:"
+echo "${MV_REG_RESP}"
+if ! echo "${MV_REG_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for materialized view registration!"
+    exit 1
+fi
+
+MV_PUBLIC_ID=$(echo "${MV_REG_RESP}" | grep -o '"public_id":"[^"]*"' | head -n1 | cut -d'"' -f4)
+echo "Registered View Public ID: ${MV_PUBLIC_ID}"
+
+echo "Executing GET /api/v1/materialized-views/${MV_PUBLIC_ID}..."
+MV_GET_RESP=$(curl -s -i "http://127.0.0.1:${PORT}/api/v1/materialized-views/${MV_PUBLIC_ID}")
+echo "Get View Response:"
+echo "${MV_GET_RESP}"
+if ! echo "${MV_GET_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for materialized view retrieval!"
+    exit 1
+fi
+
+echo "Executing POST /api/v1/materialized-views/apply to test deterministic projection..."
+MV_APPLY_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/materialized-views/apply" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "view_name": "'"${MV_VIEW_NAME}"'",
+        "aggregate_type": "Account",
+        "aggregate_id": "acc_001",
+        "aggregate_seq": 1,
+        "event_id": "'$(uuidgen)'",
+        "payload_raw": "{\"balance\": 100.50}"
+    }')
+echo "Apply Projection Response:"
+echo "${MV_APPLY_RESP}"
+if ! echo "${MV_APPLY_RESP}" | grep -q '"decision":"APPLY"'; then
+    echo "FATAL: Expected APPLY decision on projection event!"
+    exit 1
+fi
+
+echo "Executing POST /api/v1/materialized-views/contributions to test aggregate delta accounting..."
+MV_CONTRIB_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/materialized-views/contributions" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "view_name": "'"${MV_VIEW_NAME}"'",
+        "aggregate_type": "Account",
+        "aggregate_id": "acc_001",
+        "source_event_id": "'$(uuidgen)'",
+        "source_seq": 1,
+        "delta_amount": 250.75,
+        "is_reversal": false
+    }')
+echo "Apply Contribution Response:"
+echo "${MV_CONTRIB_RESP}"
+if ! echo "${MV_CONTRIB_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for aggregate contribution!"
+    exit 1
+fi
+
+echo "Verifying materialized view projection state in PostgreSQL..."
+DB_MV_VERSION=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT current_version FROM materialized_view_projection_state WHERE tenant_id = '${MT_TENANT}' AND view_name = '${MV_VIEW_NAME}' AND aggregate_id = 'acc_001';")
+if [[ "${DB_MV_VERSION}" != "1" ]]; then
+    echo "FATAL: Expected current_version 1 in materialized_view_projection_state table, got '${DB_MV_VERSION}'"
+    exit 1
+fi
+echo "Materialized view projection verified in PostgreSQL!"
+
 echo "All real API and backing server integration tests completed successfully."

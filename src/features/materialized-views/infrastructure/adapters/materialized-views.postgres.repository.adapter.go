@@ -256,9 +256,11 @@ func (a *PostgresViewRepositoryAdapter) QuarantineHeldEvent(ctx context.Context,
 		event.AggregateID,
 		event.ExpectedSeq,
 		event.ReceivedSeq,
-		event.EventPayload,
-		event.HeldUntil,
-		event.CreatedAt,
+		event.EventID,
+		event.Payload,
+		event.HeldReason,
+		event.Status,
+		event.HeldAt,
 	)
 	if err != nil {
 		span.RecordError(err)
@@ -302,9 +304,11 @@ func (a *PostgresViewRepositoryAdapter) ListHeldEvents(
 			&e.AggregateID,
 			&e.ExpectedSeq,
 			&e.ReceivedSeq,
-			&e.EventPayload,
-			&e.HeldUntil,
-			&e.CreatedAt,
+			&e.EventID,
+			&e.Payload,
+			&e.HeldReason,
+			&e.Status,
+			&e.HeldAt,
 		); err != nil {
 			return nil, database.MapDatabaseError(err)
 		}

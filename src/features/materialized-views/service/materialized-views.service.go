@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"event-driven-platform/src/features/materialized-views/contracts"
@@ -43,7 +44,7 @@ func (s *ViewService) RegisterView(ctx context.Context, in contracts.RegisterVie
 
 	corrID, _ := uuid.Parse(normalized.CorrelationID)
 	now := time.Now().UTC()
-	pubID := fmt.Sprintf("mvr_%s", uuid.New().String()[:20])
+	pubID := fmt.Sprintf("mvr_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:20])
 
 	record := contracts.ViewRegistryRecord{
 		ID:              uuid.New(),
@@ -131,7 +132,7 @@ func (s *ViewService) ApplyProjection(ctx context.Context, in contracts.ApplyPro
 		eventUUID, _ := uuid.Parse(norm.EventID)
 		corrUUID, _ := uuid.Parse(norm.CorrelationID)
 		now := time.Now().UTC()
-		pubID := fmt.Sprintf("mps_%s", uuid.New().String()[:20])
+		pubID := fmt.Sprintf("mps_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:20])
 
 		state := contracts.ProjectionStateRecord{
 			ID:             uuid.New(),
@@ -160,7 +161,8 @@ func (s *ViewService) ApplyProjection(ctx context.Context, in contracts.ApplyPro
 
 	case contracts.DecisionGapHold:
 		corrUUID, _ := uuid.Parse(norm.CorrelationID)
-		pubID := fmt.Sprintf("mvh_%s", uuid.New().String()[:20])
+		eventUUID, _ := uuid.Parse(norm.EventID)
+		pubID := fmt.Sprintf("mhe_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:20])
 
 		held := contracts.HeldEventRecord{
 			ID:            uuid.New(),
@@ -174,9 +176,11 @@ func (s *ViewService) ApplyProjection(ctx context.Context, in contracts.ApplyPro
 			AggregateID:   norm.AggregateID,
 			ExpectedSeq:   evaluation.ExpectedSeq,
 			ReceivedSeq:   evaluation.IncomingSeq,
-			EventPayload:  norm.PayloadRaw,
-			HeldUntil:     time.Now().UTC().Add(10 * time.Minute),
-			CreatedAt:     time.Now().UTC(),
+			EventID:       eventUUID,
+			Payload:       norm.PayloadRaw,
+			HeldReason:    "GAP_HOLD",
+			Status:        "HELD",
+			HeldAt:        time.Now().UTC(),
 		}
 
 		if err := s.repo.QuarantineHeldEvent(ctx, held); err != nil {
@@ -187,7 +191,8 @@ func (s *ViewService) ApplyProjection(ctx context.Context, in contracts.ApplyPro
 
 	case contracts.DecisionIntegrityConflict:
 		corrUUID, _ := uuid.Parse(norm.CorrelationID)
-		pubID := fmt.Sprintf("mvh_integ_%s", uuid.New().String()[:16])
+		eventUUID, _ := uuid.Parse(norm.EventID)
+		pubID := fmt.Sprintf("mhe_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:20])
 
 		held := contracts.HeldEventRecord{
 			ID:            uuid.New(),
@@ -201,9 +206,11 @@ func (s *ViewService) ApplyProjection(ctx context.Context, in contracts.ApplyPro
 			AggregateID:   norm.AggregateID,
 			ExpectedSeq:   evaluation.ExpectedSeq,
 			ReceivedSeq:   evaluation.IncomingSeq,
-			EventPayload:  norm.PayloadRaw,
-			HeldUntil:     time.Now().UTC().Add(24 * time.Hour),
-			CreatedAt:     time.Now().UTC(),
+			EventID:       eventUUID,
+			Payload:       norm.PayloadRaw,
+			HeldReason:    "INTEGRITY_CONFLICT",
+			Status:        "HELD",
+			HeldAt:        time.Now().UTC(),
 		}
 
 		if err := s.repo.QuarantineHeldEvent(ctx, held); err != nil {
@@ -231,7 +238,7 @@ func (s *ViewService) InitiateRebuild(ctx context.Context, in contracts.Initiate
 
 	corrUUID, _ := uuid.Parse(norm.CorrelationID)
 	now := time.Now().UTC()
-	pubID := fmt.Sprintf("mvr_reb_%s", uuid.New().String()[:16])
+	pubID := fmt.Sprintf("mvr_reb_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:16])
 
 	logRecord := contracts.RebuildLogRecord{
 		ID:                uuid.New(),
@@ -336,7 +343,7 @@ func (s *ViewService) ApplyContribution(ctx context.Context, in contracts.ApplyC
 
 	delta := rules.CalculateContributionDelta(in.DeltaAmount, in.IsReversal)
 	now := time.Now().UTC()
-	pubID := fmt.Sprintf("mvac_%s", uuid.New().String()[:18])
+	pubID := fmt.Sprintf("mvac_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:18])
 
 	contrib := contracts.AggContributionRecord{
 		ID:            uuid.New(),
@@ -397,7 +404,7 @@ func (s *ViewService) RecordPeriodEvent(ctx context.Context, in contracts.Record
 		if corrUUID == uuid.Nil {
 			corrUUID = uuid.New()
 		}
-		pubID := fmt.Sprintf("mvpl_%s", uuid.New().String()[:18])
+		pubID := fmt.Sprintf("mvpl_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:18])
 
 		newPeriod := contracts.PeriodLedgerRecord{
 			ID:                 uuid.New(),
