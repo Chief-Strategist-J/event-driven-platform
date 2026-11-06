@@ -15,3 +15,4 @@ type DomainEventRepositoryPort interface {
 	RecordCausalEntry(ctx context.Context, entry contracts.CausalChainEntry) error
 	GetCausalEntry(ctx context.Context, tenantID string, eventID string) (contracts.CausalChainEntry, error)
 }
+

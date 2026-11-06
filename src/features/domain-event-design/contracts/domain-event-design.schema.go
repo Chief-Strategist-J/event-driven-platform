@@ -1,8 +1,17 @@
 package contracts
 
 import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"time"
 )
+
+func GeneratePublicID(prefix string) string {
+	b := make([]byte, 10)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%s_%s", prefix, hex.EncodeToString(b))
+}
 
 type BuildEnvelopeCommand struct {
 	TenantID           string            `json:"tenant_id"`
@@ -95,3 +104,4 @@ type RegisterTransactionGroupPartResult struct {
 	ReceivedCount      int    `json:"received_count"`
 	IsComplete         bool   `json:"is_complete"`
 }
+

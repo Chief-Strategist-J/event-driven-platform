@@ -8,3 +8,4 @@ DROP TABLE IF EXISTS causal_chain_log;
 DROP TABLE IF EXISTS transaction_group_ledger;
 DROP TABLE IF EXISTS aggregate_root_version_ledger;
 DROP TABLE IF EXISTS domain_event_catalog_ledger;
+

@@ -94,3 +94,4 @@ func ValidateTransactionGroup(groupID string, size int) error {
 	}
 	return nil
 }
+

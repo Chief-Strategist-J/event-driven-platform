@@ -11,3 +11,4 @@ func NewService(db *sql.DB) *service.DomainEventService {
 	repo := adapters.NewPostgresDomainEventAdapter(db)
 	return service.NewDomainEventService(repo)
 }
+

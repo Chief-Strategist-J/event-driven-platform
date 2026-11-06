@@ -101,3 +101,4 @@ func TestDomainEvent_PostgresLifecycle(t *testing.T) {
 	_, err = svc.ReserveAggregateVersion(ctx, conflictCmd)
 	assert.Error(t, err)
 }
+

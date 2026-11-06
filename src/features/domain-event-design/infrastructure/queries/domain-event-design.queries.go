@@ -86,3 +86,4 @@ SELECT id, public_id, tenant_id, source_service, external_id, correlation_id,
 FROM causal_chain_log
 WHERE tenant_id = $1 AND event_id = $2;
 `
+

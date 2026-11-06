@@ -145,3 +145,4 @@ DROP TRIGGER IF EXISTS trg_causal_chain_no_update ON causal_chain_log;
 CREATE TRIGGER trg_causal_chain_no_update
     BEFORE UPDATE OR DELETE ON causal_chain_log
     FOR EACH ROW EXECUTE FUNCTION trg_prevent_causal_chain_mutation();
+

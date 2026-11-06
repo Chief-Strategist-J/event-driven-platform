@@ -119,7 +119,7 @@ func (s *DomainEventService) BuildCanonicalEnvelope(
 
 	_ = s.repo.RecordCausalEntry(ctx, contracts.CausalChainEntry{
 		ID:                uuid.New(),
-		PublicID:          "csl_" + uuid.New().String()[:18],
+		PublicID:          contracts.GeneratePublicID("csl"),
 		TenantID:          cmd.TenantID,
 		SourceService:     cmd.SourceService,
 		ExternalID:        eventID,
@@ -174,7 +174,7 @@ func (s *DomainEventService) RegisterCatalogEvent(
 
 	entry := contracts.EventCatalogEntry{
 		ID:                uuid.New(),
-		PublicID:          "dec_" + uuid.New().String()[:18],
+		PublicID:          contracts.GeneratePublicID("dec"),
 		TenantID:          cmd.TenantID,
 		SourceService:     cmd.SourceService,
 		ExternalID:        cmd.ExternalID,
@@ -254,3 +254,4 @@ func (s *DomainEventService) RegisterTransactionGroupPart(
 	}
 	return s.repo.UpsertTransactionGroup(ctx, cmd)
 }
+

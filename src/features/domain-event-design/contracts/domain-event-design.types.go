@@ -118,3 +118,4 @@ type CausalChainEntry struct {
 	CausationPathHash string    `json:"causation_path_hash"`
 	CreatedAt         time.Time `json:"created_at"`
 }
+

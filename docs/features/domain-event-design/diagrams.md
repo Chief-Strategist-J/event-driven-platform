@@ -118,3 +118,4 @@ stateDiagram-v2
         Aggregate is permanently sealed
     end note
 ```
+

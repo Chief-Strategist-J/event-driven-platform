@@ -199,7 +199,7 @@ func (a *PostgresDomainEventAdapter) ReserveAggregateVersion(
 
 	now := time.Now().UTC()
 	initID := uuid.New()
-	pubID := "agg_" + uuid.New().String()[:18]
+	pubID := contracts.GeneratePublicID("agg")
 	var corrID uuid.UUID
 	if parsed, err := uuid.Parse(cmd.CorrelationID); err == nil {
 		corrID = parsed
@@ -293,7 +293,7 @@ func (a *PostgresDomainEventAdapter) UpsertTransactionGroup(
 
 	now := time.Now().UTC()
 	initID := uuid.New()
-	pubID := "txg_" + uuid.New().String()[:18]
+	pubID := contracts.GeneratePublicID("txg")
 	var corrID uuid.UUID
 	if parsed, err := uuid.Parse(cmd.CorrelationID); err == nil {
 		corrID = parsed
@@ -402,3 +402,4 @@ func (a *PostgresDomainEventAdapter) GetCausalEntry(
 	}
 	return entry, nil
 }
+

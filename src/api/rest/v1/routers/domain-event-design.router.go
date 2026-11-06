@@ -17,3 +17,4 @@ func RegisterDomainEventRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /api/v1/domain-events/aggregates/reserve-version", h.HandleReserveAggregateVersion)
 	mux.HandleFunc("POST /api/v1/domain-events/causality/verify", h.HandleVerifyCausalChain)
 }
+

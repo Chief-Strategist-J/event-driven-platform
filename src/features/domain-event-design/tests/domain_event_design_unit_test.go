@@ -278,3 +278,4 @@ func TestCausalLoopVerification(t *testing.T) {
 		t.Fatalf("expected loop_detected = true")
 	}
 }
+

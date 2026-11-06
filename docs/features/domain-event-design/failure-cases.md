@@ -129,3 +129,4 @@ This document details failure modes, severity ratings, edge-node scenarios, auto
   1. Aggregate version ledger marks `is_terminal = TRUE` upon consumption of terminal events.
   2. Further version reservations are permanently rejected with `422 Unprocessable Entity`.
 * **Detection:** Alert on `TerminalAggregateMutationAttempted`.
+

@@ -243,3 +243,4 @@ func (h *DomainEventHandler) writeError(w http.ResponseWriter, code int, canonic
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }
+

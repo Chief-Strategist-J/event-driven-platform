@@ -52,3 +52,4 @@ func (m *AggregateStateMachine) Transition(
 		IsTerminal:      cmd.MarkTerminal,
 	}, nil
 }
+
