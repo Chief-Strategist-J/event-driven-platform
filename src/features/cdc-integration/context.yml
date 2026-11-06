@@ -1,2 +1,28 @@
 feature: cdc-integration
 mode: stateless_hexagonal
+owner: data-platform-team
+entities:
+  - name: cdc_connector_inventory
+    fields:
+      - name: id             type: uuid          null: no   default: uuidv7()            constraint: PK, UNIQUE(tenant_id, id), immutable
+      - name: public_id      type: varchar(32)   null: no   default: generated          constraint: UNIQUE, immutable, format 'cdc_' + 20 chars
+      - name: tenant_id      type: varchar(64)   null: no   normalize: trim             constraint: immutable, btrim
+      - name: source_service type: varchar(64)   null: no   normalize: trim             constraint: btrim
+      - name: external_id    type: varchar(128)  null: no   normalize: trim             constraint: UNIQUE(tenant_id, source_service, external_id), btrim
+      - name: correlation_id type: uuid          null: no   constraint: immutable, no FK
+      - name: connector_name type: varchar(128)  null: no   normalize: trim             constraint: UNIQUE, immutable, btrim
+      - name: slot_name      type: varchar(128)  null: no   normalize: trim             constraint: UNIQUE, immutable, btrim
+      - name: publication_name type: varchar(128) null: no  normalize: trim             constraint: btrim
+      - name: mode           type: varchar(32)   null: no   constraint: CHECK IN ('M_OUTBOX', 'M_RAWTABLE')
+      - name: state          type: varchar(32)   null: no   constraint: CHECK IN ('UNREGISTERED', 'PROVISIONING', 'RUNNING', 'PAUSED', 'FAILED', 'DECOMMISSIONED')
+      - name: wal_retained_bytes type: bigint    null: no   default: 0                  constraint: CHECK >= 0
+      - name: wal_lag_bytes  type: bigint        null: no   default: 0                  constraint: CHECK >= 0
+      - name: last_heartbeat_at type: timestamptz null: no  default: now()
+      - name: version        type: bigint        null: no   default: 1
+    invariants:
+      - CDC-01: Snapshot does not replace event history
+      - CDC-02: Every replication slot is owned, monitored, and has active heartbeats
+      - CDC-03: No implicit snapshots; outbox snapshot mode is strictly NO_DATA
+      - CDC-04: Publication scope is explicit; table lists are named manually
+      - CDC-11: WAL disk-full circuit breaker alerts and pauses before storage exhaustion
+      - CDC-12: End-to-end continuous canary proves logical decoding throughput within SLO

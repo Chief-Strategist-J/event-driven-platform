@@ -210,6 +210,7 @@ func describeService() chassis.ServiceSpec {
 			}
 			if dbConn, exists := instances["db"].(*sql.DB); exists && dbConn != nil {
 				routers.RegisterMultiTenantRoutes(router, dbConn)
+				routers.RegisterCDCRoutes(router, dbConn)
 			}
 		},
 		RegisterConsumers: func(_ any, _ chassis.Services) {},

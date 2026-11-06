@@ -739,4 +739,107 @@ fi
 
 echo "Live OpenTelemetry trace export verified end-to-end."
 
+echo "================================================================"
+echo " 14. TESTING REAL MULTI-TENANT ISOLATION APIS & QUARANTINE"
+echo "================================================================"
+MT_TENANT="tenant_iso_${TIMESTAMP}"
+MT_TRACE_ID="fbf92f3577b34da6a3ce929d0e0e4714"
+MT_TRACE_PARENT="00-${MT_TRACE_ID}-00f067aa0ba90214-01"
+
+echo "Executing POST /api/v1/tenants to register new tenant ${MT_TENANT}..."
+REG_TENANT_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/tenants" \
+    -H "Content-Type: application/json" \
+    -H "traceparent: ${MT_TRACE_PARENT}" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "tier": "DEDICATED",
+        "home_region": "us-east-1",
+        "allowed_regions": ["us-east-1", "eu-central-1"],
+        "retention_class": "COMPLIANCE_7YR",
+        "max_throughput_eps": 5000,
+        "max_concurrency_lanes": 20
+    }')
+
+echo "Tenant Registration Response:"
+echo "${REG_TENANT_RESP}"
+if ! echo "${REG_TENANT_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for tenant registration!"
+    exit 1
+fi
+
+echo "Executing GET /api/v1/tenants/${MT_TENANT}..."
+GET_TENANT_RESP=$(curl -s "http://127.0.0.1:${PORT}/api/v1/tenants/${MT_TENANT}")
+echo "Get Tenant Response: ${GET_TENANT_RESP}"
+if ! echo "${GET_TENANT_RESP}" | grep -q '"tier":"DEDICATED"'; then
+    echo "FATAL: Tenant retrieval verification failed!"
+    exit 1
+fi
+
+echo "Verifying ingress envelope consistency with matching headers..."
+VERIFY_ENV_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/tenants/verify-envelope" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "header_tenant": "'"${MT_TENANT}"'",
+        "key_prefix": "'"${MT_TENANT}"'",
+        "payload_tenant": "'"${MT_TENANT}"'",
+        "current_region": "us-east-1"
+    }')
+echo "Verify Envelope Response:"
+echo "${VERIFY_ENV_RESP}"
+if ! echo "${VERIFY_ENV_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for valid tenant envelope verification!"
+    exit 1
+fi
+
+echo "Testing envelope rejection on tenant mismatch (MT-02 invariant)..."
+MISMATCH_ENV_RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:${PORT}/api/v1/tenants/verify-envelope" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "header_tenant": "'"${MT_TENANT}"'",
+        "key_prefix": "attacker_tenant",
+        "payload_tenant": "'"${MT_TENANT}"'",
+        "current_region": "us-east-1"
+    }')
+if [[ "${MISMATCH_ENV_RESP}" != "403" ]]; then
+    echo "FATAL: Expected HTTP 403 Forbidden on tenant spoofing mismatch, got ${MISMATCH_ENV_RESP}!"
+    exit 1
+fi
+echo "Tenant mismatch safely rejected with HTTP 403 Forbidden!"
+
+echo "Testing residency rejection on disallowed region (MT-08 invariant)..."
+RESIDENCY_ENV_RESP=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://127.0.0.1:${PORT}/api/v1/tenants/verify-envelope" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "header_tenant": "'"${MT_TENANT}"'",
+        "key_prefix": "'"${MT_TENANT}"'",
+        "payload_tenant": "'"${MT_TENANT}"'",
+        "current_region": "ap-southeast-1"
+    }')
+if [[ "${RESIDENCY_ENV_RESP}" != "403" ]]; then
+    echo "FATAL: Expected HTTP 403 Forbidden on data residency breach, got ${RESIDENCY_ENV_RESP}!"
+    exit 1
+fi
+echo "Residency boundary breach safely rejected with HTTP 403 Forbidden!"
+
+echo "Executing PUT /api/v1/tenants/${MT_TENANT}/lifecycle to SUSPEND tenant..."
+SUSPEND_RESP=$(curl -s -X PUT "http://127.0.0.1:${PORT}/api/v1/tenants/${MT_TENANT}/lifecycle" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "target_state": "SUSPENDED",
+        "reason": "Administrative suspension"
+    }')
+echo "Lifecycle Transition Response: ${SUSPEND_RESP}"
+if ! echo "${SUSPEND_RESP}" | grep -q '"lifecycle_state":"SUSPENDED"'; then
+    echo "FATAL: Failed transitioning tenant lifecycle to SUSPENDED!"
+    exit 1
+fi
+
+echo "Verifying tenant record updated in real PostgreSQL..."
+DB_TNT_STATE=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT lifecycle_state FROM tenant_registry WHERE tenant_id = '${MT_TENANT}';")
+if [[ "${DB_TNT_STATE}" != "SUSPENDED" ]]; then
+    echo "FATAL: Expected SUSPENDED in tenant_registry table, got '${DB_TNT_STATE}'"
+    exit 1
+fi
+echo "Tenant isolation and lifecycle state verified in PostgreSQL!"
+
 echo "All real API and backing server integration tests completed successfully."

@@ -1,0 +1,165 @@
+# Architectural Decision Record: Change Data Capture (CDC) Integration & Replication Guardrails (WP-11)
+
+## 1. Title & Metadata
+* **Status**: APPROVED
+* **Date**: 2026-11-06
+* **Decision Makers**: Platform Security Guild, Data Infrastructure Board, Chief Distributed Systems Architect
+* **Governing Specification**: [CDC Integration Production System Design Tree (v2)](file:///home/btpl-lap-22/live/System-Architect/event-driven-platform/docs/features/cdc-integration/business-logic.md)
+
+---
+
+## 2. Context & Problem Statement
+Integrating Change Data Capture (CDC) via PostgreSQL logical decoding (pgoutput) and Debezium into an event-driven platform introduces severe architectural failure modes if managed as a simple streaming pipeline:
+
+1. **Unbounded WAL Retention & Primary Database Disk Exhaustion (CDC-11, OUTAGE)**: When a Debezium connector task crashes or consumers lag indefinitely, PostgreSQL replication slots retain Write-Ahead Log (WAL) segments indefinitely. Once the host filesystem fills to 100%, PostgreSQL terminates with a `PANIC` crash, shutting down the entire platform.
+2. **Semantic Corruption via Outbox Snapshotting (CDC-01, CDC-03, CORRUPT)**: The transactional outbox pattern requires append-only streaming. Executing ad-hoc or incremental table snapshots against an active outbox table re-emits processed, deleted, or obsolete event rows out-of-order, bypassing domain versioning and causing duplicate business effects in downstream consumers.
+3. **Replication Slot Loss on Primary Failover (CDC-07, LOSS)**: In PostgreSQL versions $\le 16$, logical replication slots are not replicated to physical standbys. Promoting a replica during ungraceful primary failover leaves the connector with a dead slot. Without deterministic LSN reconciliation against durable audit logs, subsequent streaming causes silent gaps or catastrophic re-reads.
+4. **Schema Coupling & Semantic Leakage via Raw Table Capture (F2.1, CORRUPT)**: Exposing internal source database row changes (`M_RAWTABLE`) directly to other service domains couples independent microservices to internal physical database layouts. Altering column names, types, or table structures breaks external consumers without warning.
+5. **Slot Inactivity Starvation on Low-Volume Tenants (CDC-02, CDC-05, DEGRADE)**: In an idle or multi-tenant database, long periods without transactions in the captured publication prevent PostgreSQL from advancing `confirmed_flush_lsn`. As other databases on the cluster write WAL, the inactive slot prevents WAL segment recycling, bloating storage despite zero domain activity.
+
+---
+
+## 3. Decision Drivers & Architecture Invariants (CDC-01 to CDC-12)
+
+* **CDC-01: Snapshot $\neq$ History [Certain]**:
+  Snapshots provide point-in-time state, not event history. Recovery runbooks never use snapshots to reconstruct lost outbox events; event replay is sourced exclusively from the durable outbox audit store (`C-AUD`).
+* **CDC-02: Every Replication Slot is Owned, Monitored, and Accounted For [Certain]**:
+  Replication slot creation is governed by an explicit inventory (`cdc_connector_inventory`). Orphaned or unmonitored slots are detected and paused before causing cluster-wide WAL retention.
+* **CDC-03: No Implicit Snapshots [Certain]**:
+  Snapshot modes must be explicitly configured per connector. Outbox mode (`M_OUTBOX`) enforces `snapshot.mode = no_data`. Raw table bootstrap snapshots are triggered exclusively via explicit control signals (`C-SIG`).
+* **CDC-04: Publication Scope is Explicit [Certain]**:
+  PostgreSQL publications must explicitly enumerate target tables. Wildcard publications (`FOR ALL TABLES` or `*`) are rejected by domain rules to prevent unintended exposure of internal schema or PII.
+* **CDC-05: Zero Error Tolerance in the Pipeline [Certain]**:
+  Connectors run with zero tolerance for serialization errors or unknown types. Malformed records halt the connector task rather than dropping data silently.
+* **CDC-06: Raw CDC Carries Complete, Correct Row Images [Certain]**:
+  Raw captured tables must declare `REPLICA IDENTITY FULL` when update/delete tracking requires before-and-after state. TOASTed columns and exact numerics (`DECIMAL` as string/bigint) are validated during provisioning.
+* **CDC-07: Slot Survival Across Failover is Designed, Not Hoped For [Certain]**:
+  PostgreSQL 17+ failover slots or external slot-synchronization daemons sync slot positions across physical replicas. Failover runbooks verify confirmed LSN positions before resuming connectors.
+* **CDC-08: No Ghost Events [Certain]**:
+  Logical decoding must be coordinated with physical standby replication confirmation to prevent emitting events for transactions subsequently rolled back during ungraceful failover.
+* **CDC-09: Control Plane is Authenticated and Audited [Certain]**:
+  Connect REST management endpoints are wrapped behind the CDC feature control plane with role-based access control, cryptographic verification, and audit logging.
+* **CDC-10: Configuration is Code [Certain]**:
+  Connector configurations are versioned in Git. Runtime connector drift detection continuously reconciles active Debezium tasks against target repository manifests.
+* **CDC-11: WAL Alerting is Time-to-Disk-Full Based [Certain]**:
+  Threshold alerts do not rely on static byte counts. The system projects time-to-exhaustion using dynamic WAL generation velocity:
+  $$\text{threat\_hours} = \frac{\text{disk\_free\_bytes} - \text{disk\_reserve\_bytes}}{\text{wal\_growth\_rate\_bytes\_per\_sec} \times 3600}$$
+  If $\text{threat\_hours} < 1.0$, the circuit breaker initiates an emergency connector pause.
+* **CDC-12: End-to-End Delivery is Proven Continuously [Certain]**:
+  A synthetic canary generator injects timestamped heartbeat events through the real outbox table and verifies consumption latency against a 5000ms SLA.
+
+---
+
+## 4. Key Architectural Decisions
+
+### 4.1 Dual-Engine Segregation: Outbox vs Raw-Table
+
+| Dimension | `M_OUTBOX` (Transactional Outbox) | `M_RAWTABLE` (Direct Source Capture) |
+| :--- | :--- | :--- |
+| **Primary Intent** | Domain event integration across service boundaries. | Homogeneous data movement (search sync, cache warming, DWH). |
+| **Consumer Contract** | Immutable, semantic domain event schema (JSON Schema / Protobuf). | Source database table schema (Avro / Struct). |
+| **Snapshot Policy** | Strictly forbidden (`ErrOutboxSnapshotForbidden`). | Ad-hoc / Incremental snapshots allowed via `C-SIG`. |
+| **Routing Strategy** | Dynamic routing by `aggregate_id` to domain topics. | Direct 1:1 table-to-topic mapping (`<prefix>.<schema>.<table>`). |
+| **Failure Recovery** | Replay from `C-AUD` audit ledger. | Trigger incremental snapshot chunking via signaling table. |
+
+### 4.2 Replication Slot Protection & Idle Heartbeat Engine
+To guarantee that low-traffic databases do not cause WAL segment retention:
+1. The CDC service executes periodic heartbeat writes against `cdc_heartbeat_log`.
+2. Debezium decodes the heartbeat transaction, allowing PostgreSQL's logical decoding engine to advance `confirmed_flush_lsn`.
+3. WAL segments older than the confirmed LSN are safely freed by PostgreSQL checkpoints.
+
+### 4.3 WAL Runaway Circuit Breaker
+The platform implements an automated circuit breaker evaluating WAL generation rate against available disk headroom:
+* **Ample Headroom ($\text{threat\_hours} \ge 4.0$)**: Normal streaming; metrics logged.
+* **Warning State ($1.0 \le \text{threat\_hours} < 4.0$)**: PagerDuty alert dispatched to on-call platform engineers.
+* **Tripped Emergency Pause ($\text{threat\_hours} < 1.0$)**: Connector transition to `PAUSED` state, releasing replication connection locks and halting WAL consumption to avoid catastrophic disk exhaustion.
+
+---
+
+## 5. Database Migration 0013 Schema
+
+The physical persistence layer is codified in `0013_create_cdc_integration_tables.sql` and satisfies the 9-field migration header, 5 identifier roles, `btrim` check constraints, and immutability triggers:
+
+```mermaid
+erDiagram
+    cdc_connector_inventory {
+        uuid id PK
+        varchar public_id UK
+        varchar tenant_id
+        varchar source_service
+        varchar external_id
+        uuid correlation_id
+        varchar connector_name UK
+        varchar slot_name UK
+        varchar publication_name
+        varchar mode
+        varchar state
+        bigint wal_retained_bytes
+        bigint wal_lag_bytes
+        timestamptz last_heartbeat_at
+        bigint version
+    }
+
+    cdc_signal_log {
+        uuid id PK
+        varchar public_id UK
+        varchar tenant_id
+        varchar source_service
+        varchar external_id
+        uuid correlation_id
+        varchar connector_name
+        varchar signal_type
+        jsonb payload
+        varchar status
+        timestamptz executed_at
+    }
+
+    cdc_heartbeat_log {
+        uuid id PK
+        varchar public_id UK
+        varchar tenant_id
+        varchar source_service
+        varchar external_id
+        uuid correlation_id
+        varchar connector_name
+        varchar lsn_position
+        timestamptz emitted_at
+    }
+
+    cdc_canary_reconciliation_log {
+        uuid id PK
+        varchar public_id UK
+        varchar tenant_id
+        varchar source_service
+        varchar external_id
+        uuid correlation_id
+        varchar canary_id UK
+        timestamptz injected_at
+        timestamptz consumed_at
+        bigint latency_ms
+        varchar status
+    }
+
+    cdc_connector_inventory ||--o{ cdc_signal_log : receives
+    cdc_connector_inventory ||--o{ cdc_heartbeat_log : tracks
+    cdc_connector_inventory ||--o{ cdc_canary_reconciliation_log : reconciles
+```
+
+---
+
+## 6. REST API & OpenAPI 3.1 Parity
+
+The CDC feature exposes 4 REST operations under `/api/v1/cdc`:
+1. `POST /api/v1/cdc/connectors`: Register new CDC connector with slot name pattern validation and publication checks.
+2. `POST /api/v1/cdc/signals`: Dispatch Debezium control and incremental snapshot signals.
+3. `POST /api/v1/cdc/heartbeat`: Emit synthetic transaction to advance logical LSN on idle clusters.
+4. `POST /api/v1/cdc/circuit-breaker/evaluate`: Ingest disk telemetry and evaluate emergency pause trip conditions.
+
+---
+
+## 7. Verification & Test Strategy
+* **Tier 1 (Unit Rules)**: Validates invariants `CDC-01` to `CDC-12`, including regex slot naming (`^cdc_slot_[a-z0-9_]+$`), outbox snapshot rejection, and circuit breaker calculation.
+* **Tier 2 (State Machine)**: Verifies valid connector lifecycle transitions (`UNREGISTERED` $\rightarrow$ `PROVISIONING` $\rightarrow$ `RUNNING` $\leftrightarrow$ `PAUSED` $\rightarrow$ `FAILED` $\rightarrow$ `DECOMMISSIONED`) and terminal state immutability.
+* **Tier 3 (PostgreSQL Adapter)**: Verifies relational persistence, check constraints, and optimistic locking against live PostgreSQL.
+* **Tier 4 (Canary Reconciliation)**: Simulates synthetic end-to-end event injection and verifies 5000ms SLA evaluation.
+

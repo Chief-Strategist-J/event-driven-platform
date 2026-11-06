@@ -1395,3 +1395,108 @@ paths:
           description: Ingress envelope verified
         "403":
           description: Verification failed (mismatch or residency disallowed)
+
+  /api/v1/cdc/connectors:
+    post:
+      summary: Register and Provision CDC Logical Replication Connector
+      operationId: registerCDCConnector
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - external_id
+                - connector_name
+                - slot_name
+                - publication_name
+                - mode
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                connector_name: { type: string }
+                slot_name: { type: string }
+                publication_name: { type: string }
+                mode: { type: string, enum: ["M_OUTBOX", "M_RAWTABLE"] }
+      responses:
+        "201":
+          description: CDC connector registered and provisioned
+        "400":
+          description: Validation error
+        "409":
+          description: Connector already exists
+
+  /api/v1/cdc/connectors/{name}:
+    get:
+      summary: Get CDC Connector Inventory and WAL Lag
+      operationId: getCDCConnector
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Connector details found
+        "404":
+          description: Connector not found
+
+  /api/v1/cdc/signals:
+    post:
+      summary: Dispatch Debezium Incremental Snapshot or Control Signal
+      operationId: dispatchCDCSignal
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - connector_name
+                - signal_type
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                connector_name: { type: string }
+                signal_type: { type: string, enum: ["EXECUTE_SNAPSHOT", "PAUSE_SNAPSHOT", "RESUME_SNAPSHOT", "CHECKPOINT"] }
+                payload: { type: object }
+      responses:
+        "202":
+          description: Signal recorded in signal log
+        "400":
+          description: Validation error (e.g. snapshot signal on outbox mode)
+
+  /api/v1/cdc/heartbeat:
+    post:
+      summary: Emit LSN Heartbeat to Keep Slot Advancing on Idle Database
+      operationId: emitCDCHeartbeat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - connector_name
+                - lsn_position
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                connector_name: { type: string }
+                lsn_position: { type: string }
+      responses:
+        "200":
+          description: Heartbeat recorded
+        "400":
+          description: Validation error
