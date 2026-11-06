@@ -5,8 +5,12 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"event-driven-platform/src/features/transactional-outbox/contracts"
 	"event-driven-platform/src/features/transactional-outbox/service"
+	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
 	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
@@ -45,11 +49,25 @@ func NewTransactionalOutboxHandler(s *service.OutboxService) *TransactionalOutbo
 
 func (h *TransactionalOutboxHandler) CreateOutboxRecord(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/outbox/events", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
 	idempotencyKey := r.Header.Get(constants.HeaderXIdempotencyKey)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/outbox/events"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	var req CreateOutboxRequest
 	decoder := json.NewDecoder(r.Body)
@@ -59,9 +77,6 @@ func (h *TransactionalOutboxHandler) CreateOutboxRecord(w http.ResponseWriter, r
 		return
 	}
 
-	if corrID == "" {
-		corrID = reqID
-	}
 	if causationID == "" {
 		causationID = reqID
 	}
@@ -82,7 +97,7 @@ func (h *TransactionalOutboxHandler) CreateOutboxRecord(w http.ResponseWriter, r
 		CDCMode:          req.CDCMode,
 	}
 
-	record, err := h.service.StageEvent(r.Context(), input, idempotencyKey)
+	record, err := h.service.StageEvent(ctx, input, idempotencyKey)
 	if err != nil {
 		if appErr, ok := err.(*appErrors.ApplicationError); ok {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
@@ -112,10 +127,24 @@ func (h *TransactionalOutboxHandler) CreateOutboxRecord(w http.ResponseWriter, r
 
 func (h *TransactionalOutboxHandler) RelayBatch(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/outbox/relay", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/outbox/relay"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	var req RelayBatchRequest
 	if r.Body != nil && r.ContentLength > 0 {
@@ -132,7 +161,7 @@ func (h *TransactionalOutboxHandler) RelayBatch(w http.ResponseWriter, r *http.R
 		batchSize = constants.DefaultRelayBatchSize
 	}
 
-	count, err := h.service.RelayBatch(r.Context(), batchSize)
+	count, err := h.service.RelayBatch(ctx, batchSize)
 	if err != nil {
 		if appErr, ok := err.(*appErrors.ApplicationError); ok {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)

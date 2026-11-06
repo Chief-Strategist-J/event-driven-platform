@@ -5,8 +5,12 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"event-driven-platform/src/features/idempotent-consumers/contracts"
 	"event-driven-platform/src/features/idempotent-consumers/service"
+	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
 	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
@@ -23,10 +27,24 @@ func NewIdempotentConsumerHandler(s *service.ConsumerService) *IdempotentConsume
 
 func (h *IdempotentConsumerHandler) Consume(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/consumers/events", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/consumers/events"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	var req contracts.ConsumerIngressRequest
 	decoder := json.NewDecoder(r.Body)
@@ -62,7 +80,7 @@ func (h *IdempotentConsumerHandler) Consume(w http.ResponseWriter, r *http.Reque
 		EventOccurredAt:  time.Now().UTC(),
 	}
 
-	res, err := h.service.ConsumeEvent(r.Context(), event)
+	res, err := h.service.ConsumeEvent(ctx, event)
 	if err != nil {
 		if appErr, ok := err.(*appErrors.ApplicationError); ok {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)

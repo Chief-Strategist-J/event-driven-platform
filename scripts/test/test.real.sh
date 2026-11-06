@@ -1794,8 +1794,8 @@ if ! echo "${EXTRACT_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
     echo "FATAL: Expected HTTP 200 for trace extraction!"
     exit 1
 fi
-if ! echo "${EXTRACT_RESP}" | grep -q '"linking_mode":"CHILD_SPAN"'; then
-    echo "FATAL: Expected linking_mode CHILD_SPAN in extract response!"
+if ! echo "${EXTRACT_RESP}" | grep -q '"linking_mode":"CHILD_SPAN_DIRECT"'; then
+    echo "FATAL: Expected linking_mode CHILD_SPAN_DIRECT in extract response!"
     exit 1
 fi
 

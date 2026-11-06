@@ -171,7 +171,7 @@ func TestEventAuthorization_PhysicalCheckConstraints(t *testing.T) {
 	})
 
 	t.Run("RejectAuditLogMutationViaTrigger", func(t *testing.T) {
-		pubID := "aal_1234567890abcdef"
+		pubID, _ := contracts.GeneratePublicID("aal")
 		_, err := db.ExecContext(ctx, `
 			INSERT INTO auth_audit_log (
 				id, public_id, tenant_id, source_service, external_id, correlation_id,

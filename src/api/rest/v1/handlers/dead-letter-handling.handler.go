@@ -7,8 +7,12 @@ import (
 	"strconv"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	"event-driven-platform/src/features/dead-letter-handling/contracts"
 	"event-driven-platform/src/features/dead-letter-handling/service"
+	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
 	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
@@ -29,10 +33,24 @@ func NewDeadLetterHandler(s *service.DeadLetterService, invoker service.Consumer
 
 func (h *DeadLetterHandler) Quarantine(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/dlq/quarantine", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/dlq/quarantine"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	var req contracts.QuarantineIngressRequest
 	decoder := json.NewDecoder(r.Body)
@@ -46,11 +64,6 @@ func (h *DeadLetterHandler) Quarantine(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "invalid payload structure", start, reqID, corrID, causationID)
 		return
-	}
-
-	if corrID == "" {
-		newUUID, _ := utils.GenerateUUIDv7()
-		corrID = newUUID
 	}
 
 	input := contracts.QuarantineEventInput{
@@ -74,7 +87,7 @@ func (h *DeadLetterHandler) Quarantine(w http.ResponseWriter, r *http.Request) {
 		ErrorCode:        req.ErrorCode,
 	}
 
-	rec, err := h.service.QuarantineEvent(r.Context(), input)
+	rec, err := h.service.QuarantineEvent(ctx, input)
 	if err != nil {
 		if appErr, ok := err.(*appErrors.ApplicationError); ok {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
@@ -103,10 +116,24 @@ func (h *DeadLetterHandler) Quarantine(w http.ResponseWriter, r *http.Request) {
 
 func (h *DeadLetterHandler) Redrive(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/dlq/redrive", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/dlq/redrive"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	var req contracts.RedriveRequest
 	decoder := json.NewDecoder(r.Body)
@@ -123,7 +150,7 @@ func (h *DeadLetterHandler) Redrive(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	res, err := h.service.RedriveEvent(r.Context(), req.TenantID, req.QuarantineID, invoker)
+	res, err := h.service.RedriveEvent(ctx, req.TenantID, req.QuarantineID, invoker)
 	if err != nil {
 		if appErr, ok := err.(*appErrors.ApplicationError); ok {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
@@ -157,10 +184,24 @@ func (h *DeadLetterHandler) Redrive(w http.ResponseWriter, r *http.Request) {
 
 func (h *DeadLetterHandler) Discard(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/dlq/discard", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/dlq/discard"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	var req contracts.DiscardRequest
 	decoder := json.NewDecoder(r.Body)
@@ -170,7 +211,7 @@ func (h *DeadLetterHandler) Discard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.service.DiscardEvent(r.Context(), req.TenantID, req.QuarantineID, req.Reason); err != nil {
+	if err := h.service.DiscardEvent(ctx, req.TenantID, req.QuarantineID, req.Reason); err != nil {
 		if appErr, ok := err.(*appErrors.ApplicationError); ok {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
 			return
@@ -198,10 +239,24 @@ func (h *DeadLetterHandler) Discard(w http.ResponseWriter, r *http.Request) {
 
 func (h *DeadLetterHandler) List(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "GET /api/v1/dlq", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/dlq"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	tenantID := r.URL.Query().Get("tenantId")
 	handlerID := r.URL.Query().Get("handlerId")
@@ -216,7 +271,7 @@ func (h *DeadLetterHandler) List(w http.ResponseWriter, r *http.Request) {
 		offset = 0
 	}
 
-	records, err := h.service.ListQuarantined(r.Context(), tenantID, handlerID, status, limit, offset)
+	records, err := h.service.ListQuarantined(ctx, tenantID, handlerID, status, limit, offset)
 	if err != nil {
 		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "internal list error", start, reqID, corrID, causationID)
 		return

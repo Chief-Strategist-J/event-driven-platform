@@ -5,8 +5,12 @@ import (
 	"net/http"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
+
 	eventschemaregistry "event-driven-platform/src/features/event-schema-registry/contracts"
 	"event-driven-platform/src/features/event-schema-registry/service"
+	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
 	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
@@ -23,10 +27,24 @@ func NewEventSchemaRegistryHandler(s *service.SchemaRegistryService) *EventSchem
 
 func (h *EventSchemaRegistryHandler) RegisterSchema(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/schemas/register", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	traceparent := r.Header.Get(constants.HeaderTraceparent)
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/schemas/register"),
+		attribute.String("correlation_id", corrID),
+	)
 
 	var req eventschemaregistry.RegisterSchemaInput
 	decoder := json.NewDecoder(r.Body)
@@ -36,7 +54,7 @@ func (h *EventSchemaRegistryHandler) RegisterSchema(w http.ResponseWriter, r *ht
 		return
 	}
 
-	res, err := h.service.RegisterSchema(r.Context(), req)
+	res, err := h.service.RegisterSchema(ctx, req)
 	if err != nil {
 		if appErr, ok := err.(*appErrors.ApplicationError); ok {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID)
