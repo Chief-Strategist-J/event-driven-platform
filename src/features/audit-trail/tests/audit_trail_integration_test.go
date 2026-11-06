@@ -161,11 +161,11 @@ func TestAuditTrail_PostgresLifecycleAndHashChainIntegrity(t *testing.T) {
 
 	ctx := context.Background()
 	repo := adapters.NewPostgresAuditTrailRepositoryAdapter(db)
-	svc := service.NewAuditTrailService(repo)
+	signingSecret := "super_secret_audit_anchor_key_32chars_long"
+	svc := service.NewAuditTrailService(repo, signingSecret)
 
 	tenantID := "tenant_aud_life_" + cleanHex(uuid.New())[:8]
 	shardID := "shard_orders_" + cleanHex(uuid.New())[:6]
-	signingSecret := "super_secret_audit_anchor_key_32chars"
 
 	r1, err := svc.EmitAuditRecord(ctx, contracts.EmitAuditInput{
 		TenantID:         tenantID,
