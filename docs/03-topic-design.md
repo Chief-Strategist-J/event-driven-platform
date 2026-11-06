@@ -79,3 +79,4 @@ flowchart TD
 - `cleanup.policy=compact`
 - `min.cleanable.dirty.ratio=0.20` (initiates compaction when $20\%$ of the log segment contains superseded keys)
 - `delete.retention.ms=86400000` (24-hour tombstone retention: consumers have 24 hours to observe record deletions before permanent segment erasure)
+

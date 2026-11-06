@@ -66,3 +66,4 @@ Due to at-least-once delivery, network retries, and schema evolution upcasters, 
 The platform executes a continuous **Reconciliation Engine**:
 1. **Merkle Tree / Hash Comparison:** Nightly batch workers compute cryptographically signed SHA-256 state hashes across aggregates in the primary DB vs read projection stores.
 2. **Drift Remediation:** If a hash mismatch is detected, the projection store for that specific aggregate is automatically wiped and rebuilt by replaying events from version $1$ to current from the immutable outbox archive.
+
