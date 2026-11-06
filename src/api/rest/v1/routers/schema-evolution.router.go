@@ -17,3 +17,4 @@ func RegisterSchemaEvolutionRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /api/v1/schemas/dual-publish", h.HandleInitiateDualPublish)
 	mux.HandleFunc("POST /api/v1/schemas/decommission/check", h.HandleEvaluateDecommission)
 }
+
