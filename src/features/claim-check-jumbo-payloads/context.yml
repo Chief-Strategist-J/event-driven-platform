@@ -1,0 +1,20 @@
+feature: claim-check-jumbo-payloads
+owner: platform-performance-team
+description: >
+  Transparent payload offloading to S3/GCS for messages exceeding 1MB.
+
+boundaries:
+  - Scoped to performance-scaling and high-throughput execution.
+  - Zero inline SQL; zero comments in source files.
+  - Conforms to hexagonal architecture and 1-feature-folder-writing-rule.
+
+ports:
+  driven:
+    - ClaimCheckJumboPayloadsRepositoryPort (infrastructure/ports/claim-check-jumbo-payloads.repository.port.go)
+  driving:
+    - ClaimCheckJumboPayloadsService methods exposed through feature facade (index.go)
+
+invariants:
+  - PERF-01: Zero allocation on hot execution path.
+  - PERF-02: Bounded latency under p99 SLA limits.
+  - PERF-03: Thread-safe non-blocking concurrent access.
