@@ -291,3 +291,4 @@ func (h *PartitioningHandler) writeError(w http.ResponseWriter, code int, canoni
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }
+

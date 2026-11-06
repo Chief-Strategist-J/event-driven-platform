@@ -1,2 +1,30 @@
 feature: materialized-views
 mode: stateless_hexagonal
+owner: view-platform-team
+entities:
+  - name: materialized_view_registry
+    fields:
+      - name: id                       type: uuid          null: no   default: uuidv7()       constraint: PK, UNIQUE(tenant_id, id), immutable
+      - name: public_id                type: varchar(32)   null: no   default: generated     constraint: UNIQUE, immutable, format 'mvr_' + 20 chars
+      - name: tenant_id                type: varchar(64)   null: no   normalize: trim        constraint: immutable, btrim
+      - name: source_service           type: varchar(64)   null: no   normalize: trim        constraint: btrim
+      - name: external_id              type: varchar(128)  null: no   normalize: trim        constraint: UNIQUE(tenant_id, source_service, external_id), btrim
+      - name: correlation_id           type: uuid          null: no   constraint: immutable, no FK
+      - name: view_name                type: varchar(128)  null: no   normalize: trim        constraint: UNIQUE(tenant_id, view_name), immutable, btrim
+      - name: view_class               type: varchar(32)   null: no   constraint: CHECK IN ('V_STATE', 'V_AGG', 'V_JOIN', 'V_SEARCH', 'V_KV', 'V_REPORT')
+      - name: primary_store            type: varchar(32)   null: no   default: 'POSTGRES'    constraint: CHECK IN ('POSTGRES', 'REDIS', 'OPENSEARCH')
+      - name: active_table_name        type: varchar(128)  null: no   normalize: trim        constraint: btrim
+      - name: freshness_slo_ms         type: bigint        null: no   default: 1000          constraint: CHECK > 0
+      - name: consistency_mode         type: varchar(32)   null: no   default: 'EVENTUAL'    constraint: CHECK IN ('EVENTUAL', 'TOKEN_BOUNDED', 'STRICT_SERIAL')
+      - name: status                   type: varchar(32)   null: no   default: 'ONLINE'      constraint: CHECK IN ('ONLINE', 'REBUILDING', 'DEGRADED', 'DECOMMISSIONED')
+      - name: version                  type: bigint        null: no   default: 1
+    invariants:
+      - MV-01: Every write is version-guarded by the store that holds the data
+      - MV-02: Zero-row update results are failures, never silent success
+      - MV-03: Dedupe, guard, mutation, and position are atomic per store
+      - MV-04: One authoritative primary store per view
+      - MV-05: Derived stores (Redis/OpenSearch) are disposable and rebuilt from primary
+      - MV-07: Projections are strictly deterministic functions of event payloads
+      - MV-08: Views never write back to write models
+      - MV-09: Freshness is explicit and measured against SLO
+      - MV-11: Views are tenant-scoped and cryptographic-erasure aware

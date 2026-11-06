@@ -166,3 +166,4 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER trg_prevent_partition_migration_runbook_log_immutable_update
 BEFORE UPDATE ON partition_migration_runbook_log
 FOR EACH ROW EXECUTE FUNCTION fn_prevent_partition_migration_runbook_log_immutable_update();
+

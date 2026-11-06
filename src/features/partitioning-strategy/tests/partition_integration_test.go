@@ -102,3 +102,4 @@ func TestPartitionIntegration_PostgresLifecycle(t *testing.T) {
 		t.Fatalf("expected phase PROVISIONING_TARGET, got %v", fetchedRec.Phase)
 	}
 }
+

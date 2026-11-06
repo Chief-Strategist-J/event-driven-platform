@@ -47,3 +47,4 @@ UPDATE partition_migration_runbook_log
 SET phase = $1, version = version + 1, updated_at = CURRENT_TIMESTAMP
 WHERE tenant_id = $2 AND migration_id = $3 AND version = $4;`
 )
+

@@ -1661,3 +1661,161 @@ paths:
         "409":
           description: Concurrency or terminal state conflict
 
+  /api/v1/materialized-views:
+    post:
+      summary: Register Materialized View
+      operationId: registerMaterializedView
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - external_id
+                - view_name
+                - view_class
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                view_name: { type: string }
+                view_class:
+                  type: string
+                  enum: [V_STATE, V_AGG, V_JOIN, V_SEARCH, V_KV, V_REPORT]
+                primary_store:
+                  type: string
+                  enum: [POSTGRES, REDIS, OPENSEARCH]
+                active_table_name: { type: string }
+                freshness_slo_ms: { type: integer }
+                consistency_mode:
+                  type: string
+                  enum: [EVENTUAL, TOKEN_BOUNDED, STRICT_SERIAL]
+      responses:
+        "201":
+          description: Materialized view registered successfully
+        "400":
+          description: Validation error
+        "409":
+          description: Name or external ID conflict
+
+  /api/v1/materialized-views/{id}:
+    get:
+      summary: Get Materialized View by Public ID
+      operationId: getMaterializedViewById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: View registry record retrieved
+        "404":
+          description: View not found
+
+  /api/v1/materialized-views/apply:
+    post:
+      summary: Apply Projection Event with Monotonicity Guard
+      operationId: applyViewProjection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - view_name
+                - aggregate_type
+                - aggregate_id
+                - aggregate_seq
+                - event_id
+                - payload_raw
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                view_name: { type: string }
+                aggregate_type: { type: string }
+                aggregate_id: { type: string }
+                aggregate_seq: { type: integer }
+                event_id: { type: string }
+                payload_raw: { type: string }
+      responses:
+        "200":
+          description: Projection evaluated and applied or held
+        "400":
+          description: Validation error
+
+  /api/v1/materialized-views/rebuild:
+    post:
+      summary: Initiate Zero-Downtime View Rebuild
+      operationId: initiateViewRebuild
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - rebuild_id
+                - view_name
+                - target_shadow_table
+                - target_lsn
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                rebuild_id: { type: string }
+                view_name: { type: string }
+                source_store:
+                  type: string
+                  enum: [POSTGRES, REDIS, OPENSEARCH]
+                target_shadow_table: { type: string }
+                target_lsn: { type: string }
+      responses:
+        "202":
+          description: View rebuild initiated
+        "400":
+          description: Validation error
+
+  /api/v1/materialized-views/rebuild/phase:
+    put:
+      summary: Advance View Rebuild State Machine Phase
+      operationId: advanceViewRebuildPhase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - rebuild_id
+                - expected_phase
+                - target_phase
+              properties:
+                tenant_id: { type: string }
+                rebuild_id: { type: string }
+                expected_phase:
+                  type: string
+                  enum: [INITIATED, HISTORICAL_REPLAY, STREAM_CATCHUP, PROMOTED, DECOMMISSIONED_OLD]
+                target_phase:
+                  type: string
+                  enum: [INITIATED, HISTORICAL_REPLAY, STREAM_CATCHUP, PROMOTED, DECOMMISSIONED_OLD]
+                correlation_id: { type: string }
+      responses:
+        "200":
+          description: Rebuild phase advanced successfully
+        "400":
+          description: Invalid phase transition
+        "409":
+          description: Concurrency mismatch or terminal state

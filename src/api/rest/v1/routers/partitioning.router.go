@@ -18,3 +18,4 @@ func RegisterPartitioningRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /api/v1/partitioning/migrations", h.HandleInitiateMigration)
 	mux.HandleFunc("PUT /api/v1/partitioning/migrations/phase", h.HandleAdvanceMigration)
 }
+

@@ -20,3 +20,4 @@ DROP FUNCTION IF EXISTS fn_prevent_partition_topic_topology_immutable_update();
 DROP TABLE IF EXISTS partition_migration_runbook_log;
 DROP TABLE IF EXISTS partition_skew_metrics_log;
 DROP TABLE IF EXISTS partition_topic_topology;
+

@@ -172,3 +172,4 @@ func (a *PartitionPostgresAdapter) UpdateMigrationPhase(ctx context.Context, ten
 	}
 	return nil
 }
+

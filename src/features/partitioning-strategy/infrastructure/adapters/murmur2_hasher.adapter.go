@@ -18,3 +18,4 @@ func (a *Murmur2HasherAdapter) HashBytes(data []byte) int32 {
 func (a *Murmur2HasherAdapter) CalculatePartition(keyBytes []byte, partitionCount int) (int, int32, int32, error) {
 	return rules.ComputeMurmur2Partition(keyBytes, partitionCount)
 }
+

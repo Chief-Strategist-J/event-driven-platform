@@ -196,3 +196,4 @@ func NormalizeAdvanceMigrationInput(in AdvanceMigrationInput) (AdvanceMigrationI
 
 	return out, nil
 }
+

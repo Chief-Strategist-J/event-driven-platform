@@ -14,3 +14,4 @@ type PartitionRepositoryPort interface {
 	GetMigrationRunbook(ctx context.Context, tenantID, migrationID string) (*contracts.MigrationRunbookRecord, error)
 	UpdateMigrationPhase(ctx context.Context, tenantID, migrationID string, targetPhase contracts.MigrationPhase, expectedVersion int64) error
 }
+

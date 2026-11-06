@@ -55,3 +55,4 @@ func (m *MigrationStateMachine) Transition(current contracts.MigrationPhase, tar
 
 	return current, ErrInvalidMigrationTransition
 }
+

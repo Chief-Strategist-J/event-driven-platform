@@ -47,3 +47,4 @@ func NewService(db *sql.DB) *service.PartitioningService {
 	hasher := adapters.NewMurmur2HasherAdapter()
 	return service.NewPartitioningService(repo, hasher)
 }
+

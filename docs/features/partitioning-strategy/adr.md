@@ -156,3 +156,4 @@ The Partitioning Strategy feature exposes 5 REST operations under `/api/v1/parti
 * **Tier 2 (State Machine)**: Verifies valid stream migration phase transitions and terminal state permanence (`DECOMMISSIONED`).
 * **Tier 3 (Murmur2 Affinity)**: Tests hash determinism, 31-bit positive bitmasking, and demonstrates key remapping risks under partition expansion.
 * **Tier 4 (PostgreSQL Integration)**: Tests persistence, check constraints, optimistic locking, and immutability triggers against live PostgreSQL.
+

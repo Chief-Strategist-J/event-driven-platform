@@ -53,3 +53,4 @@ func TestPartitionMigrationMachine_InvalidTransitions(t *testing.T) {
 		t.Fatalf("expected invalid skip to CUTOVER to be rejected")
 	}
 }
+

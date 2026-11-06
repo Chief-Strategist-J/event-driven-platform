@@ -212,6 +212,7 @@ func describeService() chassis.ServiceSpec {
 				routers.RegisterMultiTenantRoutes(router, dbConn)
 				routers.RegisterCDCRoutes(router, dbConn)
 				routers.RegisterPartitioningRoutes(router, dbConn)
+				routers.RegisterMaterializedViewsRoutes(router, dbConn)
 			}
 		},
 		RegisterConsumers: func(_ any, _ chassis.Services) {},

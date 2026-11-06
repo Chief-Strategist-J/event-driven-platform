@@ -107,3 +107,4 @@ This catalog documents failure modes across the Kafka topic partitioning and key
 | Node | Scenario | Severity | Root Cause | Handling & Mitigation | Detection |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **F10.1** | Consumer caches keyed by partition ID | **CORRUPT** | Consumer caches aggregate state indexed by assigned partition, serving stale state after rebalance or migration. | Consumer caches must be keyed by domain aggregate ID (`tenant_id:aggregate_id`), never by partition number. | Consumer cache validation test suite. |
+

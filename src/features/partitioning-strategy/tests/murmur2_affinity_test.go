@@ -62,3 +62,4 @@ func TestMurmur2_InPlacePartitionRemappingRisk(t *testing.T) {
 	_ = pOld
 	_ = pNew
 }
+
