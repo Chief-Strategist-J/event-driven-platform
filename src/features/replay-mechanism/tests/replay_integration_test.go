@@ -347,7 +347,7 @@ func TestReplay_TracingCompliance(t *testing.T) {
 		exporter.Reset()
 
 		invalidInput := contracts.CreateReplayRunInput{
-			TenantID: "", // Missing mandatory tenant
+			TenantID: "",
 		}
 
 		_, err := svc.CreateReplayRun(ctx, invalidInput)
