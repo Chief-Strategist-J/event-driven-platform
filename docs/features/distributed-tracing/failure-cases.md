@@ -72,3 +72,4 @@ This document details failure modes, impact ratings, automated mitigations, and 
 * **Handling:**
   1. Invariant TR-07 mandates trace-id-aware routing. Host agents use the `loadbalancingexporter` configured with `routing_key: trace_id` to guarantee all spans of a trace land on the same gateway replica.
 * **Detection:** Monitor `otelcol_tail_sampling_early_drops` and orphan span metrics in Tempo.
+

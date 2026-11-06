@@ -222,6 +222,7 @@ func describeService() chassis.ServiceSpec {
 				routers.RegisterDomainEventRoutes(router, dbConn)
 				routers.RegisterEventOperationsDashboardRoutes(router, dbConn)
 				routers.RegisterEventCommunicationRoutes(router, dbConn)
+				routers.RegisterDistributedTracingRoutes(router, dbConn)
 			}
 		},
 		RegisterConsumers: func(_ any, _ chassis.Services) {},

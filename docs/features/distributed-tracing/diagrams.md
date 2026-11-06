@@ -130,3 +130,84 @@ sequenceDiagram
     Consumer->>Tracer: End Span
     deactivate Consumer
 ```
+
+
+---
+
+## 3. OpenTelemetry Collector Pipeline & Tail Sampling Topology (§7)
+
+```mermaid
+flowchart LR
+    subgraph HostAgents ["Node-Local DaemonSets"]
+        APP1["App Pod A (Go)"] -->|OTLP / gRPC :4317| AGENT["OTel Collector Agent (Host-Local)"]
+        APP2["App Pod B (Kotlin)"] -->|OTLP / gRPC :4317| AGENT
+        AGENT -->|Memory Limiter + Redaction Filter| ROUTER["Trace-ID Aware Hash Load Balancer"]
+    end
+
+    subgraph GatewayCluster ["Collector Gateway Tier (Tail Sampling Cluster)"]
+        ROUTER -->|Hash(TraceID) % N| GW1["Gateway Collector 1"]
+        ROUTER -->|Hash(TraceID) % N| GW2["Gateway Collector 2"]
+        
+        GW1 --> METRICS1["TR-08: Pre-Sampling SpanMetrics Processor<br/>(Unsampled Rate, Error, Duration)"]
+        METRICS1 --> SAMPLER1["TR-07: Tail-Sampling Processor<br/>(Keeps 100% Errors, 100% P99, 1% Healthy)"]
+        
+        GW2 --> METRICS2["TR-08: Pre-Sampling SpanMetrics Processor"]
+        METRICS2 --> SAMPLER2["TR-07: Tail-Sampling Processor"]
+    end
+
+    subgraph Sinks ["Storage & Observability Backends"]
+        METRICS1 -->|Prometheus Remote Write| PROM[("Prometheus / Mimir")]
+        METRICS2 --> PROM
+        SAMPLER1 -->|OTLP Export| TEMPO[("Grafana Tempo / Trace Storage")]
+        SAMPLER2 --> TEMPO
+    end
+```
+
+---
+
+## 4. In-Transaction Outbox Capture & Relay Span Linking Sequence Flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Caller as Client / Upstream Service
+    participant Handler as Command Handler (OrderService)
+    participant Tracer as OpenTelemetry Tracer (Go SDK)
+    participant DB as Postgres (Order State + Outbox)
+    participant Relay as Outbox Debezium Relay
+    participant Broker as Apache Kafka Broker
+    participant Consumer as Downstream Worker
+
+    Caller->>Handler: Invoke ProcessCommand(ctx)
+    activate Handler
+    Handler->>Tracer: Start Span: "OrderService.SubmitOrder"
+    activate Tracer
+    Tracer-->>Handler: ctx with active SpanID (e.g. 00f067aa)
+    
+    Handler->>Tracer: Inject(ctx, carrier) -> W3C Header String
+    Tracer-->>Handler: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+    
+    Handler->>DB: BEGIN TRANSACTION
+    Handler->>DB: INSERT INTO orders VALUES (...)
+    Handler->>DB: INSERT INTO transactional_outbox (trace_context, correlation_id, payload)
+    Handler->>DB: COMMIT TRANSACTION
+    Handler-->>Caller: 202 Accepted (Order ID, Correlation ID)
+    Handler->>Tracer: End Span
+    deactivate Tracer
+    deactivate Handler
+
+    Note over Relay,Broker: Relay runs asynchronously outside business span
+    Relay->>DB: Poll PENDING outbox rows
+    Relay->>Broker: Produce Record with Headers [traceparent = stored_trace_context]
+    Broker-->>Relay: Broker ACK
+    Relay->>DB: Mark Outbox Row PUBLISHED
+
+    Note over Broker,Consumer: Consumer extracts trace without parent collision
+    Broker->>Consumer: Poll message batch
+    activate Consumer
+    Consumer->>Tracer: Extract(record.Headers) -> parentContext
+    Consumer->>Tracer: Start Span: "PaymentService.HandleOrderPlaced", Link(parentContext)
+    Consumer->>Consumer: Execute Idempotent Processing
+    Consumer->>Tracer: End Span
+    deactivate Consumer
+```

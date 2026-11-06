@@ -3081,3 +3081,116 @@ paths:
           description: Triage localization outcome
         "404":
           description: Flow not found
+
+  /api/v1/tracing/context/inject:
+    post:
+      summary: Inject W3C Trace Context into Carrier
+      operationId: injectTraceContext
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - carrier
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                correlation_id: { type: string }
+                carrier:
+                  type: object
+                  additionalProperties: { type: string }
+      responses:
+        "200":
+          description: W3C Trace Context injected into carrier
+        "400":
+          description: Validation error
+
+  /api/v1/tracing/context/extract:
+    post:
+      summary: Extract W3C Trace Context and Determine Linking Mode
+      operationId: extractTraceContext
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - carrier
+              properties:
+                carrier:
+                  type: object
+                  additionalProperties: { type: string }
+                is_batch: { type: boolean }
+                queue_wait_millis: { type: integer }
+      responses:
+        "200":
+          description: Extracted W3C trace context and link mode
+        "400":
+          description: Validation error
+
+  /api/v1/tracing/sampling/evaluate:
+    post:
+      summary: Evaluate Head/Tail Sampling Policy for Event Flow
+      operationId: evaluateTraceSampling
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - flow_name
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                flow_name: { type: string }
+                correlation_id: { type: string }
+                duration_ms: { type: integer }
+                has_error: { type: boolean }
+      responses:
+        "200":
+          description: Sampling policy evaluation decision
+        "400":
+          description: Validation error
+
+  /api/v1/tracing/coverage/report:
+    post:
+      summary: Report and Verify Propagation Coverage across Hops
+      operationId: reportTracePropagationCoverage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - external_id
+                - hop_source
+                - hop_target
+                - hop_type
+                - total_spans
+                - propagated_spans
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                hop_source: { type: string }
+                hop_target: { type: string }
+                hop_type: { type: string, enum: [OUTBOX_TO_RELAY, RELAY_TO_BROKER, BROKER_TO_CONSUMER, CONSUMER_TO_DB, PROJECTION] }
+                total_spans: { type: integer }
+                propagated_spans: { type: integer }
+      responses:
+        "200":
+          description: Propagation coverage evaluated and recorded
+        "400":
+          description: Validation error

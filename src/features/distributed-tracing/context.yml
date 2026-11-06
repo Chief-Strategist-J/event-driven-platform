@@ -1,2 +1,176 @@
 feature: distributed-tracing
 mode: stateless_hexagonal
+owner: platform-core
+
+entities:
+  - entity: trace_sampling_policy_ledger
+    table: trace_sampling_policy_ledger
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE, immutable, format 'tsp_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: no
+      - name: correlation_id
+        type: uuid
+        null: no
+      - name: service_name
+        type: varchar(128)
+        null: no
+      - name: flow_name
+        type: varchar(128)
+        null: no
+      - name: sample_rate
+        type: numeric(5,4)
+        null: no
+        constraint: CHECK >= 0.0000 AND <= 1.0000
+      - name: priority
+        type: integer
+        null: no
+        default: 100
+      - name: always_sample_errors
+        type: boolean
+        null: no
+        default: true
+      - name: min_duration_ms
+        type: integer
+        null: no
+        default: 0
+      - name: is_active
+        type: boolean
+        null: no
+        default: true
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+
+  - entity: trace_span_audit_ledger
+    table: trace_span_audit_ledger
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE, immutable, format 'tsa_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: no
+      - name: correlation_id
+        type: uuid
+        null: no
+      - name: trace_id
+        type: varchar(64)
+        null: no
+      - name: span_id
+        type: varchar(32)
+        null: no
+      - name: parent_span_id
+        type: varchar(32)
+        null: no
+      - name: service_name
+        type: varchar(128)
+        null: no
+      - name: operation_name
+        type: varchar(128)
+        null: no
+      - name: duration_ms
+        type: integer
+        null: no
+      - name: has_error
+        type: boolean
+        null: no
+        default: false
+      - name: sanitized_attributes_json
+        type: text
+        null: no
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+
+  - entity: trace_propagation_coverage_ledger
+    table: trace_propagation_coverage_ledger
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE, immutable, format 'tpc_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: no
+      - name: correlation_id
+        type: uuid
+        null: no
+      - name: hop_source
+        type: varchar(128)
+        null: no
+      - name: hop_target
+        type: varchar(128)
+        null: no
+      - name: hop_type
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('CONNECT_RPC', 'OUTBOX_RELAY', 'KAFKA_CONSUMER', 'ASYNC_REACTION')
+      - name: total_spans
+        type: bigint
+        null: no
+        default: 0
+      - name: propagated_spans
+        type: bigint
+        null: no
+        default: 0
+      - name: coverage_ratio
+        type: numeric(5,4)
+        null: no
+        default: 1.0000
+      - name: evaluated_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP

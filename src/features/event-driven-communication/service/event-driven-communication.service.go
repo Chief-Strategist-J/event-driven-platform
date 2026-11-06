@@ -39,7 +39,7 @@ func (s *EventCommunicationService) RegisterSagaDefinition(
 	}
 
 	def.ID = uuid.New()
-	def.PublicID = "sgd_" + uuid.New().String()[:18]
+	def.PublicID = contracts.GeneratePublicID("sgd")
 	def.TotalSteps = len(def.Steps)
 	def.IsActive = true
 	def.CreatedAt = time.Now().UTC()
@@ -65,7 +65,7 @@ func (s *EventCommunicationService) StartSaga(
 	}
 
 	instID := uuid.New()
-	pubID := "sgi_" + uuid.New().String()[:18]
+	pubID := contracts.GeneratePublicID("sgi")
 	now := time.Now().UTC()
 	deadline := now.Add(time.Duration(cmd.TimeoutSeconds) * time.Second)
 
@@ -99,7 +99,7 @@ func (s *EventCommunicationService) StartSaga(
 		}
 		steps[i] = contracts.SagaStepRecord{
 			ID:                  uuid.New(),
-			PublicID:            "sgs_" + uuid.New().String()[:18],
+			PublicID:            contracts.GeneratePublicID("sgs"),
 			TenantID:            cmd.TenantID,
 			SourceService:       cmd.SourceService,
 			ExternalID:          cmd.ExternalID + "_step_" + stepDef.StepName,
@@ -156,7 +156,7 @@ func (s *EventCommunicationService) ProcessStepReply(
 	isLate := rules.ClassifyLateReply(inst.State, targetStep.State)
 
 	replyID := uuid.New()
-	pubReplyID := "acr_" + uuid.New().String()[:18]
+	pubReplyID := contracts.GeneratePublicID("acr")
 	var corrUUID uuid.UUID
 	if parsed, err := uuid.Parse(inst.CorrelationID.String()); err == nil {
 		corrUUID = parsed
