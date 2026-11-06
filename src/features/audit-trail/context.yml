@@ -1,2 +1,161 @@
 feature: audit-trail
 mode: stateless_hexagonal
+owner: platform-core
+
+entities:
+  - entity: audit_trail_ledger
+    table: audit_trail_ledger
+    fields:
+      - name: id
+        type: bigint
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(64)
+        null: no
+        constraint: UNIQUE, immutable, format 'aud_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source
+        type: varchar(128)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: no
+        constraint: UNIQUE(tenant_id, source, external_id)
+      - name: correlation_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: shard_id
+        type: varchar(128)
+        null: no
+        constraint: immutable
+      - name: sequence_num
+        type: bigint
+        null: no
+        constraint: UNIQUE(tenant_id, shard_id, sequence_num), immutable
+      - name: actor_principal
+        type: varchar(128)
+        null: no
+      - name: actor_type
+        type: varchar(32)
+        null: no
+      - name: on_behalf_of
+        type: varchar(128)
+        null: yes
+      - name: action
+        type: varchar(128)
+        null: no
+      - name: target_type
+        type: varchar(64)
+        null: no
+      - name: target_id
+        type: varchar(128)
+        null: no
+      - name: outcome
+        type: varchar(32)
+        null: no
+      - name: canonical_payload
+        type: bytea
+        null: no
+        constraint: immutable
+      - name: prev_record_hash
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: record_hash
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: occurred_at
+        type: timestamptz
+        null: no
+      - name: ingested_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+    invariants:
+      - sequence_num is strictly monotonic per shard
+      - canonical_payload is stored verbatim as bytes
+      - record_hash = HMAC_SHA256(prev_record_hash || canonical_payload)
+      - rows are append-only with immutable trigger
+
+  - entity: audit_trail_checkpoints
+    table: audit_trail_checkpoints
+    fields:
+      - name: id
+        type: bigint
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(64)
+        null: no
+        constraint: UNIQUE, immutable, format 'atc_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: shard_id
+        type: varchar(128)
+        null: no
+        constraint: immutable
+      - name: start_sequence
+        type: bigint
+        null: no
+      - name: end_sequence
+        type: bigint
+        null: no
+      - name: record_count
+        type: bigint
+        null: no
+      - name: checkpoint_root_hash
+        type: varchar(64)
+        null: no
+      - name: signature
+        type: text
+        null: no
+      - name: status
+        type: varchar(32)
+        null: no
+      - name: sealed_at
+        type: timestamptz
+        null: no
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+
+  - entity: audit_trail_access_log
+    table: audit_trail_access_log
+    fields:
+      - name: id
+        type: bigint
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(64)
+        null: no
+        constraint: UNIQUE, immutable, format 'ata_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+      - name: auditor_principal
+        type: varchar(128)
+        null: no
+      - name: case_id
+        type: varchar(64)
+        null: no
+      - name: query_scope
+        type: text
+        null: no
+      - name: accessed_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP

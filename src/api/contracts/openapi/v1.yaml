@@ -2430,3 +2430,143 @@ paths:
           description: Decommission eligibility evaluation
         "400":
           description: Validation error
+
+  /api/v1/audits/ingest:
+    post:
+      summary: Ingest Cryptographically Chained Audit Record
+      operationId: ingestAuditRecord
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - shard_id
+                - actor_id
+                - action_name
+                - target_type
+                - target_id
+                - raw_payload
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                shard_id: { type: string }
+                actor_id: { type: string }
+                actor_type: { type: string, enum: [USER, SERVICE, SYSTEM, API_KEY] }
+                action_name: { type: string }
+                target_type: { type: string }
+                target_id: { type: string }
+                outcome: { type: string, enum: [SUCCEEDED, DENIED, FAILED, INTENT] }
+                compliance_class: { type: string, enum: [CLASS_A, CLASS_B, CLASS_C, CLASS_D] }
+                raw_payload: { type: string }
+                occurred_at: { type: string, format: date-time }
+      responses:
+        "201":
+          description: Audit record cryptographically chained and persisted
+        "400":
+          description: Validation error or secret detected
+
+  /api/v1/audits/checkpoints:
+    post:
+      summary: Create Signed Checkpoint for Shard Interval
+      operationId: createAuditCheckpoint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - shard_id
+                - signing_secret
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                correlation_id: { type: string }
+                shard_id: { type: string }
+                signing_secret: { type: string }
+      responses:
+        "201":
+          description: Shard interval checkpoint sealed and signed
+        "400":
+          description: Validation error
+
+  /api/v1/audits/verify:
+    post:
+      summary: Verify Shard Cryptographic Integrity Against Anchored Checkpoints
+      operationId: verifyAuditShardIntegrity
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - shard_id
+                - signing_secret
+              properties:
+                tenant_id: { type: string }
+                shard_id: { type: string }
+                signing_secret: { type: string }
+      responses:
+        "200":
+          description: Shard cryptographic verification report
+        "400":
+          description: Validation error
+
+  /api/v1/audits/query:
+    get:
+      summary: Query Audit Records with Mandatory Access Logging (AU-11)
+      operationId: queryAuditRecords
+      parameters:
+        - name: X-Auditor-Id
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Audit-Case-Id
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: shard_id
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: target_type
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: target_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: actor_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Audit records returned and access logged
+        "400":
+          description: Validation error
