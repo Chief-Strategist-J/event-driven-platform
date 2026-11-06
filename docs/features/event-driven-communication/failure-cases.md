@@ -78,3 +78,4 @@ This document details failure modes, impact ratings, automated mitigations, and 
   2. Transient failures retry with bounded exponential backoff and jitter up to a max attempt count (e.g., 3).
   3. Permanent poison pills are emitted directly to the Dead-Letter Queue (DLQ) with exception stacktraces, original headers, and failure metadata, allowing partition consumption to resume.
 * **Detection:** Prometheus alert on `dlq_messages_published_total` rate spike and consumer lag growth.
+

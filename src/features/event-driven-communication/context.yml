@@ -1,2 +1,205 @@
 feature: event-driven-communication
 mode: stateless_hexagonal
+owner: platform-core
+
+entities:
+  - entity: saga_definition_ledger
+    table: saga_definition_ledger
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE, immutable, format 'sgd_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: no
+      - name: correlation_id
+        type: uuid
+        null: no
+      - name: saga_name
+        type: varchar(128)
+        null: no
+      - name: total_steps
+        type: integer
+        null: no
+        constraint: CHECK > 0
+      - name: definition_json
+        type: text
+        null: no
+      - name: is_active
+        type: boolean
+        null: no
+        default: true
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+
+  - entity: saga_instance_ledger
+    table: saga_instance_ledger
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE, immutable, format 'sgi_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: no
+      - name: correlation_id
+        type: uuid
+        null: no
+      - name: saga_definition_id
+        type: varchar(32)
+        null: no
+      - name: current_step_index
+        type: integer
+        null: no
+        default: 0
+        constraint: CHECK >= 0
+      - name: state
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('IN_PROGRESS', 'SUCCEEDED', 'COMPENSATING', 'COMPENSATED', 'FAILED', 'MANUAL_INTERVENTION')
+      - name: deadline_at
+        type: timestamptz
+        null: no
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+
+  - entity: saga_step_ledger
+    table: saga_step_ledger
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE, immutable, format 'sgs_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: no
+      - name: correlation_id
+        type: uuid
+        null: no
+      - name: saga_instance_id
+        type: varchar(32)
+        null: no
+      - name: step_index
+        type: integer
+        null: no
+        constraint: CHECK >= 0
+      - name: step_name
+        type: varchar(128)
+        null: no
+      - name: step_type
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('COMPENSABLE', 'PIVOT', 'RETRIABLE')
+      - name: state
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('PENDING', 'SENT', 'SUCCEEDED', 'FAILED', 'TIMED_OUT', 'COMPENSATING', 'COMPENSATED')
+      - name: command_payload
+        type: text
+        null: no
+      - name: reply_payload
+        type: text
+        null: no
+      - name: compensation_payload
+        type: text
+        null: no
+      - name: deadline_at
+        type: timestamptz
+        null: no
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+
+  - entity: async_command_reply_ledger
+    table: async_command_reply_ledger
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE, immutable, format 'acr_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: source_service
+        type: varchar(64)
+        null: no
+      - name: external_id
+        type: varchar(128)
+        null: no
+      - name: correlation_id
+        type: uuid
+        null: no
+      - name: command_id
+        type: varchar(64)
+        null: no
+      - name: outcome
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('SUCCEEDED', 'REJECTED', 'FAILED', 'TIMED_OUT')
+      - name: is_late_reply
+        type: boolean
+        null: no
+        default: false
+      - name: reply_payload
+        type: text
+        null: no
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP

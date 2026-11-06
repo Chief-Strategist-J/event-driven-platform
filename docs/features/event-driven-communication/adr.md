@@ -69,3 +69,4 @@ We selected **Option 3: Hybrid Architecture with ConnectRPC Reads, Outbox-Backed
 ### Negative / Tradeoffs
 * Increased architectural complexity (requires outbox pollers, deduplication tables, and saga coordinator ledgers).
 * Eventual consistency requires UI/UX paradigms that accommodate asynchronous completion (e.g., polling, WebSockets, optimistic UI).
+

@@ -2894,3 +2894,123 @@ paths:
           description: Causal chain is valid without cycles
         "422":
           description: Causal loop or depth limit exceeded
+
+  /api/v1/communication/sagas/start:
+    post:
+      summary: Initiate Orchestrated Distributed Saga Instance
+      operationId: startSagaInstance
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - external_id
+                - saga_definition_id
+                - timeout_seconds
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                saga_definition_id: { type: string }
+                initial_payload: { type: string }
+                timeout_seconds: { type: integer }
+      responses:
+        "202":
+          description: Saga initiated in progress
+        "400":
+          description: Validation error
+
+  /api/v1/communication/sagas/reply:
+    post:
+      summary: Process Correlated Step Outcome Reply
+      operationId: processSagaStepReply
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - saga_instance_id
+                - step_index
+                - command_id
+                - outcome
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                saga_instance_id: { type: string }
+                step_index: { type: integer }
+                command_id: { type: string }
+                outcome: { type: string, enum: [SUCCEEDED, REJECTED, FAILED, TIMED_OUT] }
+                reply_payload: { type: string }
+      responses:
+        "200":
+          description: Reply processed and step advanced
+        "400":
+          description: Validation or step out of bounds error
+
+  /api/v1/communication/sagas/compensate:
+    post:
+      summary: Force Explicit Saga Rollback and Reverse Compensation
+      operationId: triggerSagaCompensation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - saga_instance_id
+                - reason
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                saga_instance_id: { type: string }
+                reason: { type: string }
+      responses:
+        "200":
+          description: Reverse compensations executed successfully
+        "422":
+          description: Saga is already concluded or terminal
+
+  /api/v1/communication/commands/dispatch:
+    post:
+      summary: Dispatch Async Command to Handler Topic via Outbox
+      operationId: dispatchAsyncCommand
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - external_id
+                - target_topic
+                - reply_to_topic
+                - command_name
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                target_topic: { type: string }
+                reply_to_topic: { type: string }
+                command_name: { type: string }
+                command_payload: { type: string }
+                timeout_seconds: { type: integer }
+      responses:
+        "202":
+          description: Command dispatched to outbox
+        "400":
+          description: Validation error

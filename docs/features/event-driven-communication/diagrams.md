@@ -138,3 +138,4 @@ flowchart TD
     RESULT -- Poison Pill / Validation Failure --> DLQ["Route to Dead-Letter Queue (DLQ)<br/>With Stacktrace & Error Headers"]
     DLQ --> COMMIT
 ```
+

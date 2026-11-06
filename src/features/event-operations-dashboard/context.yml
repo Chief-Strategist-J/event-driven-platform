@@ -1,2 +1,53 @@
-feature: event-operations-dashboard
-mode: stateless_hexagonal
+entity: event_operations_dashboard
+owner: site-reliability-engineering
+tables:
+  - name: ops_pipeline_hop_ledger
+    fields:
+      - name: id             type: uuid          null: no   default: uuidv7()            constraint: PK, UNIQUE(tenant_id, id), immutable
+      - name: public_id      type: varchar(32)   null: no   constraint: UNIQUE, immutable, format '^hop_[0-9a-z]{16,26}$'
+      - name: tenant_id      type: varchar(64)   null: no   constraint: immutable, btrim
+      - name: source_service type: varchar(64)   null: no   constraint: btrim
+      - name: external_id    type: varchar(128)  null: no   constraint: UNIQUE(tenant_id, source_service, external_id), btrim
+      - name: correlation_id type: uuid          null: no   constraint: immutable
+      - name: flow_name      type: varchar(128)  null: no   constraint: btrim
+      - name: hop_code       type: varchar(32)   null: no   constraint: IN ('H1_OUTBOX', 'H2_RELAY', 'H3_KAFKA', 'H4_CONSUMER', 'H5_AUTH_VIEW', 'H6_DERIVED_STORE')
+      - name: tier           type: varchar(16)   null: no   constraint: IN ('T0', 'T1', 'T2')
+      - name: status         type: varchar(32)   null: no   constraint: IN ('OK', 'LAGGING', 'STALLED', 'STOPPED', 'PAUSED', 'UNKNOWN')
+      - name: pause_reason   type: varchar(64)   null: no   default: 'NONE'              constraint: IN ('NONE', 'BREAKER_OPEN', 'BACKPRESSURE', 'OPERATOR_HALT', 'REBALANCE', 'CORRUPT_HEAD')
+      - name: lag_seconds    numeric(18,3)       null: no   constraint: CHECK >= 0
+      - name: oldest_held_age_seconds numeric(18,3) null: no constraint: CHECK >= 0
+      - name: runbook_url    type: varchar(256)  null: no   constraint: btrim
+      - name: last_reported_at type: timestamptz null: no   default: CURRENT_TIMESTAMP
+      - name: created_at     type: timestamptz   null: no   default: CURRENT_TIMESTAMP
+      - name: updated_at     type: timestamptz   null: no   default: CURRENT_TIMESTAMP
+
+  - name: ops_incident_triage_log
+    fields:
+      - name: id             type: uuid          null: no   default: uuidv7()            constraint: PK, UNIQUE(tenant_id, id), immutable
+      - name: public_id      type: varchar(32)   null: no   constraint: UNIQUE, immutable, format '^itl_[0-9a-z]{16,26}$'
+      - name: tenant_id      type: varchar(64)   null: no   constraint: immutable, btrim
+      - name: source_service type: varchar(64)   null: no   constraint: btrim
+      - name: external_id    type: varchar(128)  null: no   constraint: btrim
+      - name: correlation_id type: uuid          null: no   constraint: immutable
+      - name: incident_id    type: varchar(128)  null: no   constraint: btrim
+      - name: flow_name      type: varchar(128)  null: no   constraint: btrim
+      - name: localized_hop  type: varchar(32)   null: no   constraint: btrim
+      - name: severity       type: varchar(16)   null: no   constraint: IN ('SEV0', 'SEV1', 'SEV2', 'INFO')
+      - name: triage_action  type: varchar(64)   null: no   constraint: btrim
+      - name: c_ctl_action_link type: varchar(256) null: no constraint: btrim
+      - name: triaged_by     type: varchar(128)  null: no   constraint: btrim
+      - name: triaged_at     type: timestamptz   null: no   default: CURRENT_TIMESTAMP
+
+invariants:
+  - OD-01: Dashboards investigate; alerts page
+  - OD-02: No data is never displayed as healthy (stale > 60s transitions to UNKNOWN)
+  - OD-03: Worst case is shown, not averages
+  - OD-04: Lag is time (seconds)
+  - OD-05: Every panel maps to a hop, an owner, and a runbook
+  - OD-06: No operational action executes from an observability tool
+  - OD-07: No customer payload data in observability
+  - OD-08: Observability is independent of the systems it observes
+  - OD-09: Cardinality is budgeted
+  - OD-10: Every change that can cause an incident is annotated
+pii: [none]
+source_of_truth: db

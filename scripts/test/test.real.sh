@@ -1530,4 +1530,66 @@ if [[ "${DB_AUTH_AUDIT_COUNT}" -lt "2" ]]; then
 fi
 echo "Event authorization verified in real PostgreSQL!"
 
+echo "================================================================"
+echo " 23. TESTING REAL DOMAIN EVENT DESIGN & CANONICAL ENVELOPES"
+echo "================================================================"
+DED_EVENT_TYPE="orders.order.completed.v1"
+DED_AGG_ID="ord_agg_$(date +%s)"
+
+echo "Registering domain event in catalog via POST /api/v1/domain-events/catalog..."
+CATALOG_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/domain-events/catalog" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "order-service",
+        "external_id": "ext_ded_cat_01",
+        "correlation_id": "'$(uuidgen)'",
+        "event_type": "'"${DED_EVENT_TYPE}"'",
+        "owning_aggregate": "orders.order",
+        "semantics_class": "STATE",
+        "visibility": "PUBLIC",
+        "pii_classification": "NONE",
+        "schema_fingerprint": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }')
+echo "Catalog Response:"
+echo "${CATALOG_RESP}"
+if ! echo "${CATALOG_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for catalog event registration!"
+    exit 1
+fi
+
+echo "Building canonical domain event envelope via POST /api/v1/domain-events/envelope/build..."
+BUILD_ENV_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/domain-events/envelope/build" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "order-service",
+        "event_type": "'"${DED_EVENT_TYPE}"'",
+        "aggregate_type": "orders.order",
+        "aggregate_id": "'"${DED_AGG_ID}"'",
+        "expected_version": 0,
+        "version_increment": 1,
+        "causation_id": "0192e2b0-8c29-79a0-9710-84519fbbd801",
+        "correlation_id": "0192e2b0-8c29-79a0-9710-84519fbbd802",
+        "causation_depth": 1,
+        "payload": {
+            "order_id": "'"${DED_AGG_ID}"'",
+            "status": "COMPLETED"
+        }
+    }')
+echo "Build Envelope Response:"
+echo "${BUILD_ENV_RESP}"
+if ! echo "${BUILD_ENV_RESP}" | grep -q 'BUILT_AND_COMMITTED'; then
+    echo "FATAL: Expected status BUILT_AND_COMMITTED for envelope creation!"
+    exit 1
+fi
+
+echo "Verifying aggregate root version advancement in PostgreSQL..."
+DB_AGG_VERSION=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT current_version FROM aggregate_root_version_ledger WHERE tenant_id = '${MT_TENANT}' AND aggregate_id = '${DED_AGG_ID}';")
+if [[ "${DB_AGG_VERSION}" != "1" ]]; then
+    echo "FATAL: Expected aggregate version in DB to be 1, got '${DB_AGG_VERSION}'"
+    exit 1
+fi
+echo "Domain Event Design verified in PostgreSQL!"
+
 echo "All real API and backing server integration tests completed successfully."
