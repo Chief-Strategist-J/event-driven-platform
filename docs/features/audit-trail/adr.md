@@ -37,3 +37,4 @@ Enterprise distributed systems require immutable, non-repudiable audit logging a
 ## Consequences
 - **Positive**: Cryptographic non-repudiation, tamper detection, compliance with SOC2/PCI-DSS/GDPR, independent sharded throughput, zero JSON re-serialization verification bugs.
 - **Negative**: Increased storage requirements for verbatim raw bytes, strict ingest-time secret linting, operational overhead of periodic checkpoint signing.
+

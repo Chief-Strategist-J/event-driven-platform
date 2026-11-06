@@ -17,3 +17,4 @@ func RegisterAuditTrailRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /api/v1/audits/verify", h.HandleVerifyShardIntegrity)
 	mux.HandleFunc("GET /api/v1/audits/query", h.HandleQueryAudits)
 }
+

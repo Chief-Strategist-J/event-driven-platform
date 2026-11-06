@@ -34,3 +34,4 @@
 | E7.2a | Personal data hashed without salt or key | COMPLIANCE | Pseudonymized identifiers subject to rainbow table attack | Per-subject DEK encryption; crypto-shredding key destruction on erasure |
 | E9.1 | Investigator searches audit logs of self or peers without case | SECURITY | Unauthorized covert snooping on colleagues | Query path restricted; every query audited in `audit_trail_access_log` |
 | E10.1 | Audit capture flag disabled during production incident | LOSS | Critical operational events go unrecorded | Class A/C audit capture cannot be disabled via configuration flags |
+

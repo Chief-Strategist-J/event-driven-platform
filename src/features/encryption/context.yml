@@ -1,2 +1,127 @@
 feature: encryption
 mode: stateless_hexagonal
+owner: platform-core
+
+entities:
+  - entity: encryption_kek_ledger
+    table: encryption_kek_ledger
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE, immutable, format 'kek_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: key_name
+        type: varchar(128)
+        null: no
+      - name: key_version
+        type: integer
+        null: no
+        constraint: CHECK > 0
+      - name: kms_provider
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('AWS_KMS', 'GCP_KMS', 'VAULT', 'LOCAL_SIMULATED')
+      - name: kms_key_arn
+        type: varchar(256)
+        null: no
+      - name: state
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('ACTIVE', 'ROTATED', 'COMPROMISED', 'SHREDDED')
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: updated_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+
+  - entity: encryption_dek_ledger
+    table: encryption_dek_ledger
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE, immutable, format 'dek_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: subject_id
+        type: varchar(128)
+        null: no
+        constraint: UNIQUE(tenant_id, subject_id)
+      - name: kek_public_id
+        type: varchar(32)
+        null: no
+        constraint: format 'kek_' + uuidv7
+      - name: encrypted_dek_blob
+        type: text
+        null: no
+      - name: algorithm
+        type: varchar(32)
+        null: no
+        default: 'AES-256-GCM'
+      - name: state
+        type: varchar(32)
+        null: no
+        constraint: CHECK IN ('ACTIVE', 'ROTATED', 'COMPROMISED', 'SHREDDED')
+      - name: created_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: rotated_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP
+      - name: shredded_at
+        type: timestamptz
+        null: no
+        default: '1970-01-01 00:00:00+00'
+
+  - entity: crypto_shredding_audit_ledger
+    table: crypto_shredding_audit_ledger
+    fields:
+      - name: id
+        type: uuid
+        null: no
+        constraint: PK, immutable
+      - name: public_id
+        type: varchar(32)
+        null: no
+        constraint: UNIQUE, immutable, format 'csa_' + uuidv7
+      - name: tenant_id
+        type: varchar(64)
+        null: no
+        constraint: immutable
+      - name: subject_id
+        type: varchar(128)
+        null: no
+      - name: dek_public_id
+        type: varchar(32)
+        null: no
+        constraint: format 'dek_' + uuidv7
+      - name: reason
+        type: varchar(64)
+        null: no
+        constraint: CHECK IN ('GDPR_RTBF', 'CCPA_DELETION', 'TENANT_OFFBOARDING', 'SECURITY_BREACH')
+      - name: requested_by
+        type: varchar(128)
+        null: no
+      - name: shredded_at
+        type: timestamptz
+        null: no
+        default: CURRENT_TIMESTAMP

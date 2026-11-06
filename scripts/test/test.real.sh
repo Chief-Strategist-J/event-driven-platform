@@ -1252,4 +1252,74 @@ if [[ "${DB_SEV_VERSION}" != "1" ]]; then
 fi
 echo "Schema evolution verified in PostgreSQL!"
 
+echo "================================================================"
+echo " 20. TESTING REAL AUDIT TRAIL API & TAMPER-EVIDENCE"
+echo "================================================================"
+AUD_SHARD="shard_audit_${TIMESTAMP}"
+echo "Ingesting audit record via POST /api/v1/audits/ingest..."
+AUD_INGEST_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/audits/ingest" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "real-test-suite",
+        "external_id": "ext_aud_01",
+        "correlation_id": "'$(uuidgen)'",
+        "shard_id": "'"${AUD_SHARD}"'",
+        "actor_id": "usr_real_alice",
+        "actor_type": "USER",
+        "action_name": "orders.order.cancelled",
+        "target_type": "order",
+        "target_id": "ord_real_001",
+        "outcome": "SUCCEEDED",
+        "compliance_class": "CLASS_A",
+        "raw_payload": "{\"order_id\":\"ord_real_001\",\"reason\":\"user_request\"}",
+        "occurred_at": "'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'"
+    }')
+echo "Audit Ingest Response:"
+echo "${AUD_INGEST_RESP}"
+if ! echo "${AUD_INGEST_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for audit record ingestion!"
+    exit 1
+fi
+
+echo "Creating checkpoint anchor via POST /api/v1/audits/checkpoints..."
+AUD_CP_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/audits/checkpoints" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "real-test-suite",
+        "correlation_id": "'$(uuidgen)'",
+        "shard_id": "'"${AUD_SHARD}"'",
+        "signing_secret": "super_secret_audit_anchor_key_32chars_long"
+    }')
+echo "Audit Checkpoint Response:"
+echo "${AUD_CP_RESP}"
+if ! echo "${AUD_CP_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for audit checkpoint creation!"
+    exit 1
+fi
+
+echo "Verifying shard integrity via POST /api/v1/audits/verify..."
+AUD_VERIFY_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/audits/verify" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "shard_id": "'"${AUD_SHARD}"'",
+        "signing_secret": "super_secret_audit_anchor_key_32chars_long"
+    }')
+echo "Audit Verification Response:"
+echo "${AUD_VERIFY_RESP}"
+if ! echo "${AUD_VERIFY_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for audit shard verification!"
+    exit 1
+fi
+
+echo "Verifying audit trail record in PostgreSQL..."
+DB_AUD_COUNT=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT count(*) FROM audit_trail_ledger WHERE tenant_id = '${MT_TENANT}' AND shard_id = '${AUD_SHARD}';")
+if [[ "${DB_AUD_COUNT}" != "1" ]]; then
+    echo "FATAL: Expected 1 record in audit_trail_ledger table, got '${DB_AUD_COUNT}'"
+    exit 1
+fi
+echo "Audit trail verified in PostgreSQL!"
+
 echo "All real API and backing server integration tests completed successfully."

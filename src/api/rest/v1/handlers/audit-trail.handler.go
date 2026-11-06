@@ -219,3 +219,4 @@ func (h *AuditTrailHandler) writeError(w http.ResponseWriter, code int, canonica
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }
+

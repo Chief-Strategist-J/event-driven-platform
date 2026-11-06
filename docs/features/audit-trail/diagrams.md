@@ -100,3 +100,4 @@ sequenceDiagram
     LED-->>C_QRY: Return Raw Verbatim Bytes
     C_QRY-->>Auditor: Return Masked Audit Records + Integrity Proof
 ```
+

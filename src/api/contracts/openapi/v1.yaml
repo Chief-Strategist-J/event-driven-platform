@@ -2570,3 +2570,129 @@ paths:
           description: Audit records returned and access logged
         "400":
           description: Validation error
+
+  /api/v1/encryption/encrypt:
+    post:
+      summary: Encrypt Field with Contextual AAD Binding
+      operationId: encryptField
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - subject_id
+                - aggregate_id
+                - field_path
+                - plaintext
+              properties:
+                tenant_id: { type: string }
+                subject_id: { type: string }
+                aggregate_id: { type: string }
+                field_path: { type: string }
+                schema_version: { type: integer }
+                plaintext: { type: string }
+      responses:
+        "200":
+          description: EncryptedValue object returned with AEAD auth tag
+        "400":
+          description: Validation error
+
+  /api/v1/encryption/decrypt:
+    post:
+      summary: Decrypt Field with Strict 6-Outcome Evaluation
+      operationId: decryptField
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - subject_id
+                - aggregate_id
+                - field_path
+                - encrypted_value
+              properties:
+                tenant_id: { type: string }
+                subject_id: { type: string }
+                aggregate_id: { type: string }
+                field_path: { type: string }
+                schema_version: { type: integer }
+                consumer_role: { type: string }
+                encrypted_value:
+                  type: object
+                  required:
+                    - scheme_version
+                    - key_ref
+                    - nonce
+                    - ciphertext
+                    - tag
+                  properties:
+                    scheme_version: { type: string }
+                    key_ref: { type: string }
+                    nonce: { type: string }
+                    ciphertext: { type: string }
+                    tag: { type: string }
+      responses:
+        "200":
+          description: Decryption evaluation outcome (DECRYPTED, ERASED)
+        "400":
+          description: Validation error, TAMPERED or MALFORMED tag
+        "403":
+          description: UNAUTHORIZED consumer entitlement
+
+  /api/v1/encryption/erasure:
+    post:
+      summary: Execute Subject Crypto-Shredding (GDPR / CCPA)
+      operationId: executeCryptoShredding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - subject_id
+                - reason
+                - requested_by
+              properties:
+                tenant_id: { type: string }
+                subject_id: { type: string }
+                reason:
+                  type: string
+                  enum: [GDPR_RTBF, CCPA_DELETION, TENANT_OFFBOARDING, SECURITY_BREACH]
+                requested_by: { type: string }
+      responses:
+        "200":
+          description: Subject keys zeroized and shredding logged
+        "400":
+          description: Validation error
+
+  /api/v1/encryption/blind-index:
+    post:
+      summary: Compute Keyed Blind Index for Equality Query
+      operationId: computeBlindIndex
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - field_class
+                - raw_value
+              properties:
+                tenant_id: { type: string }
+                field_class: { type: string }
+                raw_value: { type: string }
+      responses:
+        "200":
+          description: Keyed blind index hash returned
+        "400":
+          description: Validation error
