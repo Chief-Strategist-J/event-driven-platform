@@ -2168,3 +2168,149 @@ paths:
           description: Canary probe dispatched and verified
         "400":
           description: Validation error
+
+  /api/v1/commands/dispatch:
+    post:
+      summary: Dispatch Idempotent Command with Optimistic Concurrency Guard
+      operationId: dispatchCommand
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: x-user-id
+          in: header
+          required: false
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - command_name
+                - aggregate_type
+                - aggregate_id
+              properties:
+                tenant_id: { type: string }
+                principal_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                command_name: { type: string }
+                aggregate_type: { type: string }
+                aggregate_id: { type: string }
+                expected_version: { type: integer }
+                payload_raw: { type: string }
+      responses:
+        "200":
+          description: Command successfully executed or idempotently replayed
+          headers:
+            x-consistency-token:
+              schema:
+                type: string
+        "400":
+          description: Validation error
+        "409":
+          description: Version concurrency conflict
+
+  /api/v1/queries/resolve:
+    get:
+      summary: Resolve Query View with Signed Consistency Token
+      operationId: resolveQueryWithToken
+      parameters:
+        - name: x-consistency-token
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: view_name
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: aggregate_type
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: aggregate_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: View record returned with consistency resolution indicator
+        "400":
+          description: Validation error
+
+  /api/v1/commands/keys:
+    post:
+      summary: Register HMAC Consistency Token Signing Key
+      operationId: registerTokenSigningKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - key_version
+                - raw_secret_value
+                - expires_at
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                correlation_id: { type: string }
+                key_version: { type: integer }
+                raw_secret_value: { type: string }
+                expires_at: { type: string, format: date-time }
+      responses:
+        "201":
+          description: Token signing key registered
+        "400":
+          description: Validation error
+
+  /api/v1/queries/authoritative-own:
+    get:
+      summary: Authoritative Strongly-Consistent Read for Aggregate Owner
+      operationId: authoritativeOwnRead
+      parameters:
+        - name: x-consistency-token
+          in: header
+          required: false
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: aggregate_type
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: aggregate_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Authoritative aggregate state from primary write model
+        "400":
+          description: Validation error
+        "404":
+          description: Aggregate not found

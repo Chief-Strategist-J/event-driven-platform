@@ -121,11 +121,19 @@ echo ""
 echo "================================================================"
 echo " 3. VERIFYING POSTGRESQL LOGICAL REPLICATION SLOT"
 echo "================================================================"
-SLOT_INFO=$("${DOCKER_BIN}" exec event_platform-db-1 psql -U postgres -d "${POSTGRES_DB}" -t -A -c \
-    "SELECT slot_name, plugin, slot_type, active FROM pg_replication_slots WHERE slot_name = 'debezium_slot_outbox';")
-echo "PostgreSQL Slot: ${SLOT_INFO}"
+SLOT_ACTIVE="f"
+for i in $(seq 1 15); do
+    SLOT_INFO=$("${DOCKER_BIN}" exec event_platform-db-1 psql -U postgres -d "${POSTGRES_DB}" -t -A -c \
+        "SELECT slot_name, plugin, slot_type, active FROM pg_replication_slots WHERE slot_name = 'debezium_slot_outbox';" || true)
+    echo "PostgreSQL Slot Probe (${i}/15): ${SLOT_INFO}"
+    if echo "${SLOT_INFO}" | grep -q 'debezium_slot_outbox|pgoutput|logical|t'; then
+        SLOT_ACTIVE="t"
+        break
+    fi
+    sleep 1
+done
 
-if ! echo "${SLOT_INFO}" | grep -q 'debezium_slot_outbox|pgoutput|logical|t'; then
+if [[ "${SLOT_ACTIVE}" != "t" ]]; then
     echo "FATAL: Expected active logical replication slot 'debezium_slot_outbox' in PostgreSQL!"
     exit 1
 fi
