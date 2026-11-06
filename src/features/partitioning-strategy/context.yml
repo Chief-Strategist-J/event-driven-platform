@@ -1,2 +1,27 @@
 feature: partitioning-strategy
 mode: stateless_hexagonal
+owner: platform-core-team
+entities:
+  - name: partition_topic_topology
+    fields:
+      - name: id                       type: uuid          null: no   default: uuidv7()       constraint: PK, UNIQUE(tenant_id, id), immutable
+      - name: public_id                type: varchar(32)   null: no   default: generated     constraint: UNIQUE, immutable, format 'prt_' + 20 chars
+      - name: tenant_id                type: varchar(64)   null: no   normalize: trim        constraint: immutable, btrim
+      - name: source_service           type: varchar(64)   null: no   normalize: trim        constraint: btrim
+      - name: external_id              type: varchar(128)  null: no   normalize: trim        constraint: UNIQUE(tenant_id, source_service, external_id), btrim
+      - name: correlation_id           type: uuid          null: no   constraint: immutable, no FK
+      - name: topic_name               type: varchar(128)  null: no   normalize: trim        constraint: UNIQUE, immutable, btrim
+      - name: topic_class              type: varchar(32)   null: no   constraint: CHECK IN ('K_ORDERED', 'K_COMPACTED', 'K_COPART', 'K_UNORDERED')
+      - name: partition_count          type: integer       null: no   constraint: CHECK > 0
+      - name: replication_factor       type: integer       null: no   default: 3             constraint: CHECK >= 1
+      - name: min_insync_replicas      type: integer       null: no   default: 2             constraint: CHECK >= 1
+      - name: allow_in_place_expansion type: boolean       null: no   default: false         constraint: CHECK (topic_class = 'K_UNORDERED' OR allow_in_place_expansion = false)
+      - name: version                  type: bigint        null: no   default: 1
+    invariants:
+      - PT-01: Same key yields same partition across all clients and languages
+      - PT-02: Key is strictly aggregate identity representing the ordering scope
+      - PT-03: Key bytes are stable for aggregate lifetime
+      - PT-04: Partition count of keyed topics never changes in place
+      - PT-06: Hot partition skew ratio above 3.0 triggers alert and dedicated topic isolation
+      - PT-08: Keys carry no personal data (PII)
+      - PT-09: Null keys permitted only on K_UNORDERED topics

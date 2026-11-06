@@ -1500,3 +1500,164 @@ paths:
           description: Heartbeat recorded
         "400":
           description: Validation error
+
+  /api/v1/partitioning/topologies:
+    post:
+      summary: Register and Provision Topic Partition Topology
+      operationId: registerTopicTopology
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - topic_name
+                - topic_class
+                - partition_count
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                topic_name: { type: string }
+                topic_class: { type: string, enum: ["K_ORDERED", "K_COMPACTED", "K_COPART", "K_UNORDERED"] }
+                partition_count: { type: integer, minimum: 1 }
+                replication_factor: { type: integer, default: 3 }
+                min_insync_replicas: { type: integer, default: 2 }
+                allow_in_place_expansion: { type: boolean, default: false }
+      responses:
+        "201":
+          description: Topic topology registered successfully
+        "400":
+          description: Validation error
+        "409":
+          description: Conflict (e.g. ordered topic expansion attempt)
+
+  /api/v1/partitioning/keys/calculate:
+    post:
+      summary: Deterministically Calculate Partition Index for Aggregate Key
+      operationId: calculatePartitionKey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - topic_name
+                - partition_count
+              properties:
+                topic_name: { type: string }
+                topic_class: { type: string, enum: ["K_ORDERED", "K_COMPACTED", "K_COPART", "K_UNORDERED"] }
+                partition_count: { type: integer, minimum: 1 }
+                tenant_id: { type: string }
+                aggregate_type: { type: string }
+                aggregate_id: { type: string }
+                raw_key_bytes: { type: string, format: byte }
+      responses:
+        "200":
+          description: Partition calculation output
+        "400":
+          description: Validation error
+
+  /api/v1/partitioning/skew/evaluate:
+    post:
+      summary: Evaluate Partition Throughput Skew and Flag Hot Keys
+      operationId: evaluatePartitionSkew
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - topic_name
+                - partitions
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                topic_name: { type: string }
+                partitions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - partition_id
+                      - throughput_eps
+                    properties:
+                      partition_id: { type: integer }
+                      throughput_eps: { type: number }
+                      lag_records: { type: integer }
+      responses:
+        "200":
+          description: Skew evaluation results and remediation actions
+        "400":
+          description: Validation error
+
+  /api/v1/partitioning/migrations:
+    post:
+      summary: Initiate Blue-Green Topic Stream Migration Runbook
+      operationId: initiateStreamMigration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - migration_id
+                - source_topic
+                - target_topic
+                - source_partitions
+                - target_partitions
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                migration_id: { type: string }
+                source_topic: { type: string }
+                target_topic: { type: string }
+                source_partitions: { type: integer }
+                target_partitions: { type: integer }
+      responses:
+        "201":
+          description: Migration runbook initiated in PLANNED state
+        "400":
+          description: Validation error
+
+  /api/v1/partitioning/migrations/phase:
+    put:
+      summary: Advance Stream Migration Runbook Phase
+      operationId: advanceMigrationPhase
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - migration_id
+                - expected_phase
+                - target_phase
+              properties:
+                tenant_id: { type: string }
+                migration_id: { type: string }
+                expected_phase: { type: string }
+                target_phase: { type: string }
+                correlation_id: { type: string }
+      responses:
+        "200":
+          description: Migration phase advanced successfully
+        "400":
+          description: Invalid transition error
+        "409":
+          description: Concurrency or terminal state conflict
+
