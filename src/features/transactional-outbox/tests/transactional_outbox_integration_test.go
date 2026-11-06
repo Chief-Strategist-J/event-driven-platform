@@ -149,7 +149,6 @@ func TestTransactionalOutbox_Integration_PhysicalCheckConstraints(t *testing.T) 
 	})
 }
 
-// 2. REAL POSTGRESQL STAGING, IDEMPOTENT CLAIM, LEASE AND RELAY
 func TestTransactionalOutbox_Integration_StagingAndRelay(t *testing.T) {
 	db := getOutboxTestDB(t)
 	defer db.Close()
@@ -178,7 +177,6 @@ func TestTransactionalOutbox_Integration_StagingAndRelay(t *testing.T) {
 
 	idempotencyKey := fmt.Sprintf("idem_key_%d", time.Now().UnixNano())
 
-	// Step 1: Stage Event
 	rec1, err := svc.StageEvent(ctx, input, idempotencyKey)
 	if err != nil {
 		t.Fatalf("failed to stage outbox event in postgres: %v", err)
@@ -187,7 +185,6 @@ func TestTransactionalOutbox_Integration_StagingAndRelay(t *testing.T) {
 		t.Fatalf("expected status PENDING, got %s", rec1.Status)
 	}
 
-	// Step 2: Idempotent duplicate staging with same key must return existing record
 	rec2, err := svc.StageEvent(ctx, input, idempotencyKey)
 	if err != nil {
 		t.Fatalf("failed on idempotent duplicate stage: %v", err)
@@ -196,7 +193,6 @@ func TestTransactionalOutbox_Integration_StagingAndRelay(t *testing.T) {
 		t.Fatalf("expected same record ID on duplicate idempotency key, got %s vs %s", rec2.ID, rec1.ID)
 	}
 
-	// Step 3: Fetch pending records
 	pending, err := repo.FetchPending(ctx, 10)
 	if err != nil {
 		t.Fatalf("failed to fetch pending outbox batch: %v", err)
@@ -205,7 +201,6 @@ func TestTransactionalOutbox_Integration_StagingAndRelay(t *testing.T) {
 		t.Fatalf("expected at least 1 pending outbox record in batch")
 	}
 
-	// Step 4: Claim In Flight
 	workerID := "worker-pod-01"
 	leaseDuration := 10 * time.Second
 	claimed, err := repo.ClaimInFlight(ctx, workerID, leaseDuration, 10)
@@ -216,13 +211,11 @@ func TestTransactionalOutbox_Integration_StagingAndRelay(t *testing.T) {
 		t.Fatalf("expected claimed in-flight records")
 	}
 
-	// Step 5: Mark Published
 	err = repo.MarkPublished(ctx, tenantID, rec1.ID)
 	if err != nil {
 		t.Fatalf("failed to mark outbox record published: %v", err)
 	}
 
-	// Verify persistence in DB
 	var dbStatus string
 	var processedAt sql.NullTime
 	err = db.QueryRowContext(ctx, "SELECT status, processed_at FROM outbox WHERE tenant_id = $1 AND id = $2", tenantID, rec1.ID).Scan(&dbStatus, &processedAt)
@@ -237,7 +230,6 @@ func TestTransactionalOutbox_Integration_StagingAndRelay(t *testing.T) {
 	}
 }
 
-// 3. CONCURRENT IDEMPOTENCY KEY CLAIM CONTENTION (Tier 4 Concurrency Invariant)
 func TestTransactionalOutbox_Integration_ConcurrentIdempotencyClaims(t *testing.T) {
 	db := getOutboxTestDB(t)
 	defer db.Close()
@@ -274,7 +266,6 @@ func TestTransactionalOutbox_Integration_ConcurrentIdempotencyClaims(t *testing.
 	}
 }
 
-// 4. DISTRIBUTED TRACING & ERROR COMPLIANCE (10-tracing-writing.md)
 func TestTransactionalOutbox_TracingCompliance(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(
@@ -291,7 +282,7 @@ func TestTransactionalOutbox_TracingCompliance(t *testing.T) {
 
 	t.Run("ValidationRejectionFailsWithTypedError", func(t *testing.T) {
 		invalidInput := contracts.CreateOutboxRecordInput{
-			TenantID: "", // Missing mandatory tenant
+			TenantID: "",
 		}
 
 		_, err := svc.StageEvent(ctx, invalidInput, "idem-test")

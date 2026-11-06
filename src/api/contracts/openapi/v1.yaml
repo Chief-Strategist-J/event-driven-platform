@@ -1290,3 +1290,108 @@ paths:
           description: Effect evaluation result returned (DISPATCH, MOCK, SUPPRESS, RECORD_SHADOW)
         "400":
           description: Validation error
+
+  /api/v1/tenants:
+    post:
+      summary: Register Tenant
+      operationId: registerTenant
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - external_id
+                - tier
+                - home_region
+                - allowed_regions
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                tier: { type: string, enum: ["POOL", "DEDICATED", "SILO"] }
+                home_region: { type: string }
+                allowed_regions:
+                  type: array
+                  items: { type: string }
+                retention_class: { type: string }
+                max_throughput_eps: { type: integer }
+                max_concurrency_lanes: { type: integer }
+      responses:
+        "201":
+          description: Tenant registered successfully
+        "400":
+          description: Validation error
+        "409":
+          description: Tenant already exists
+
+  /api/v1/tenants/{tenant_id}:
+    get:
+      summary: Get Tenant Record
+      operationId: getTenant
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Tenant record found
+        "404":
+          description: Tenant not found
+
+  /api/v1/tenants/{tenant_id}/lifecycle:
+    put:
+      summary: Transition Tenant Lifecycle State
+      operationId: transitionTenantLifecycle
+      parameters:
+        - name: tenant_id
+          in: path
+          required: true
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - target_state
+              properties:
+                target_state: { type: string, enum: ["ACTIVE", "SUSPENDED", "OFFBOARDING", "OFFBOARDED"] }
+                reason: { type: string }
+      responses:
+        "200":
+          description: Lifecycle state transitioned
+        "409":
+          description: Invalid transition or tombstoned tenant
+
+  /api/v1/tenants/verify-envelope:
+    post:
+      summary: Verify Event Ingress Tenant Scope and Residency
+      operationId: verifyTenantEnvelope
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - header_tenant
+                - key_prefix
+                - payload_tenant
+                - current_region
+              properties:
+                header_tenant: { type: string }
+                key_prefix: { type: string }
+                payload_tenant: { type: string }
+                current_region: { type: string }
+      responses:
+        "200":
+          description: Ingress envelope verified
+        "403":
+          description: Verification failed (mismatch or residency disallowed)

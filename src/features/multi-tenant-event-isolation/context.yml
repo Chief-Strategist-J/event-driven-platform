@@ -1,2 +1,40 @@
 feature: multi-tenant-event-isolation
 mode: stateless_hexagonal
+owner: security-platform-team
+entities:
+  - name: tenant_registry
+    fields:
+      - name: id             type: uuid          null: no   default: uuidv7()            constraint: PK, UNIQUE(tenant_id, id), immutable
+      - name: public_id      type: varchar(32)   null: no   default: generated          constraint: UNIQUE, immutable, format 'tnt_' + 20 chars
+      - name: tenant_id      type: varchar(64)   null: no   normalize: trim             constraint: UNIQUE, immutable, btrim
+      - name: source_service type: varchar(64)   null: no   normalize: trim             constraint: btrim
+      - name: external_id    type: varchar(128)  null: no   normalize: trim             constraint: UNIQUE(tenant_id, source_service, external_id), btrim
+      - name: correlation_id type: uuid          null: no   constraint: immutable, no FK
+      - name: tier           type: varchar(32)   null: no   constraint: CHECK IN ('POOL', 'DEDICATED', 'SILO')
+      - name: lifecycle_state type: varchar(32)  null: no   constraint: CHECK IN ('ONBOARDING', 'ACTIVE', 'SUSPENDED', 'OFFBOARDING', 'OFFBOARDED')
+      - name: home_region    type: varchar(64)   null: no   normalize: trim             constraint: btrim
+      - name: allowed_regions type: text         null: no   normalize: trim             constraint: btrim
+      - name: retention_class type: varchar(64)  null: no   normalize: trim             constraint: btrim
+      - name: max_throughput_eps type: int       null: no   default: 1000               constraint: CHECK > 0
+      - name: max_concurrency_lanes type: int    null: no   default: 10                 constraint: CHECK > 0
+      - name: version        type: bigint        null: no   default: 1
+    invariants:
+      - MT-01: Server-derived tenant context is immutable
+      - MT-02: Header, key prefix, and payload tenant must be equal
+      - MT-04: No silent drops; mismatches routed to INTEGRITY-TENANT quarantine
+      - MT-08: Residency placement enforced by region allowlist
+      - MT-11: Noisy-neighbor budget limits held keys and quarantine traffic
+      - MT-12: Offboarded tenant IDs are permanently tombstoned
+  - name: tenant_dek_keystore
+    fields:
+      - name: id             type: uuid          null: no   default: uuidv7()            constraint: PK, UNIQUE(tenant_id, id), immutable
+      - name: public_id      type: varchar(32)   null: no   default: generated          constraint: UNIQUE, immutable, format 'dek_' + 20 chars
+      - name: tenant_id      type: varchar(64)   null: no   normalize: trim             constraint: FK tenant_registry(tenant_id)
+      - name: subject_id     type: varchar(128)  null: no   normalize: trim             constraint: UNIQUE(tenant_id, subject_id, period_key)
+      - name: period_key     type: varchar(32)   null: no   normalize: trim             constraint: btrim
+      - name: wrapped_dek    type: bytea         null: no   constraint: NOT NULL
+      - name: kek_key_id     type: varchar(128)  null: no   normalize: trim             constraint: btrim
+      - name: algorithm      type: varchar(32)   null: no   default: 'AES_256_GCM'      constraint: btrim
+      - name: status         type: varchar(32)   null: no   constraint: CHECK IN ('ACTIVE', 'SHREDDED')
+      - name: shredded_at    type: timestamptz   null: yes  constraint: CHECK (status = 'SHREDDED') = (shredded_at IS NOT NULL)
+      - name: version        type: bigint        null: no   default: 1

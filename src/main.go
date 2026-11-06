@@ -133,6 +133,7 @@ func describeService() chassis.ServiceSpec {
 
 			return chassis.Services{
 				Registry: map[string]any{
+					"db":                db,
 					"schemaService":     schemaSvc,
 					"outboxService":     outboxSvc,
 					"consumerService":   consumerSvc,
@@ -206,6 +207,9 @@ func describeService() chassis.ServiceSpec {
 			}
 			if replayRepo, exists := instances["replayRepo"].(replayPorts.ReplayRepositoryPort); exists && replayRepo != nil {
 				routers.RegisterReplayRoutes(router, replayRepo)
+			}
+			if dbConn, exists := instances["db"].(*sql.DB); exists && dbConn != nil {
+				routers.RegisterMultiTenantRoutes(router, dbConn)
 			}
 		},
 		RegisterConsumers: func(_ any, _ chassis.Services) {},
