@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs Distributed Tracing unit, rule, state machine, and live postgres integration tests
+# Runs Distributed Tracing unit, state machine, linking mode, and live postgres integration tests
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -58,3 +58,4 @@ ON CONFLICT (tenant_id, hop_source, hop_target, hop_type) DO UPDATE SET
     evaluated_at = EXCLUDED.evaluated_at,
     updated_at = EXCLUDED.updated_at;
 `
+

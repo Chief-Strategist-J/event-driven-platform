@@ -1657,4 +1657,170 @@ if [[ "${DB_ITL_COUNT}" != "1" ]]; then
 fi
 echo "Event Operations Dashboard verified in real PostgreSQL!"
 
+echo "================================================================"
+echo " 25. TESTING REAL EVENT-DRIVEN COMMUNICATION & SAGA ORCHESTRATION"
+echo "================================================================"
+SAGA_CORR_ID=$(uuidgen)
+SAGA_NAME="order_flow_$(date +%s)"
+
+echo "Registering Saga Definition via POST /api/v1/communication/sagas/definitions..."
+SAGA_DEF_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/communication/sagas/definitions" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "order-service",
+        "external_id": "ext_saga_def_01",
+        "correlation_id": "'"${SAGA_CORR_ID}"'",
+        "saga_name": "'"${SAGA_NAME}"'",
+        "steps": [
+            {
+                "step_index": 0,
+                "step_name": "AuthorizePayment",
+                "step_type": "COMPENSABLE",
+                "compensation_name": "VoidAuthorization",
+                "timeout_seconds": 30
+            },
+            {
+                "step_index": 1,
+                "step_name": "CapturePayment",
+                "step_type": "PIVOT",
+                "timeout_seconds": 30
+            }
+        ]
+    }')
+echo "Saga Def Response:"
+echo "${SAGA_DEF_RESP}"
+if ! echo "${SAGA_DEF_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for registering saga definition!"
+    exit 1
+fi
+SAGA_DEF_ID=$(echo "${SAGA_DEF_RESP}" | grep -o '"public_id":"[^"]*' | head -n1 | cut -d'"' -f4)
+echo "Extracted saga definition ID: ${SAGA_DEF_ID}"
+
+echo "Starting Saga orchestration via POST /api/v1/communication/sagas/start..."
+SAGA_START_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/communication/sagas/start" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "order-service",
+        "external_id": "ext_saga_inst_01",
+        "correlation_id": "'"${SAGA_CORR_ID}"'",
+        "saga_definition_id": "'"${SAGA_DEF_ID}"'",
+        "initial_payload": "{\"order_id\":\"ord_9988\",\"amount\":150.00}",
+        "timeout_seconds": 30
+    }')
+echo "Saga Start Response:"
+echo "${SAGA_START_RESP}"
+if ! echo "${SAGA_START_RESP}" | grep -q 'HTTP/1.1 202 Accepted'; then
+    echo "FATAL: Expected HTTP 202 for starting saga!"
+    exit 1
+fi
+if ! echo "${SAGA_START_RESP}" | grep -q 'saga_instance_id'; then
+    echo "FATAL: Expected saga_instance_id in response!"
+    exit 1
+fi
+
+SAGA_INST_ID=$(echo "${SAGA_START_RESP}" | grep -o '"saga_instance_id":"[^"]*' | cut -d'"' -f4)
+echo "Extracted saga instance ID: ${SAGA_INST_ID}"
+
+echo "Processing Saga Step Reply via POST /api/v1/communication/sagas/reply..."
+SAGA_REPLY_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/communication/sagas/reply" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "payment-service",
+        "saga_instance_id": "'"${SAGA_INST_ID}"'",
+        "step_index": 0,
+        "command_id": "cmd_pay_auth_01",
+        "outcome": "SUCCEEDED",
+        "reply_payload": "{\"payment_id\":\"pay_5544\",\"status\":\"RESERVED\"}"
+    }')
+echo "Saga Reply Response:"
+echo "${SAGA_REPLY_RESP}"
+if ! echo "${SAGA_REPLY_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for saga step reply!"
+    exit 1
+fi
+
+echo "Verifying Saga Instance state in PostgreSQL..."
+DB_SAGA_STATE=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT state FROM saga_instance_ledger WHERE public_id = '${SAGA_INST_ID}';")
+if [[ "${DB_SAGA_STATE}" != "IN_PROGRESS" && "${DB_SAGA_STATE}" != "SUCCEEDED" ]]; then
+    echo "FATAL: Unexpected saga state in DB: '${DB_SAGA_STATE}'"
+    exit 1
+fi
+echo "Event-Driven Communication & Saga verified in real PostgreSQL!"
+
+echo "================================================================"
+echo " 26. TESTING REAL DISTRIBUTED TRACING W3C & CONTEXT PROPAGATION"
+echo "================================================================"
+TRACE_CORR_ID=$(uuidgen)
+
+echo "Injecting W3C Trace Context via POST /api/v1/tracing/context/inject..."
+INJECT_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/tracing/context/inject" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "gateway-service",
+        "correlation_id": "'"${TRACE_CORR_ID}"'",
+        "carrier": {}
+    }')
+echo "Inject Response:"
+echo "${INJECT_RESP}"
+if ! echo "${INJECT_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for trace injection!"
+    exit 1
+fi
+if ! echo "${INJECT_RESP}" | grep -q 'traceparent'; then
+    echo "FATAL: Expected traceparent in inject response!"
+    exit 1
+fi
+
+TRACEPARENT_VAL=$(echo "${INJECT_RESP}" | grep -o '"traceparent":"[^"]*' | head -n1 | cut -d'"' -f4)
+echo "Extracted traceparent: ${TRACEPARENT_VAL}"
+
+echo "Extracting W3C Trace Context via POST /api/v1/tracing/context/extract..."
+EXTRACT_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/tracing/context/extract" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "carrier": {
+            "traceparent": "'"${TRACEPARENT_VAL}"'"
+        },
+        "is_batch": false,
+        "queue_wait_millis": 15
+    }')
+echo "Extract Response:"
+echo "${EXTRACT_RESP}"
+if ! echo "${EXTRACT_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for trace extraction!"
+    exit 1
+fi
+if ! echo "${EXTRACT_RESP}" | grep -q '"linking_mode":"CHILD_SPAN"'; then
+    echo "FATAL: Expected linking_mode CHILD_SPAN in extract response!"
+    exit 1
+fi
+
+echo "Evaluating Trace Sampling via POST /api/v1/tracing/sampling/evaluate..."
+SAMPLE_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/tracing/sampling/evaluate" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "order-service",
+        "flow_name": "order_fulfillment",
+        "correlation_id": "'"${TRACE_CORR_ID}"'",
+        "duration_ms": 600,
+        "has_error": true
+    }')
+echo "Sampling Response:"
+echo "${SAMPLE_RESP}"
+if ! echo "${SAMPLE_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for trace sampling evaluation!"
+    exit 1
+fi
+if ! echo "${SAMPLE_RESP}" | grep -q '"should_sample":true'; then
+    echo "FATAL: Expected should_sample true for error trace!"
+    exit 1
+fi
+
+echo "Distributed Tracing verified across HTTP and W3C trace context!"
+
 echo "All real API and backing server integration tests completed successfully."

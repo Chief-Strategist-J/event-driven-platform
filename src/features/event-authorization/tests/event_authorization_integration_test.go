@@ -56,7 +56,6 @@ func TestEventAuthorization_PostgresLifecycleAndEvaluation(t *testing.T) {
 	servicePrincipal := "service_checkout_worker"
 	topicName := "checkout.orders.placed.v1"
 
-	// 1. Evaluate without policy -> Must trigger DEFAULT DENY
 	outDefault, err := svc.EvaluateAccess(ctx, &contracts.EvaluateAccessInput{
 		TenantID:      tenantID,
 		SourceService: "checkout-service",
@@ -72,7 +71,6 @@ func TestEventAuthorization_PostgresLifecycleAndEvaluation(t *testing.T) {
 	assert.Equal(t, contracts.DecisionDenied, outDefault.Decision)
 	assert.Equal(t, "NONE", outDefault.MatchedPolicyID)
 
-	// 2. Provision ALLOW Policy
 	pol, err := svc.ProvisionPolicy(ctx, &contracts.CreatePolicyInput{
 		TenantID:        tenantID,
 		SourceService:   "policy-manager",
@@ -89,7 +87,6 @@ func TestEventAuthorization_PostgresLifecycleAndEvaluation(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, contracts.ValidatePolicyPublicID(pol.PublicID))
 
-	// 3. Test AZ-04 Single Writer Invariant: Second distinct service attempting write on same pattern fails
 	_, errSecondWriter := svc.ProvisionPolicy(ctx, &contracts.CreatePolicyInput{
 		TenantID:        tenantID,
 		SourceService:   "policy-manager",
@@ -105,7 +102,6 @@ func TestEventAuthorization_PostgresLifecycleAndEvaluation(t *testing.T) {
 	})
 	assert.ErrorIs(t, errSecondWriter, contracts.ErrSingleWriterViolation)
 
-	// 4. Evaluate with policy -> Must ALLOW
 	outAllow, err := svc.EvaluateAccess(ctx, &contracts.EvaluateAccessInput{
 		TenantID:      tenantID,
 		SourceService: "checkout-service",
@@ -121,7 +117,6 @@ func TestEventAuthorization_PostgresLifecycleAndEvaluation(t *testing.T) {
 	assert.Equal(t, contracts.DecisionAllowed, outAllow.Decision)
 	assert.Equal(t, pol.PublicID, outAllow.MatchedPolicyID)
 
-	// 5. Revoke policy and verify that evaluation immediately returns DENIED
 	err = svc.UpdatePolicyState(ctx, pol.PublicID, contracts.PolicyStateRevoked)
 	require.NoError(t, err)
 

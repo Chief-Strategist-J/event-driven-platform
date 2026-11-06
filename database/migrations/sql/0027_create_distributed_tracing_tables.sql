@@ -124,3 +124,4 @@ DROP TRIGGER IF EXISTS trg_trace_span_audit_no_update ON trace_span_audit_ledger
 CREATE TRIGGER trg_trace_span_audit_no_update
     BEFORE UPDATE OR DELETE ON trace_span_audit_ledger
     FOR EACH ROW EXECUTE FUNCTION trg_prevent_trace_span_audit_mutation();
+

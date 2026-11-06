@@ -199,3 +199,4 @@ func (a *PostgresDistributedTracingAdapter) UpsertPropagationCoverage(
 	}
 	return nil
 }
+

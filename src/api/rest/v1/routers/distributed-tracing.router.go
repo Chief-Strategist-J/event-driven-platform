@@ -17,3 +17,4 @@ func RegisterDistributedTracingRoutes(mux *http.ServeMux, db *sql.DB) {
 	mux.HandleFunc("POST /api/v1/tracing/sampling/evaluate", h.HandleEvaluateSampling)
 	mux.HandleFunc("POST /api/v1/tracing/coverage/report", h.HandleReportCoverage)
 }
+

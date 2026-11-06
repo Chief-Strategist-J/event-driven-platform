@@ -38,3 +38,4 @@ func (m *SamplingStateMachine) Evaluate(
 		DecisionRule: "DETERMINISTIC_CORRELATION_HASH",
 	}
 }
+

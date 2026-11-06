@@ -12,6 +12,7 @@ func RegisterEventCommunicationRoutes(mux *http.ServeMux, db *sql.DB) {
 	svc := eventdrivencommunication.NewService(db)
 	h := handlers.NewEventCommunicationHandler(svc)
 
+	mux.HandleFunc("POST /api/v1/communication/sagas/definitions", h.HandleRegisterSagaDefinition)
 	mux.HandleFunc("POST /api/v1/communication/sagas/start", h.HandleStartSaga)
 	mux.HandleFunc("POST /api/v1/communication/sagas/reply", h.HandleProcessStepReply)
 	mux.HandleFunc("POST /api/v1/communication/sagas/compensate", h.HandleTriggerCompensation)

@@ -2895,6 +2895,46 @@ paths:
         "422":
           description: Causal loop or depth limit exceeded
 
+  /api/v1/communication/sagas/definitions:
+    post:
+      summary: Register Distributed Saga Definition and Step Topologies
+      operationId: registerSagaDefinition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - source_service
+                - saga_name
+                - steps
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
+                saga_name: { type: string }
+                steps:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - step_name
+                      - action_topic
+                      - compensation_topic
+                    properties:
+                      step_name: { type: string }
+                      action_topic: { type: string }
+                      compensation_topic: { type: string }
+                      timeout_seconds: { type: integer }
+      responses:
+        "200":
+          description: Saga definition registered successfully
+        "400":
+          description: Validation error
+
   /api/v1/communication/sagas/start:
     post:
       summary: Initiate Orchestrated Distributed Saga Instance

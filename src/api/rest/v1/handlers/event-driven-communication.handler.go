@@ -24,6 +24,42 @@ func NewEventCommunicationHandler(svc *service.EventCommunicationService) *Event
 	return &EventCommunicationHandler{svc: svc}
 }
 
+func (h *EventCommunicationHandler) HandleRegisterSagaDefinition(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/communication/sagas/definitions", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
+	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+	reqID := r.Header.Get(constants.HeaderXRequestID)
+	corrID := r.Header.Get(constants.HeaderXCorrelationID)
+	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/communication/sagas/definitions"),
+		attribute.String("correlation_id", corrID),
+	)
+
+	var def contracts.SagaDefinition
+	if err := json.NewDecoder(r.Body).Decode(&def); err != nil {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+
+	res, err := h.svc.RegisterSagaDefinition(ctx, def)
+	if err != nil {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+
+	h.writeResponse(w, http.StatusOK, res, start, reqID, corrID, causationID)
+}
+
 func (h *EventCommunicationHandler) HandleStartSaga(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/communication/sagas/start", trace.WithSpanKind(trace.SpanKindServer))

@@ -18,9 +18,7 @@ var AllowedPolicyTransitions = map[contracts.PolicyState]map[contracts.PolicySta
 		contracts.PolicyStateActive:  true,
 		contracts.PolicyStateRevoked: true,
 	},
-	contracts.PolicyStateRevoked: {
-		// Terminal state: Revoked policies can never be re-activated
-	},
+	contracts.PolicyStateRevoked: {},
 }
 
 func CanTransitionPolicyState(current, next contracts.PolicyState) bool {

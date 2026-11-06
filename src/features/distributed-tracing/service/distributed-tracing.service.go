@@ -41,7 +41,7 @@ func (s *DistributedTracingService) RegisterSamplingPolicy(
 	}
 
 	policy.ID = uuid.New()
-	policy.PublicID = "tsp_" + uuid.New().String()[:18]
+	policy.PublicID = contracts.GeneratePublicID("tsp")
 	policy.IsActive = true
 	policy.CreatedAt = time.Now().UTC()
 	policy.UpdatedAt = time.Now().UTC()
@@ -86,7 +86,7 @@ func (s *DistributedTracingService) InjectTraceContext(
 
 	_ = s.repo.RecordSpanAudit(ctx, contracts.TraceSpanAudit{
 		ID:                      uuid.New(),
-		PublicID:                "tsa_" + uuid.New().String()[:18],
+		PublicID:                contracts.GeneratePublicID("tsa"),
 		TenantID:                cmd.TenantID,
 		SourceService:           cmd.SourceService,
 		ExternalID:              w3c.SpanID,
@@ -182,7 +182,7 @@ func (s *DistributedTracingService) ReportCoverage(
 
 	cov := contracts.TracePropagationCoverage{
 		ID:              uuid.New(),
-		PublicID:        "tpc_" + uuid.New().String()[:18],
+		PublicID:        contracts.GeneratePublicID("tpc"),
 		TenantID:        cmd.TenantID,
 		SourceService:   cmd.SourceService,
 		ExternalID:      cmd.ExternalID,

@@ -12,3 +12,4 @@ type DistributedTracingRepositoryPort interface {
 	RecordSpanAudit(ctx context.Context, audit contracts.TraceSpanAudit) error
 	UpsertPropagationCoverage(ctx context.Context, cov contracts.TracePropagationCoverage) error
 }
+

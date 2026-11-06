@@ -11,3 +11,4 @@ func NewService(db *sql.DB) *service.DistributedTracingService {
 	repo := adapters.NewPostgresDistributedTracingAdapter(db)
 	return service.NewDistributedTracingService(repo)
 }
+

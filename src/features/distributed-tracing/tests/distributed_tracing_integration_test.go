@@ -92,3 +92,4 @@ func TestDistributedTracing_PostgresLifecycle(t *testing.T) {
 	assert.True(t, covRes.IsHealthy)
 	assert.True(t, covRes.CoverageRatio >= 0.95)
 }
+

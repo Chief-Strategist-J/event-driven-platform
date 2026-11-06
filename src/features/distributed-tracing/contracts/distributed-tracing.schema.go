@@ -1,5 +1,17 @@
 package contracts
 
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+)
+
+func GeneratePublicID(prefix string) string {
+	b := make([]byte, 10)
+	_, _ = rand.Read(b)
+	return fmt.Sprintf("%s_%s", prefix, hex.EncodeToString(b))
+}
+
 type InjectTraceContextCommand struct {
 	TenantID      string            `json:"tenant_id"`
 	SourceService string            `json:"source_service"`

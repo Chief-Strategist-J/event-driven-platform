@@ -92,3 +92,4 @@ func EvaluateDeterministicHash(correlationID string, sampleRate float64) bool {
 	normalized := float64(val) / float64(0xFFFFFFFF)
 	return normalized <= sampleRate
 }
+

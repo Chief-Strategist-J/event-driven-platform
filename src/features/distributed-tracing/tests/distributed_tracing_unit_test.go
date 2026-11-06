@@ -182,3 +182,4 @@ func TestTracingServiceLifecycle(t *testing.T) {
 		t.Fatalf("expected healthy coverage ratio")
 	}
 }
+

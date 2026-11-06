@@ -220,3 +220,4 @@ func (h *DistributedTracingHandler) writeError(w http.ResponseWriter, code int, 
 	}
 	_ = json.NewEncoder(w).Encode(resp)
 }
+
