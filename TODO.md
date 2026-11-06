@@ -16,13 +16,13 @@ Every WP has an **AC** (acceptance criteria). Not done until demonstrated by tes
 - [ ] Benchmarks recorded (section 5) and used to justify partition/consumer sizing
 
 ## 1. Architecture artifacts (`docs/`)
-- [ ] `00-requirements.md`: functional + NFR numbers (e.g. 50k events/s peak, p99 produce->consume < 200 ms, 7-day retention, full replay in < 4 h, consumer lag SLO < 30 s at p99)
-- [ ] `01-c4.md`: Context/Container/Component diagrams
-- [ ] `02-event-catalog.md`: every event, owner, schema version, key, partition count, consumers, PII flag
-- [ ] `03-topic-design.md`: naming (`<domain>.<aggregate>.<event>.v<N>`), partitions per topic with math (target throughput / per-partition throughput, headroom 2-3x), RF=3, `min.insync.replicas=2`, retention, compaction rules
-- [ ] `04-consistency-contract.md`: what readers of the read model may assume (staleness bound, read-your-writes mechanism)
-- [ ] `05-capacity-model.md`: events/s x avg size x RF x retention = disk; network fan-out; consumer CPU; broker count
-- [ ] `06-threat-model.md`: ACLs, spoofed producers, PII in events, replay of malicious events, schema-registry poisoning
+- [x] `00-requirements.md`: functional + NFR numbers (e.g. 50k events/s peak, p99 produce->consume < 200 ms, 7-day retention, full replay in < 4 h, consumer lag SLO < 30 s at p99)
+- [x] `01-c4.md`: Context/Container/Component diagrams
+- [x] `02-event-catalog.md`: every event, owner, schema version, key, partition count, consumers, PII flag
+- [x] `03-topic-design.md`: naming (`<domain>.<aggregate>.<event>.v<N>`), partitions per topic with math (target throughput / per-partition throughput, headroom 2-3x), RF=3, `min.insync.replicas=2`, retention, compaction rules
+- [x] `04-consistency-contract.md`: what readers of the read model may assume (staleness bound, read-your-writes mechanism)
+- [x] `05-capacity-model.md`: events/s x avg size x RF x retention = disk; network fan-out; consumer CPU; broker count
+- [x] `06-threat-model.md`: ACLs, spoofed producers, PII in events, replay of malicious events, schema-registry poisoning
 - [ ] `07-runbooks/`: consumer lag, rebalance storm, poison message, broker loss, projection rebuild, schema rollback
 - [ ] ADRs:
   - [ ] ADR-001 Event sourcing vs state-stored + domain events

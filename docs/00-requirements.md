@@ -106,3 +106,4 @@ flowchart TD
 1. **Not an OLAP Analytical Warehouse:** The platform does not serve complex SQL aggregation queries over billions of historical events. Downstream consumers project events into analytical stores (ClickHouse, BigQuery).
 2. **No Distributed 2PC Across Heterogeneous Brokers:** The platform rejects XA/2PC protocols across multiple message brokers. Consistency is achieved via Saga orchestration and Transactional Outbox.
 3. **No Direct Point-to-Point Synchronous RPC Over Kafka:** Kafka topics are strictly reserved for asynchronous events and decoupled commands with explicit reply topics. Synchronous real-time RPC uses gRPC or REST.
+

@@ -138,3 +138,4 @@ Kafka relies on the OS page cache for read zero-copy (`sendfile` syscall):
 - Active streaming consumer working set: 30 seconds of hot traffic.
 - $30 \text{ seconds} \times 40 \text{ MB/sec} = 1.2 \text{ GB}$ of active cache needed.
 - With 6 brokers providing $6 \times 48 \text{ GB (free RAM for cache)} = 288 \text{ GB}$, over $99.5\%$ of consumer reads hit RAM directly without touching NVMe disk reads.
+

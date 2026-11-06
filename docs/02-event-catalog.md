@@ -101,3 +101,4 @@ All events published across the platform MUST be wrapped in the standard envelop
    - Carries only identity keys and timestamps.
    - Informs consumers that an event occurred; consumers fetch details if authorized.
    - Example: `customers.profile.erased.v1`.
+
