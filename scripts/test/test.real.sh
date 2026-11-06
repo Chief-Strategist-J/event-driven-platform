@@ -1043,4 +1043,213 @@ if [[ "${DB_MV_VERSION}" != "1" ]]; then
 fi
 echo "Materialized view projection verified in PostgreSQL!"
 
+echo "================================================================"
+echo " 17. TESTING REAL EVENTUAL CONSISTENCY MONITORING API"
+echo "================================================================"
+ECM_VIEW="ecm_view_${TIMESTAMP}"
+echo "Recording producer watermark via POST /api/v1/consistency/watermarks..."
+ECM_PROD_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/consistency/watermarks" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "view_name": "'"${ECM_VIEW}"'",
+        "watermark_type": "PRODUCER",
+        "checkpoint_seq": 100,
+        "observed_timestamp": "'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'"
+    }')
+echo "Producer Watermark Response:"
+echo "${ECM_PROD_RESP}"
+if ! echo "${ECM_PROD_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for producer watermark registration!"
+    exit 1
+fi
+
+echo "Recording consumer watermark via POST /api/v1/consistency/watermarks..."
+ECM_CONS_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/consistency/watermarks" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "view_name": "'"${ECM_VIEW}"'",
+        "watermark_type": "CONSUMER",
+        "checkpoint_seq": 100,
+        "observed_timestamp": "'"$(date -u +"%Y-%m-%dT%H:%M:%SZ")"'"
+    }')
+echo "Consumer Watermark Response:"
+echo "${ECM_CONS_RESP}"
+if ! echo "${ECM_CONS_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for consumer watermark registration!"
+    exit 1
+fi
+
+echo "Evaluating drift via POST /api/v1/consistency/evaluate..."
+ECM_DRIFT_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/consistency/evaluate" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "view_name": "'"${ECM_VIEW}"'",
+        "aggregate_type": "Account",
+        "aggregate_id": "acc_001",
+        "source_exists": true,
+        "view_exists": true,
+        "source_version": 1,
+        "view_version": 1,
+        "source_payload_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+        "view_payload_hash": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+    }')
+echo "Drift Evaluation Response:"
+echo "${ECM_DRIFT_RESP}"
+if ! echo "${ECM_DRIFT_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for drift evaluation!"
+    exit 1
+fi
+
+echo "================================================================"
+echo " 18. TESTING REAL CQRS & READ-YOUR-WRITES CONSISTENCY API"
+echo "================================================================"
+echo "Registering signing key via POST /api/v1/commands/keys..."
+CQRS_KEY_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/commands/keys" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "real-test-suite",
+        "correlation_id": "'$(uuidgen)'",
+        "key_version": 1,
+        "raw_secret_value": "super_secret_cqrs_token_signing_key_32chars",
+        "expires_at": "'"$(date -u -d '+1 day' +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || date -u -v+1d +"%Y-%m-%dT%H:%M:%SZ")"'"
+    }')
+echo "Register Signing Key Response:"
+echo "${CQRS_KEY_RESP}"
+if ! echo "${CQRS_KEY_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for signing key registration!"
+    exit 1
+fi
+
+CQRS_IDEM_KEY="idem_cmd_real_${TIMESTAMP}"
+echo "Dispatching command via POST /api/v1/commands/dispatch..."
+CQRS_DISPATCH_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/commands/dispatch" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: ${CQRS_IDEM_KEY}" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "principal_id": "usr_real_alice",
+        "source_service": "real-test-suite",
+        "external_id": "ext_cmd_01",
+        "correlation_id": "'$(uuidgen)'",
+        "idempotency_key": "'"${CQRS_IDEM_KEY}"'",
+        "command_name": "CreateOrder",
+        "aggregate_type": "Order",
+        "aggregate_id": "ord_real_001",
+        "expected_version": 0,
+        "payload_raw": "{\"item\":\"Server Rack\",\"price\":5000}"
+    }')
+echo "Dispatch Command Response:"
+echo "${CQRS_DISPATCH_RESP}"
+if ! echo "${CQRS_DISPATCH_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for command dispatch!"
+    exit 1
+fi
+
+CQRS_TOKEN=$(echo "${CQRS_DISPATCH_RESP}" | grep -o '"consistency_token":"[^"]*"' | head -n1 | cut -d'"' -f4)
+echo "Minted Consistency Token: ${CQRS_TOKEN}"
+
+echo "Re-dispatching duplicate command (Idempotency verification)..."
+CQRS_DUP_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/commands/dispatch" \
+    -H "Content-Type: application/json" \
+    -H "Idempotency-Key: ${CQRS_IDEM_KEY}" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "principal_id": "usr_real_alice",
+        "source_service": "real-test-suite",
+        "external_id": "ext_cmd_01",
+        "correlation_id": "'$(uuidgen)'",
+        "idempotency_key": "'"${CQRS_IDEM_KEY}"'",
+        "command_name": "CreateOrder",
+        "aggregate_type": "Order",
+        "aggregate_id": "ord_real_001",
+        "expected_version": 0,
+        "payload_raw": "{\"item\":\"Server Rack\",\"price\":5000}"
+    }')
+echo "Duplicate Dispatch Response:"
+echo "${CQRS_DUP_RESP}"
+if ! echo "${CQRS_DUP_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for duplicate command dispatch!"
+    exit 1
+fi
+
+echo "Resolving read query with consistency token via GET /api/v1/queries/resolve..."
+CQRS_RESOLVE_RESP=$(curl -s -i "http://127.0.0.1:${PORT}/api/v1/queries/resolve?tenant_id=${MT_TENANT}&principal_id=usr_real_alice&view_name=customer_orders&aggregate_type=Order&aggregate_id=ord_real_001&consistency_token_raw=${CQRS_TOKEN}")
+echo "Resolve Query Response:"
+echo "${CQRS_RESOLVE_RESP}"
+if ! echo "${CQRS_RESOLVE_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for resolve query!"
+    exit 1
+fi
+
+echo "Verifying aggregate root version in PostgreSQL..."
+DB_AGG_VERSION=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT current_version FROM cqrs_aggregate_root_ledger WHERE tenant_id = '${MT_TENANT}' AND aggregate_type = 'Order' AND aggregate_id = 'ord_real_001';")
+if [[ "${DB_AGG_VERSION}" != "1" ]]; then
+    echo "FATAL: Expected current_version 1 in cqrs_aggregate_root_ledger table, got '${DB_AGG_VERSION}'"
+    exit 1
+fi
+echo "CQRS aggregate root verified in PostgreSQL!"
+
+echo "================================================================"
+echo " 19. TESTING REAL SCHEMA EVOLUTION API"
+echo "================================================================"
+SE_SUBJECT="orders.evolution.${TIMESTAMP}"
+echo "Registering schema version 1 via POST /api/v1/schemas/register..."
+SE_REG_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/schemas/register" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "source_service": "real-test-suite",
+        "external_id": "ext_sch_v1",
+        "correlation_id": "'$(uuidgen)'",
+        "subject_name": "'"${SE_SUBJECT}"'",
+        "schema_version": 1,
+        "compatibility_mode": "FULL_TRANSITIVE",
+        "schema_definition": "{\"type\":\"record\",\"name\":\"OrderPlaced\",\"fields\":[{\"name\":\"id\",\"type\":\"string\"}]}"
+    }')
+echo "Schema Registration Response:"
+echo "${SE_REG_RESP}"
+if ! echo "${SE_REG_RESP}" | grep -q 'HTTP/1.1 201 Created'; then
+    echo "FATAL: Expected HTTP 201 for schema evolution registration!"
+    exit 1
+fi
+
+echo "Checking consumer readiness via GET /api/v1/schemas/${SE_SUBJECT}/readiness..."
+SE_READY_RESP=$(curl -s -i "http://127.0.0.1:${PORT}/api/v1/schemas/${SE_SUBJECT}/readiness?tenant_id=${MT_TENANT}&target_version=1")
+echo "Consumer Readiness Response:"
+echo "${SE_READY_RESP}"
+if ! echo "${SE_READY_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for consumer readiness check!"
+    exit 1
+fi
+
+echo "Evaluating decommission check via POST /api/v1/schemas/decommission/check..."
+SE_DECOM_RESP=$(curl -s -i -X POST "http://127.0.0.1:${PORT}/api/v1/schemas/decommission/check" \
+    -H "Content-Type: application/json" \
+    -d '{
+        "tenant_id": "'"${MT_TENANT}"'",
+        "subject_name": "'"${SE_SUBJECT}"'",
+        "active_consumer_count": 0,
+        "zero_lag_days": 14,
+        "telemetry_read_count": 0,
+        "decommission_attested": true
+    }')
+echo "Decommission Evaluation Response:"
+echo "${SE_DECOM_RESP}"
+if ! echo "${SE_DECOM_RESP}" | grep -q 'HTTP/1.1 200 OK'; then
+    echo "FATAL: Expected HTTP 200 for decommission check!"
+    exit 1
+fi
+
+echo "Verifying schema evolution version registry in PostgreSQL..."
+DB_SEV_VERSION=$(docker exec event_platform-db-1 psql -U postgres -d event_store -t -A -c "SELECT schema_version FROM schema_evolution_version_registry WHERE tenant_id = '${MT_TENANT}' AND subject_name = '${SE_SUBJECT}';")
+if [[ "${DB_SEV_VERSION}" != "1" ]]; then
+    echo "FATAL: Expected schema_version 1 in schema_evolution_version_registry table, got '${DB_SEV_VERSION}'"
+    exit 1
+fi
+echo "Schema evolution verified in PostgreSQL!"
+
 echo "All real API and backing server integration tests completed successfully."

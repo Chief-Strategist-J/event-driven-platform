@@ -155,3 +155,4 @@ func TestNormalizeRegisterSigningKeyInput_ShortSecret(t *testing.T) {
 	_, err := contracts.NormalizeRegisterSigningKeyInput(in)
 	assert.ErrorIs(t, err, contracts.ErrInvalidSecretKey)
 }
+

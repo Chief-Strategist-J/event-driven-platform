@@ -17,3 +17,4 @@ type CQRSRepositoryPort interface {
 	GetActiveSigningKey(ctx context.Context, tenantID string) (*contracts.TokenSigningKeyRecord, error)
 	RegisterSigningKey(ctx context.Context, record contracts.TokenSigningKeyRecord) error
 }
+

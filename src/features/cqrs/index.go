@@ -36,3 +36,4 @@ func NewService(db *sql.DB) *service.CQRSService {
 func NewPostgresCQRSRepositoryAdapter(db *sql.DB) ports.CQRSRepositoryPort {
 	return adapters.NewPostgresCQRSRepositoryAdapter(db)
 }
+

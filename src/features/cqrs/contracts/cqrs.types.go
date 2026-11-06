@@ -144,3 +144,4 @@ type AuthoritativeReadInput struct {
 	AggregateID         string `json:"aggregate_id"`
 	ConsistencyTokenRaw string `json:"consistency_token_raw"`
 }
+

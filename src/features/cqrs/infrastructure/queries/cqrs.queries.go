@@ -24,7 +24,6 @@ UPDATE cqrs_command_idempotency_ledger
 SET status = $3,
     response_payload = $4,
     consistency_token = $5,
-    version = version + 1,
     updated_at = CURRENT_TIMESTAMP
 WHERE id = $1 AND tenant_id = $2;`
 
@@ -69,3 +68,4 @@ INSERT INTO cqrs_token_signing_key_registry (
     $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
 );`
 )
+

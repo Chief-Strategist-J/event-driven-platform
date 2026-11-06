@@ -22,7 +22,7 @@ CREATE TABLE IF NOT EXISTS cqrs_command_idempotency_ledger (
     request_fingerprint VARCHAR(64) NOT NULL,
     status VARCHAR(32) NOT NULL DEFAULT 'IN_PROGRESS',
     response_payload TEXT NOT NULL DEFAULT '{}',
-    consistency_token VARCHAR(256) NOT NULL DEFAULT '',
+    consistency_token VARCHAR(512) NOT NULL DEFAULT '',
     version BIGINT NOT NULL DEFAULT 1,
     created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -141,3 +141,4 @@ DROP TRIGGER IF EXISTS trg_cqrs_aggregate_immutable ON cqrs_aggregate_root_ledge
 CREATE TRIGGER trg_cqrs_aggregate_immutable
     BEFORE UPDATE ON cqrs_aggregate_root_ledger
     FOR EACH ROW EXECUTE FUNCTION trg_prevent_cqrs_aggregate_immutable_update();
+

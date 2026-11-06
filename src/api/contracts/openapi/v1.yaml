@@ -2314,3 +2314,119 @@ paths:
           description: Validation error
         "404":
           description: Aggregate not found
+
+  /api/v1/schemas/register:
+    post:
+      summary: Register Schema Version with Transitive Compatibility Check
+      operationId: registerSchemaVersion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - subject_name
+                - schema_type
+                - schema_def
+                - compatibility_mode
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                correlation_id: { type: string }
+                subject_name: { type: string }
+                schema_type: { type: string, enum: [AVRO, JSON_SCHEMA, PROTOBUF] }
+                schema_def: { type: string }
+                compatibility_mode: { type: string, enum: [BACKWARD, FORWARD, FULL, BACKWARD_TRANSITIVE, FORWARD_TRANSITIVE, FULL_TRANSITIVE, NONE] }
+                change_class: { type: string, enum: [MINOR, EXPAND_CONTRACT, SEMANTIC, BREAKING] }
+                semantic_summary: { type: string }
+      responses:
+        "201":
+          description: Schema version registered successfully
+        "400":
+          description: Validation error or compatibility conflict
+
+  /api/v1/schemas/{subject}/readiness:
+    get:
+      summary: Check Consumer Readiness for Subject Version (C-CRG)
+      operationId: checkConsumerReadiness
+      parameters:
+        - name: subject
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: target_version
+          in: query
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Consumer readiness status evaluation result
+        "400":
+          description: Validation error
+
+  /api/v1/schemas/dual-publish:
+    post:
+      summary: Initiate Dual-Publish Lifecycle
+      operationId: initiateDualPublish
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - subject_name
+                - v_old_version
+                - v_new_version
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                correlation_id: { type: string }
+                subject_name: { type: string }
+                v_old_version: { type: integer }
+                v_new_version: { type: integer }
+                cutover_strategy: { type: string }
+      responses:
+        "201":
+          description: Dual publish lifecycle initiated
+        "400":
+          description: Validation error
+
+  /api/v1/schemas/decommission/check:
+    post:
+      summary: Evaluate Schema Version Decommissioning Eligibility
+      operationId: evaluateDecommissionEligibility
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenant_id
+                - subject_name
+                - target_version
+              properties:
+                tenant_id: { type: string }
+                source_service: { type: string }
+                correlation_id: { type: string }
+                subject_name: { type: string }
+                target_version: { type: integer }
+                broker_active_consumer_count: { type: integer }
+                reads_in_window_count: { type: integer }
+                all_owners_attested: { type: boolean }
+      responses:
+        "200":
+          description: Decommission eligibility evaluation
+        "400":
+          description: Validation error

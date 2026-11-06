@@ -237,3 +237,4 @@ func (a *PostgresCQRSRepositoryAdapter) RegisterSigningKey(ctx context.Context, 
 	}
 	return nil
 }
+

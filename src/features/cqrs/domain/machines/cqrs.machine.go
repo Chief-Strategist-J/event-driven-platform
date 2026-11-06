@@ -23,3 +23,4 @@ func DetermineReplayOutcome(existing contracts.CommandRecord, incomingFingerprin
 	}
 	return existing.Status, true
 }
+

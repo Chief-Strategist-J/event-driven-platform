@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/trace"
 
 	"event-driven-platform/src/features/cqrs/contracts"
 	"event-driven-platform/src/features/cqrs/domain/machines"
@@ -24,16 +26,20 @@ var (
 )
 
 type CQRSService struct {
-	repo ports.CQRSRepositoryPort
+	repo   ports.CQRSRepositoryPort
+	tracer trace.Tracer
 }
 
 func NewCQRSService(repo ports.CQRSRepositoryPort) *CQRSService {
 	return &CQRSService{
-		repo: repo,
+		repo:   repo,
+		tracer: otel.Tracer("CQRSService"),
 	}
 }
 
 func (s *CQRSService) DispatchCommand(ctx context.Context, in contracts.DispatchCommandInput) (*contracts.DispatchCommandOutput, error) {
+	ctx, span := s.tracer.Start(ctx, "CQRSService.DispatchCommand")
+	defer span.End()
 	norm, err := contracts.NormalizeDispatchCommandInput(in)
 	if err != nil {
 		return nil, err
@@ -177,8 +183,12 @@ func (s *CQRSService) DispatchCommand(ctx context.Context, in contracts.Dispatch
 }
 
 func (s *CQRSService) ResolveQuery(ctx context.Context, in contracts.ResolveQueryInput) (*contracts.ResolveQueryOutput, error) {
+	ctx, span := s.tracer.Start(ctx, "CQRSService.ResolveQuery")
+	defer span.End()
+
 	norm, err := contracts.NormalizeResolveQueryInput(in)
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 
@@ -219,8 +229,12 @@ func (s *CQRSService) ResolveQuery(ctx context.Context, in contracts.ResolveQuer
 }
 
 func (s *CQRSService) RegisterSigningKey(ctx context.Context, in contracts.RegisterSigningKeyInput) (*contracts.TokenSigningKeyRecord, error) {
+	ctx, span := s.tracer.Start(ctx, "CQRSService.RegisterSigningKey")
+	defer span.End()
+
 	norm, err := contracts.NormalizeRegisterSigningKeyInput(in)
 	if err != nil {
+		span.RecordError(err)
 		return nil, err
 	}
 
@@ -260,3 +274,4 @@ func (s *CQRSService) AuthoritativeRead(ctx context.Context, in contracts.Author
 
 	return s.repo.GetAggregateForUpdate(ctx, norm.TenantID, norm.AggregateType, norm.AggregateID)
 }
+

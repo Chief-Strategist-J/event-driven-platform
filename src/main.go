@@ -215,6 +215,7 @@ func describeService() chassis.ServiceSpec {
 				routers.RegisterMaterializedViewsRoutes(router, dbConn)
 				routers.RegisterConsistencyMonitoringRoutes(router, dbConn)
 				routers.RegisterCQRSRoutes(router, dbConn)
+				routers.RegisterSchemaEvolutionRoutes(router, dbConn)
 			}
 		},
 		RegisterConsumers: func(_ any, _ chassis.Services) {},

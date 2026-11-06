@@ -89,3 +89,4 @@ func EvaluateConsistencyResolution(viewVersion int64, minVersion int64) contract
 	}
 	return contracts.ResolutionPending
 }
+

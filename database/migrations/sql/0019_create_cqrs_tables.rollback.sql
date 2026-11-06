@@ -13,3 +13,4 @@ DROP FUNCTION IF EXISTS trg_prevent_cqrs_idempotency_immutable_update();
 DROP TABLE IF EXISTS cqrs_token_signing_key_registry;
 DROP TABLE IF EXISTS cqrs_aggregate_root_ledger;
 DROP TABLE IF EXISTS cqrs_command_idempotency_ledger;
+
