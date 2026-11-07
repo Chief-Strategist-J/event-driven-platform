@@ -216,69 +216,44 @@ function_structure: |
   │
   └── registerApiRoutes(router, services)                                   ▶
       ├── services.Registry["consumerService"] → consumerSvc
-      ├── handlers.NewConsumerHandler(consumerSvc) → consumerHandler
-      └── router.HandleFunc("POST /v1/events/consume", consumerHandler.HandleConsume)
+      ├── handlers.NewIdempotentConsumerHandler(consumerSvc) → consumerHandler
+      ├── routers.NewIdempotentConsumerRouter(consumerHandler) → consumerRouter
+      └── consumerRouter.RegisterRoutes(router)
+          └── router.HandleFunc("POST /api/v1/consumers/inbox", consumerHandler.Consume)
 
   Tree 2: end-to-end runtime execution function stack
 
-  handleConsume(w, r) → httpResponse                                    ▶ ⚠
-  ├── json.NewDecoder(r.Body).Decode(&event) → inboundEvent             ⚠ EXIT_BAD_REQUEST
-  ├── validateInboundConsumerEvent(event) → error                       ⚠ EXIT_VALIDATION
-  └── consumerSvc.ConsumeEvent(ctx, event) → consumeResult              ▶ ⚠
-      ├── computePayloadHash(event.Payload) → payloadHash
-      ├── utils.GenerateUUIDv7() → inboxID                              ⚠
-      ├── repo.RecordInbox(ctx, inboxRecord) → inserted                 ↺ ⚠
-      │   └── inserted == false → return {ActionSkip, "transport duplicate"}
-      ├── repo.GetProjection(ctx, tenant, handler, type, id) → proj    ↺ ⚠
-      ├── proj.IsParked == true → return {ActionParkPoison}
-      ├── isContentHashConsistent(proj.LastPayloadHash, payloadHash)    ▶
-      │   └── inconsistent → repo.ParkAggregate(...) + return {ActionParkPoison}
-      ├── evaluateVersionRule(currentVersion, incomingVersion, class)   ▶
-      │   ├── incoming <= current → return {ActionSkip, "stale version"}
-      │   ├── delta & incoming > current + 1 → return {ActionHoldGap}
-      │   └── incoming == current + 1 (or state > current) → ActionApply
-      └── repo.UpsertProjection(ctx, updatedProjection)                 ↺ ⚠
-          └── return {ActionApply, appliedVersion}
-
-  Tree 3: chassis consumer worker & background pipeline
-
-  wireWorker(app, lifecycle) → LONG_RUNNING
-  ├── wireAdmin(app, lifecycle)
-  ├── buildConsumerGroup(app, schemaRegistry) → group
-  │   ├── standardConsumerWrapping()
-  │   │   ├── withTracing(tracer)                                       ↺
-  │   │   ├── withIdempotencyStore(app.infra.db)
-  │   │   ├── withRetryPolicy(spec.retryPolicy)                         ⚠
-  │   │   └── withDeadLetterSink(spec.dlqSink)                          ⚠
-  │   ├── exportLagMetric() → autoscalerSignal                          ✚
-  │   └── spec.registerConsumers(group, app.services)                  ▶
-  │       └── group.RegisterHandler("platform.events.ingest", consumerSvc.ConsumeEvent)
-  ├── lifecycle.addComponent("consumers", group.start, group.drainAndCommit)
-  └── wireJobs(app, lifecycle)
-      └── addComponent("inbox-compaction-job", withLeaderElection(job), job.stop)
-          └── repo.PurgeExpiredInbox(ctx, retentionWindow)              ↺ ⚠
-
-  Tree 4: storage & transactional persistence mechanics
-
-  repo.RecordInbox(ctx, record) → inserted                              ↺ ⚠
-  ├── db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted}) → tx ↺ ⚠
-  ├── tx.ExecContext(ctx, queryInsertInbox, params...) → result         ⚠
-  │   └── ON CONFLICT (tenant_id, handler_id, event_id) DO NOTHING
-  ├── result.RowsAffected() → rows
-  │   ├── rows == 0 → tx.Rollback() + return false                      ↺
-  │   └── rows == 1 → tx.Commit() + return true                         ↺
-  └── release connection to pool                                        ↺
-
-  repo.UpsertProjection(ctx, proj) → error                              ↺ ⚠
-  ├── db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted}) → tx ↺ ⚠
-  ├── tx.ExecContext(ctx, queryUpsertProjection, params...) → result    ⚠
-  │   └── ON CONFLICT (tenant_id, handler_id, aggregate_type, aggregate_id)
-  │       DO UPDATE SET last_version = excluded.last_version,
-  │                     last_event_id = excluded.last_event_id,
-  │                     last_payload_hash = excluded.last_payload_hash,
-  │                     updated_at = now()
-  │       WHERE consumer_projections.last_version < excluded.last_version
-  ├── result.RowsAffected() → rows
-  │   ├── rows == 0 → tx.Rollback() + return ErrStaleVersion            ↺ ⚠
-  │   └── rows == 1 → tx.Commit() + return nil                          ↺
-  └── release connection to pool                                        ↺
+  handlers.IdempotentConsumerHandler.Consume(w, r)                          ▶ ⚠
+  ├── observability.StartSpan(r.Context(), "POST /api/v1/consumers/events") → ctx, span ↺
+  ├── json.NewDecoder(r.Body).Decode(&req)                              ⚠ EXIT_BAD_REQUEST
+  │   └── fail → h.writeError(w, http.StatusBadRequest, ...)
+  ├── json.Marshal(req.Payload) → payloadBytes                          ⚠ EXIT_BAD_REQUEST
+  │   └── fail → h.writeError(w, http.StatusBadRequest, ...)
+  ├── service.ConsumerService.ConsumeEvent(ctx, event) → consumeResult, err ▶ ⚠
+  │   ├── contracts.ValidateInboundConsumerEvent(event) → error         ⚠
+  │   │   └── invalid → return nil, appError
+  │   ├── contracts.ComputePayloadHash(event.Payload) → payloadHash
+  │   ├── utils.GenerateUUIDv7() → inboxID                              ⚠
+  │   ├── repo.RecordInbox(ctx, inboxRecord) → inserted, err            ↺ ⚠
+  │   │   ├── db.ExecContext(ctx, queries.FlowInsertConsumerInboxRecord, ...) → res ⚠
+  │   │   ├── res.RowsAffected() → rows
+  │   │   └── rows == 0 (inserted == false) → return {ActionSkip, "transport duplicate"}
+  │   ├── repo.GetProjection(ctx, tenantID, handlerID, aggType, aggID) → proj, err ↺ ⚠
+  │   │   └── db.QueryRowContext(ctx, queries.FlowGetAggregateProjection, ...).Scan(...)
+  │   ├── proj != nil && proj.IsParked == true → return {ActionParkPoison}
+  │   ├── proj != nil && event.Version == proj.LastVersion && !rules.IsContentHashConsistent(proj.LastPayloadHash, payloadHash)
+  │   │   ├── repo.ParkAggregate(ctx, tenantID, handlerID, aggType, aggID, reason) ↺ ⚠
+  │   │   │   └── db.ExecContext(ctx, queries.FlowParkAggregateProjection, ...) ⚠
+  │   │   └── return {ActionParkPoison, "divergent content detected for same version"}
+  │   ├── rules.EvaluateVersionRule(currentVersion, event.AggregateVersion, event.SemanticClass) → action
+  │   │   ├── incoming <= currentVersion → return {ActionSkip, "duplicate skipped"}
+  │   │   ├── incoming > currentVersion + 1 (DELTA) → return {ActionHoldGap, "version gap detected"}
+  │   │   └── ActionApply:
+  │   └── repo.ApplyProjectionEffect(ctx, tenantID, handlerID, aggType, aggID, version, eventID, payloadHash) ↺ ⚠
+  │       ├── db.ExecContext(ctx, queries.FlowUpsertAggregateProjection, ...) ⚠
+  │       └── return {ActionApply, "effect applied and version advanced atomically"}
+  ├── err != nil → h.writeError(w, err.StatusCode, ...)                 ⚠ EXIT_INTERNAL
+  ├── res.Action == ActionHoldGap → w.WriteHeader(http.StatusConflict)
+  ├── res.Action == ActionParkPoison → w.WriteHeader(http.StatusLocked)
+  ├── res.Action == ActionApply || ActionSkip → w.WriteHeader(http.StatusOK)
+  └── json.NewEncoder(w).Encode(res)                                    ↺
