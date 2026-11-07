@@ -214,3 +214,10 @@ Live: duplicate view -> 409; unknown view query -> 404. Unit test `TestQueryView
 
 ### Remaining gaps
 The rebuild-duplicate 409 and the 0028 constraint change are unverified against live Postgres (migration not applied; no Postgres-backed CI test). Until 0028 is applied, a rebuild_id collision across tenants still conflicts.
+
+
+## Amendment 2026-11-07 (second pass): migration 0028 applied
+
+Migration 0028 was applied to the live dev database: `materialized_view_rebuild_log.rebuild_id` is now unique per `(tenant_id, rebuild_id)`. Verified for partitioning topics (two tenants registered the same `topic_name`).
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

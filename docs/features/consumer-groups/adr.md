@@ -232,3 +232,10 @@ Re-tested live: list without `tenant_id` returns 400. No new unit test; no HTTP-
 ### Remaining gaps
 - Non-application errors on write routes are still reported as 400 with raw text (open: should be a generic 500 for storage faults). `ListMembers` storage faults return a generic 500 `internal list error` (initially mapped to 400 by the shared helper; corrected the same day).
 - `X-Tenant-Id` header is not accepted as an alternative for list (query parameter only).
+
+
+## Amendment 2026-11-07 (second pass): write-route error classification
+
+`writeServiceError` keeps `ApplicationError` status/message, maps known domain sentinels (matched with `errors.Is`) to 400 with their message, and returns a generic 500 for anything else. This closes failure case FL-CG-A3.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

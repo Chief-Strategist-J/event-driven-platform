@@ -275,3 +275,10 @@ Producer Span [traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7
 5. **Sequential Auto-Drain**: While parked at $V=1$ with held $V=3$, incoming $V=2$ applies immediately, drains held $V=3$, advances sequence to $3$, and unparks aggregate.
 6. **Multi-Version Drain**: Aggregate at $V=1$ with held $V=3, V=4, V=5$. Arrival of $V=2$ sequentially applies $V=2 \to V=3 \to V=4 \to V=5$, emptying held store.
 7. **Epoch Fencing Enforcement**: Consumer with stale `owner_epoch` receives conflict error when attempting to evaluate or drain sequences.
+
+
+## Amendment 2026-11-07 (second pass): tenant scope required
+
+`GET /events/held` returns 400 when `tenant_id` is missing (previously 200 with `data:null`).
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

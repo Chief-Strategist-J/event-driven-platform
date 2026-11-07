@@ -179,3 +179,10 @@ Mapping verified by code reading and the live materialized-views duplicate check
 
 ### Remaining gaps
 Migration 0028 is unapplied; no Postgres-backed CI coverage for the unique-violation mapping.
+
+
+## Amendment 2026-11-07 (second pass): migration 0028 applied
+
+Migration 0028 was applied to the live dev database: `partition_topic_topology.topic_name` and `partition_migration_runbook_log.migration_id` are unique per tenant. Verified live: two tenants registered the same `topic_name`. The rollback script was not exercised.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

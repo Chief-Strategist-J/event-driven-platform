@@ -265,3 +265,10 @@ Live re-test confirmed all three. Unit tests: `src/features/multi-tenant-event-i
 
 ### Remaining gaps
 `POST /api/v1/tenants/verify-envelope` still passes for a SUSPENDED tenant (not fixed). HTTP-level coverage is limited to the error-mapping test.
+
+
+## Amendment 2026-11-07 (second pass): suspended tenants at ingress
+
+`VerifyIngressEnvelope` returns 403 (`rules.ErrTenantSuspended`) for SUSPENDED tenants, per the ingress flow in `diagrams.md`. `EvaluateLifecycleState` is unchanged because the consumer-side rule lets in-flight events of SUSPENDED tenants finish (business-logic section 12.2). Not done: an audit-log entry on rejection.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

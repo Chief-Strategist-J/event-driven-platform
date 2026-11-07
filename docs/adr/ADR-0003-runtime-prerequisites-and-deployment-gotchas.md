@@ -92,15 +92,26 @@ docker build -f deploy/docker/service/Dockerfile \
 
 The default in the Dockerfile was not changed by this work.
 
-### 5. Compose hardening vs image tini (RC7, NOT fixed)
+### 5. Compose hardening vs image tini (RC7, fixed with an explicit host override)
 
-`deploy/docker/compose/docker-compose.single.yml` sets `security_opt: ["no-new-privileges:true"]` and `init: true` for hardened app services, while the image already has `ENTRYPOINT ["/usr/bin/tini", "--", "/app/bin/platform-service"]` (`deploy/docker/service/Dockerfile`). On hosts using the default Docker AppArmor profile, the container fails with `exec /usr/bin/tini: operation not permitted`. This is a repo-level conflict and **remains unfixed pending a decision**. Options:
+**Observed.** On a host using Docker's default AppArmor profile, the image's `ENTRYPOINT ["/usr/bin/tini", ...]` fails with `exec /usr/bin/tini: operation not permitted` when the container runs with `no-new-privileges`. This was reproduced outside compose with `docker run --cap-drop ALL --security-opt no-new-privileges --entrypoint /usr/bin/tini <image> -h` (fails), and the same command without `no-new-privileges` (works). `init: true` additionally wrapped tini in `docker-init`, which failed the same way, and it is redundant because the image already runs tini as PID 1.
 
-1. Drop `init: true` from the hardening anchor (the image's tini already acts as init). Smallest change; keeps `no-new-privileges`.
-2. Adjust the host's AppArmor handling (custom profile or `apparmor=unconfined` for the service). Weakens isolation.
-3. Remove tini from the image `ENTRYPOINT` and rely on `init: true`. Changes the image for non-compose users.
+**Change (`deploy/docker/compose/docker-compose.single.yml`).**
+* `init: false`: the image provides tini.
+* `security_opt: ["no-new-privileges:${NO_NEW_PRIVILEGES:-true}"]`: the hardened default is unchanged; a host that hits the AppArmor problem opts out explicitly with `NO_NEW_PRIVILEGES=false`. This was a deliberate choice over silently dropping the option for every host. It was deployed on the affected host with the override and the container reached `healthy`.
+* Healthcheck: the runtime image has no `wget` (the old check could never pass). It now uses `bash` and `/dev/tcp` against the admin port: `["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/8081 && printf 'GET /health/live HTTP/1.0\\r\\n\\r\\n' >&3 && head -n1 <&3 | grep -q ' 200 '"]`. `CMD-SHELL` is not used because `/dev/tcp` is a bash feature and `CMD-SHELL` runs `sh`.
 
-Not verified here: which option resolves it on every host; only the failing configuration was observed.
+**Deploy command used.**
+
+```bash
+cd deploy/docker/compose
+export COMPOSE_PROJECT_NAME=event_platform REGISTRY=chiefj NO_NEW_PRIVILEGES=false
+docker compose --profile observability -f docker-compose.single.yml up -d --no-build --no-deps app
+```
+
+`COMPOSE_PROJECT_NAME` must be `event_platform` to join the existing stack (the default is the directory name `compose`, which creates separate networks). The `observability` profile is required because `app` depends on `otel-collector`. The app exposes 8080/8081 only inside the Docker network; reach the API through Envoy on host port 8080 (`/api/v1/...`).
+
+**Limits.** The root cause inside AppArmor/runc was not investigated; the override is a host-level workaround. Hosts without the problem should leave `NO_NEW_PRIVILEGES` unset.
 
 ### 6. Health and metrics endpoints
 

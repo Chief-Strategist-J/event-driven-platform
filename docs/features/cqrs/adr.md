@@ -172,3 +172,10 @@ Re-tested live: garbage token returns 400; key registration response has no `raw
 - `secret_key_hash` is still echoed in the response.
 - If no active signing key exists for the tenant, `ResolveQuery` falls back to a hard-coded default secret (`default_system_cqrs_secret_key_32` in `cqrs.service.go`); this was not changed and is a security concern worth a separate decision.
 - The handler maps all service errors from resolve to 400, including non-validation failures.
+
+
+## Amendment 2026-11-07 (second pass): no fallback signing secret
+
+The hard-coded fallback secret in `ResolveQuery` is removed. A consistency token that must be verified with no active signing key returns 409 (`ErrNoActiveSigningKey`); no token needs no key; a key-lookup storage failure is a generic 500. `DispatchCommand` mints a token only when the tenant has an active key (otherwise the command succeeds with an empty token). `POST /commands/keys` returns neither the raw secret nor `secret_key_hash`. `GET /queries/resolve` and `/queries/authoritative-own` now require `tenant_id` (400), with no silent `default`.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

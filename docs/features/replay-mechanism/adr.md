@@ -225,3 +225,10 @@ Live: advance in INITIALIZING -> 409, non-UUID -> 400, unknown -> 404, effects/e
 
 ### Remaining gaps
 Create-run still accepts a non-UUID `correlation_id` (not fixed). The Postgres replay adapter paths are not covered by CI integration tests.
+
+
+## Amendment 2026-11-07 (second pass): correlationId validation
+
+`POST /replay/runs` rejects a non-UUID `correlationId` (and a non-UUID `X-Correlation-ID` fallback) with 400 `ErrInvalidCorrelationID`; `replay_run.correlation_id` is a UUID column.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

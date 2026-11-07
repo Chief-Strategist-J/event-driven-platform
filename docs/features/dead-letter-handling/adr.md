@@ -252,3 +252,10 @@ Re-tested live: quarantine without headers succeeds, non-UUID ids return 400, du
 ### Remaining gaps
 - `redrive` and `discard` with a non-UUID `quarantineId` still return 500 (UUID not validated before the query).
 - No automated HTTP-level or Postgres-backed test covers the `dlq_headers_is_object_ck` path.
+
+
+## Amendment 2026-11-07 (second pass): quarantineId validation
+
+`POST /dlq/redrive` and `/dlq/discard` validate `quarantineId` as a UUID up front and return 400 `quarantineId must be a valid UUID` (previously 500 from the raw Postgres uuid error). This closes failure case F2.7.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

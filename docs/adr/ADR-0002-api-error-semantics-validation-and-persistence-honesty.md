@@ -162,24 +162,30 @@ The following rules are normative for all API handlers and services.
 ### Neutral
 * `ProducerPort` is unchanged; header support is an optional extension interface.
 
+### Closed in a second pass (2026-11-07, verified live on the compose-deployed image)
+* `redrive` / `discard` validate `quarantineId` as a UUID: 400 instead of 500.
+* `GET retries/due`, `events/held`, consistency `watermark` / `incidents` / `sweeps`, `queries/resolve`, `queries/authoritative-own` and `audits/query` return 400 when `tenant_id` is missing; the silent `"default"` tenant fallback was removed from these reads.
+* CQRS: the hard-coded fallback signing secret is removed. A token to verify with no active key returns 409; no token needs no key; `DispatchCommand` mints a token only when the tenant has an active key; `POST /commands/keys` no longer returns `secret_key_hash` (or the raw secret).
+* Replay create-run rejects a non-UUID `correlationId` (and `X-Correlation-ID`) with 400.
+* `verify-envelope` returns 403 for a SUSPENDED tenant (ingress gate only; consumer-side in-flight processing for suspended tenants is unchanged, per the feature's business logic).
+* consumer-groups write routes: domain errors stay 400, unknown errors are a generic 500.
+* Migration 0028 applied to the live dev database; two tenants registering the same `topic_name` both succeed.
+
 ### Still open (not fixed)
-* `redrive` / `discard` with a non-UUID `quarantineId` still returns 500.
-* `GET retries/due`, `events/held`, consistency `watermark` / `incidents` / `sweeps` still return `200 data:null` without a tenant parameter (outside the scope of the fixing agents).
-* `secret_key_hash` is still echoed by `POST /commands/keys`.
-* Replay create-run with non-UUID `correlation_id` is not validated.
-* `verify-envelope` passes for a SUSPENDED tenant.
+* `POST /consistency/incidents/{id}/heal` still defaults `tenant_id` to `"default"` (a write with the same silent-default pattern).
 * Apicurio is written only by `POST /api/v1/schemas`.
 * `/metrics` is absent.
-* There are no HTTP-level tests for the handler fixes (partial: `handlers/multi_tenant_handler_test.go`).
-* Postgres-backed integration paths (unique-violation mapping, migration 0028, replay adapter) are untested in CI.
+* HTTP-level tests exist only for a subset of the fixes (`handlers/multi_tenant_handler_test.go`, `handlers/tenant_scope_handler_test.go`).
+* Postgres-backed integration paths (unique-violation mapping, replay adapter) are untested in CI; the Postgres integration tests skip without a DSN.
 * Custom upcast transformers are not registered at startup; an unknown transformer name is accepted at registration and fails with 400 at upcast time.
 * CDC still uses the mock Kafka Connect adapter; Debezium is not integrated.
+* The compose `no-new-privileges` exec failure is worked around with `NO_NEW_PRIVILEGES=false` (ADR-0003 section 5), not root-caused.
 
 ### Follow-ups
 1. Add an HTTP-level conformance suite that drives every route through the real router against PostgreSQL, asserting status code, `success` flag, absence of `pq:` / constraint names in bodies, and tenant-scope 400s.
 2. Run that suite in CI with a Postgres service and **fail** (not skip) when `DATABASE_URL` / `TEST_DATABASE_URL` is unset, so integration-only defects cannot skip silently.
-3. Close the "Still open" items above, starting with the UUID validation for quarantine ids and the tenant-scope 400s.
-4. Apply migration 0028 through the migration tooling (see ADR-0003).
+3. Close the "Still open" items above.
+4. Make the migration tooling track applied migrations (see ADR-0003); 0028 was applied by hand with `psql`.
 
 ---
 
@@ -187,4 +193,5 @@ The following rules are normative for all API handlers and services.
 
 * `go build`, `go vet` and `go test` were run across all packages.
 * The image `chiefj/event-driven-platform:fixes` was rebuilt and run against the live PostgreSQL, Kafka and Apicurio stack, and each fixed route was re-called over HTTP. Routes marked "unit-only" in the working notes were not verified live: the `schemas/upcasters` registration flow beyond route existence is covered by unit tests only.
-* Migration 0028 was **not** applied to the live database, so the per-tenant uniqueness change is unverified against Postgres.
+* Migration 0028 was applied to the live dev database with `psql` and verified: the three per-tenant constraints exist and two tenants can register the same topic name. The rollback script was not exercised.
+* The final image was pushed to Docker Hub as `chiefj/event-driven-platform:latest`, `:v2` and `:fixes` (same digest) and deployed in the `event_platform` compose project; the container reported `healthy` and the closed-in-second-pass items were re-called through Envoy.

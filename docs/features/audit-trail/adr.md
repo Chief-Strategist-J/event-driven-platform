@@ -62,3 +62,10 @@ Mapping sites verified by code inspection and the shared mapper change re-tested
 ### Remaining gaps
 - Unverified: a previously claimed "list without tenant_id returns 400" does not hold for `GET /api/v1/audits/query` in the current code; the handler defaults a missing `tenant_id` to `default` and requires `shard_id` instead.
 - Untyped (non-database) errors on audit routes still map to 400 with raw text.
+
+
+## Amendment 2026-11-07 (second pass): tenant scope required on query
+
+`GET /audits/query` requires `tenant_id` (400) in addition to `shard_id`; the silent `default` tenant fallback was removed. This closes the gap recorded in the first amendment.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

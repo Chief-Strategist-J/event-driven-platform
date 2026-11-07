@@ -267,3 +267,10 @@ Before deployment, the implementation must pass 100% of the following verificati
 ### Remaining gaps
 - The canary does not publish an event or observe it downstream; no reconciliation step turns UNKNOWN into MATCH/MISMATCH yet. The service comment says a later step must confirm arrival.
 - Watermark/incidents/sweeps GET routes still return `200 data:null` without a tenant parameter (out of scope, not fixed).
+
+
+## Amendment 2026-11-07 (second pass): tenant scope required on reads
+
+`GET /consistency/views/{view}/watermark|incidents|sweeps` require `tenant_id` (400 otherwise); the silent `default` tenant fallback was removed. Open: `POST /consistency/incidents/{id}/heal` still defaults `tenant_id` to `default`.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".
