@@ -4,6 +4,7 @@ import (
 	"errors"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"strconv"
 	"time"
 
@@ -137,9 +138,10 @@ func (h *AuditTrailHandler) HandleQueryAudits(w http.ResponseWriter, r *http.Req
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
 
-	tenantID := r.URL.Query().Get("tenant_id")
+	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 	if tenantID == "" {
-		tenantID = "default"
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 	shardID := r.URL.Query().Get("shard_id")
 	if shardID == "" {

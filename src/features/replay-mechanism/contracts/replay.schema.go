@@ -44,6 +44,9 @@ func ValidateCreateReplayRunInput(input CreateReplayRunInput) (CreateReplayRunIn
 	if input.CorrelationID == "" {
 		return input, ErrMissingCorrelationID
 	}
+	if _, err := uuid.Parse(input.CorrelationID); err != nil {
+		return input, ErrInvalidCorrelationID
+	}
 	if input.TargetProjection == "" {
 		return input, ErrMissingTargetProjection
 	}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -165,6 +166,10 @@ func (h *RetryTopicsHandler) GetDueRetries(w http.ResponseWriter, r *http.Reques
 	}
 
 	tenantID := r.URL.Query().Get("tenant_id")
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
+	}
 	limitStr := r.URL.Query().Get("limit")
 	limit := 50
 	if limitStr != "" {

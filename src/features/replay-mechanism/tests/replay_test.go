@@ -22,7 +22,7 @@ func sampleCreateInput(tenantID, proj string, mode contracts.ReplayRunMode, star
 		TenantID:         tenantID,
 		SourceService:    "test-service",
 		ExternalID:       "ext-replay-001",
-		CorrelationID:    "corr-replay-001",
+		CorrelationID:    "018f3a20-8b9a-7c22-b25b-f350c316cf5c",
 		TargetProjection: proj,
 		Mode:             mode,
 		Scope:            contracts.ScopeGlobalTopic,
@@ -404,7 +404,7 @@ func TestSchemaValidation_RejectsMissingFields(t *testing.T) {
 		TenantID:         "t",
 		SourceService:    "s",
 		ExternalID:       "e",
-		CorrelationID:    "c",
+		CorrelationID:    "018f3a20-8b9a-7c22-b25b-f350c316cf5c",
 		TargetProjection: "",
 	})
 	if err != contracts.ErrMissingTargetProjection {
@@ -417,7 +417,7 @@ func TestSchemaValidation_RejectsNegativeOffsets(t *testing.T) {
 		TenantID:         "t",
 		SourceService:    "s",
 		ExternalID:       "e",
-		CorrelationID:    "c",
+		CorrelationID:    "018f3a20-8b9a-7c22-b25b-f350c316cf5c",
 		TargetProjection: "proj",
 		Mode:             contracts.ModeRebuild,
 		Scope:            contracts.ScopeGlobalTopic,
@@ -434,7 +434,7 @@ func TestSchemaValidation_NormalizesWhitespaceKeys(t *testing.T) {
 		TenantID:         "  tenant-space  ",
 		SourceService:    "  service-space ",
 		ExternalID:       " ext-1 ",
-		CorrelationID:    " corr-1 ",
+		CorrelationID:    " 018f3a20-8b9a-7c22-b25b-f350c316cf5c ",
 		TargetProjection: " proj-1 ",
 		Mode:             contracts.ModeRebuild,
 		Scope:            contracts.ScopeGlobalTopic,
@@ -512,5 +512,18 @@ func TestServiceEvaluateEffect_DefaultsAndPersistsMinimalRequest(t *testing.T) {
 	})
 	if !errors.Is(err, contracts.ErrInvalidCorrelationID) {
 		t.Fatalf("expected ErrInvalidCorrelationID, got %v", err)
+	}
+}
+
+func TestSchemaValidation_RejectsNonUUIDCorrelationID(t *testing.T) {
+	in := sampleCreateInput("t", "proj", contracts.ModeRebuild, 0, 100)
+	in.CorrelationID = "not-a-uuid"
+	_, err := contracts.ValidateCreateReplayRunInput(in)
+	if !errors.Is(err, contracts.ErrInvalidCorrelationID) {
+		t.Fatalf("expected ErrInvalidCorrelationID, got %v", err)
+	}
+	_, err = service.NewReplayService(adapters.NewReplayMemoryRepositoryAdapter()).CreateReplayRun(context.Background(), in)
+	if !errors.Is(err, contracts.ErrInvalidCorrelationID) {
+		t.Fatalf("service: expected ErrInvalidCorrelationID, got %v", err)
 	}
 }

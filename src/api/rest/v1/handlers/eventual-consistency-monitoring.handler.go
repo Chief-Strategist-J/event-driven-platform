@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -83,8 +84,9 @@ func (h *ConsistencyMonitoringHandler) HandleGetViewWatermarks(w http.ResponseWr
 
 	viewName := r.PathValue("view_name")
 	tenantID := r.URL.Query().Get("tenant_id")
-	if tenantID == "" {
-		tenantID = "default"
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 
 	records, err := h.svc.GetViewWatermarks(ctx, tenantID, viewName)
@@ -141,8 +143,9 @@ func (h *ConsistencyMonitoringHandler) HandleGetActiveIncidents(w http.ResponseW
 
 	viewName := r.PathValue("view_name")
 	tenantID := r.URL.Query().Get("tenant_id")
-	if tenantID == "" {
-		tenantID = "default"
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 
 	incidents, err := h.svc.GetActiveIncidents(ctx, tenantID, viewName)
@@ -237,8 +240,9 @@ func (h *ConsistencyMonitoringHandler) HandleListCheckRuns(w http.ResponseWriter
 
 	viewName := r.PathValue("view_name")
 	tenantID := r.URL.Query().Get("tenant_id")
-	if tenantID == "" {
-		tenantID = "default"
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 
 	records, err := h.svc.ListCheckRuns(ctx, tenantID, viewName, 50)

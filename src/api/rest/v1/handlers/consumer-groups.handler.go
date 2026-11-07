@@ -11,6 +11,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"event-driven-platform/src/features/consumer-groups/contracts"
+	"event-driven-platform/src/features/consumer-groups/domain/machines"
+	"event-driven-platform/src/features/consumer-groups/domain/rules"
 	"event-driven-platform/src/features/consumer-groups/service"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
@@ -261,7 +263,30 @@ func (h *ConsumerGroupsHandler) writeServiceError(w http.ResponseWriter, err err
 		h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
 		return
 	}
-	h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+	if isConsumerGroupsDomainError(err) {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+	// Unknown (storage/infrastructure) failure: never leak driver text to the client.
+	h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "internal error", start, reqID, corrID, causationID)
+}
+
+// isConsumerGroupsDomainError reports whether err is a known domain validation
+// or rule violation whose message is safe to return to the client.
+func isConsumerGroupsDomainError(err error) bool {
+	for _, d := range []error{
+		contracts.ErrInvalidTenantID, contracts.ErrInvalidSourceService, contracts.ErrInvalidExternalID,
+		contracts.ErrInvalidGroupID, contracts.ErrInvalidMemberID, contracts.ErrInvalidGeneration,
+		contracts.ErrBannedAssignor,
+		rules.ErrEagerAssignorDisallowed, rules.ErrInvalidGroupIDConvention, rules.ErrStalePartitionEpoch,
+		rules.ErrRebalanceStormDetected, rules.ErrMaxPollIntervalExceeded, rules.ErrSessionTimeoutBreached,
+		machines.ErrInvalidMemberTransition,
+	} {
+		if errors.Is(err, d) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *ConsumerGroupsHandler) writeSuccess(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {

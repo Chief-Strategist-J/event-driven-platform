@@ -12,6 +12,10 @@ var (
 	ErrTenantHeaderPayloadMismatch = errors.NewValidationError("tenant header does not match payload tenant (MT-02)")
 	ErrTenantKeyPayloadMismatch    = errors.NewValidationError("tenant key prefix does not match payload tenant (MT-02)")
 	ErrResidencyViolation          = errors.NewValidationError("record destination violates tenant data residency allowlist (MT-08)")
+	// ErrTenantSuspended is returned by the ingress gate: ADR/diagrams specify that a
+	// suspended tenant's new events are rejected with 403 (in-flight events are still
+	// processed consumer-side, see EvaluateLifecycleState).
+	ErrTenantSuspended             = errors.NewForbiddenError("tenant is suspended; new events are rejected (INTEGRITY-TENANT-SUSPENDED)")
 	ErrTenantOffboarded            = errors.NewConflictError("tenant is offboarded; data resurrected is forbidden (F6.3)")
 	ErrTenantQuotaExceeded         = errors.NewConflictError("tenant noisy-neighbor quota exceeded (MT-11)")
 )

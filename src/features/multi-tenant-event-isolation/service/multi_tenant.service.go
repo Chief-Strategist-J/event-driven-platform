@@ -126,6 +126,10 @@ func (s *MultiTenantService) VerifyIngressEnvelope(ctx context.Context, raw cont
 		return tErr
 	}
 
+	if tenant.LifecycleState == contracts.LifecycleSuspended {
+		return rules.ErrTenantSuspended
+	}
+
 	canProcess, shouldSkip, lifeErr := rules.EvaluateLifecycleState(tenant.LifecycleState)
 	if lifeErr != nil {
 		if shouldSkip {

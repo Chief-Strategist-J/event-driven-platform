@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -29,7 +31,6 @@ type signingKeyResponse struct {
 	ExternalID    string    `json:"external_id"`
 	CorrelationID uuid.UUID `json:"correlation_id"`
 	KeyVersion    int       `json:"key_version"`
-	SecretKeyHash string    `json:"secret_key_hash"`
 	Status        string    `json:"status"`
 	ExpiresAt     time.Time `json:"expires_at"`
 	CreatedAt     time.Time `json:"created_at"`
@@ -118,9 +119,10 @@ func (h *CQRSHandler) HandleResolveQuery(w http.ResponseWriter, r *http.Request)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
 	tokenRaw := r.Header.Get("x-consistency-token")
 
-	tenantID := r.URL.Query().Get("tenant_id")
+	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 	if tenantID == "" {
-		tenantID = "default"
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 	principalID := r.Header.Get("x-user-id")
 	if principalID == "" {
@@ -143,7 +145,14 @@ func (h *CQRSHandler) HandleResolveQuery(w http.ResponseWriter, r *http.Request)
 
 	out, err := h.svc.ResolveQuery(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		switch {
+		case errors.Is(err, contracts.ErrNoActiveSigningKey):
+			h.writeError(w, http.StatusConflict, constants.ErrCodeConflict, err.Error(), start, reqID, corrID, causationID)
+		case errors.Is(err, contracts.ErrSigningKeyLookup):
+			h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "internal error", start, reqID, corrID, causationID)
+		default:
+			h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		}
 		return
 	}
 
@@ -189,7 +198,6 @@ func (h *CQRSHandler) HandleRegisterSigningKey(w http.ResponseWriter, r *http.Re
 		ExternalID:    record.ExternalID,
 		CorrelationID: record.CorrelationID,
 		KeyVersion:    record.KeyVersion,
-		SecretKeyHash: record.SecretKeyHash,
 		Status:        record.Status,
 		ExpiresAt:     record.ExpiresAt,
 		CreatedAt:     record.CreatedAt,
@@ -208,9 +216,10 @@ func (h *CQRSHandler) HandleAuthoritativeRead(w http.ResponseWriter, r *http.Req
 	causationID := r.Header.Get(constants.HeaderXCausationID)
 	tokenRaw := r.Header.Get("x-consistency-token")
 
-	tenantID := r.URL.Query().Get("tenant_id")
+	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 	if tenantID == "" {
-		tenantID = "default"
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 	principalID := r.Header.Get("x-user-id")
 	if principalID == "" {

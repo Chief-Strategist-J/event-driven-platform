@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -150,6 +151,11 @@ func (h *DeadLetterHandler) Redrive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if _, perr := uuid.Parse(strings.TrimSpace(req.QuarantineID)); perr != nil {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "quarantineId must be a valid UUID", start, reqID, corrID, causationID)
+		return
+	}
+
 	invoker := h.consumerInvoker
 	if invoker == nil {
 		invoker = func(ctx context.Context, rec contracts.DeadLetterQuarantineRecord) (bool, error) {
@@ -216,6 +222,11 @@ func (h *DeadLetterHandler) Discard(w http.ResponseWriter, r *http.Request) {
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&req); err != nil {
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed discard payload", start, reqID, corrID, causationID)
+		return
+	}
+
+	if _, perr := uuid.Parse(strings.TrimSpace(req.QuarantineID)); perr != nil {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "quarantineId must be a valid UUID", start, reqID, corrID, causationID)
 		return
 	}
 
