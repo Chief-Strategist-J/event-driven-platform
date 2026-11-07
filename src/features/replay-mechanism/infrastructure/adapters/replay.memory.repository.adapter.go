@@ -49,7 +49,7 @@ func (a *ReplayMemoryRepositoryAdapter) UpdateReplayRunState(ctx context.Context
 	key := replayMemKey(tenantID, runID)
 	rec, ok := a.runs[key]
 	if !ok {
-		return nil, fmt.Errorf("replay run not found: %s", key)
+		return nil, fmt.Errorf("%w: %s", contracts.ErrReplayRunNotFound, key)
 	}
 	rec.State = state
 	rec.Version++
@@ -64,7 +64,7 @@ func (a *ReplayMemoryRepositoryAdapter) UpdateReplayRunOffset(ctx context.Contex
 	key := replayMemKey(tenantID, runID)
 	rec, ok := a.runs[key]
 	if !ok {
-		return nil, fmt.Errorf("replay run not found: %s", key)
+		return nil, fmt.Errorf("%w: %s", contracts.ErrReplayRunNotFound, key)
 	}
 	rec.CurrentOffset = currentOffset
 	rec.State = state
@@ -80,7 +80,7 @@ func (a *ReplayMemoryRepositoryAdapter) GetReplayRun(ctx context.Context, tenant
 	key := replayMemKey(tenantID, runID)
 	rec, ok := a.runs[key]
 	if !ok {
-		return nil, fmt.Errorf("replay run not found: %s", key)
+		return nil, fmt.Errorf("%w: %s", contracts.ErrReplayRunNotFound, key)
 	}
 	clone := *rec
 	return &clone, nil

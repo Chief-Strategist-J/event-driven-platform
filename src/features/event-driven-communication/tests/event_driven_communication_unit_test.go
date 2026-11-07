@@ -1,6 +1,7 @@
 package tests
 
 import (
+	"errors"
 	"context"
 	"testing"
 
@@ -108,6 +109,7 @@ func TestSagaStateMachineTransitions(t *testing.T) {
 }
 
 type memoryCommRepo struct {
+	outbound    []ports.OutboundCommand
 	definitions map[string]contracts.SagaDefinition
 	instances   map[string]contracts.SagaInstance
 	steps       map[string][]contracts.SagaStepRecord
@@ -179,6 +181,11 @@ func (m *memoryCommRepo) UpdateStepState(_ context.Context, params ports.UpdateS
 		steps[params.StepIndex].ReplyPayload = params.ReplyPayload
 		m.steps[params.InstanceID] = steps
 	}
+	return nil
+}
+
+func (m *memoryCommRepo) SaveOutboundCommand(_ context.Context, cmd ports.OutboundCommand) error {
+	m.outbound = append(m.outbound, cmd)
 	return nil
 }
 
@@ -259,5 +266,31 @@ func TestSagaServiceLifecycle(t *testing.T) {
 	}
 	if compRes.SagaState != contracts.SagaStateCompensated {
 		t.Fatalf("expected COMPENSATED state, got %s", compRes.SagaState)
+	}
+}
+
+func TestDispatchAsyncCommandPersistsOutbox(t *testing.T) {
+	repo := newMemoryCommRepo()
+	svc := service.NewEventCommunicationService(repo)
+
+	res, err := svc.DispatchAsyncCommand(context.Background(), contracts.DispatchAsyncCommandRequest{
+		TenantID: "t1", SourceService: "svc", TargetTopic: "orders.cmd", ReplyToTopic: "orders.reply",
+		CommandName: "ReserveStock", CommandPayload: `{"sku":"a"}`,
+	})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if res.Status != "QUEUED_IN_OUTBOX" || len(repo.outbound) != 1 {
+		t.Fatalf("expected one outbox record, got status=%s n=%d", res.Status, len(repo.outbound))
+	}
+	if repo.outbound[0].AggregateType != "orders.cmd" || repo.outbound[0].AggregateID != res.CommandID {
+		t.Fatalf("unexpected outbox record: %+v", repo.outbound[0])
+	}
+
+	_, err = svc.DispatchAsyncCommand(context.Background(), contracts.DispatchAsyncCommandRequest{
+		TenantID: "t1", SourceService: "svc", TargetTopic: "x", ReplyToTopic: "y", CommandName: "c", CommandPayload: "{bad",
+	})
+	if !errors.Is(err, service.ErrInvalidCommand) {
+		t.Fatalf("expected ErrInvalidCommand, got %v", err)
 	}
 }

@@ -2,13 +2,18 @@ package ports
 
 import (
 	"context"
+	"errors"
 
 	"github.com/google/uuid"
 
 	"event-driven-platform/src/features/eventual-consistency-monitoring/contracts"
 )
 
+// ErrIncidentNotFound is returned when no drift incident matches the id and tenant.
+var ErrIncidentNotFound = errors.New("drift incident not found")
+
 type ConsistencyRepositoryPort interface {
+	GetDriftIncident(ctx context.Context, id uuid.UUID, tenantID string) (*contracts.DriftIncidentRecord, error)
 	UpsertWatermark(ctx context.Context, record contracts.WatermarkRecord) error
 	GetWatermarksByView(ctx context.Context, tenantID string, viewName string) ([]contracts.WatermarkRecord, error)
 	RecordDriftIncident(ctx context.Context, record contracts.DriftIncidentRecord) error

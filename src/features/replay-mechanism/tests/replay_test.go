@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -329,7 +330,7 @@ func TestServiceEvaluateEffect_SuppressExternalInRebuild(t *testing.T) {
 		TenantID:       "tenant-eff",
 		SourceService:  "svc",
 		ExternalID:     "ext-eff-1",
-		CorrelationID:  "corr-1",
+		CorrelationID:  "018f3a20-8b9a-7c22-b25b-f350c316cf5a",
 		RunID:          run.ID,
 		EffectType:     contracts.EffectExternalPayment,
 		IdempotencyKey: "pay-12345",
@@ -357,7 +358,7 @@ func TestServiceEvaluateEffect_ReconcileInRecover(t *testing.T) {
 		TenantID:       "tenant-eff",
 		SourceService:  "svc",
 		ExternalID:     "ext-eff-2",
-		CorrelationID:  "corr-2",
+		CorrelationID:  "018f3a20-8b9a-7c22-b25b-f350c316cf5b",
 		RunID:          run.ID,
 		EffectType:     contracts.EffectExternalPayment,
 		IdempotencyKey: "pay-99999",
@@ -454,3 +455,62 @@ func TestSchemaValidation_NormalizesWhitespaceKeys(t *testing.T) {
 	}
 }
 
+
+func TestServiceAdvanceReplay_RefusesInitializingRun(t *testing.T) {
+	svc := buildReplayService()
+	ctx := context.Background()
+
+	run, _ := svc.CreateReplayRun(ctx, sampleCreateInput("tenant-init", "orders_summary", contracts.ModeRebuild, 0, 1000))
+
+	_, err := svc.AdvanceReplay(ctx, contracts.AdvanceReplayInput{
+		TenantID:      "tenant-init",
+		RunID:         run.ID,
+		CurrentOffset: 10,
+	})
+	if !errors.Is(err, rules.ErrReplayNotAdvanceable) {
+		t.Fatalf("expected ErrReplayNotAdvanceable for INITIALIZING run, got %v", err)
+	}
+}
+
+func TestServiceRunIDMustBeUUID(t *testing.T) {
+	svc := buildReplayService()
+	ctx := context.Background()
+
+	if _, err := svc.StartStreaming(ctx, "tenant-x", "not-a-uuid"); !errors.Is(err, contracts.ErrInvalidRunID) {
+		t.Fatalf("start: expected ErrInvalidRunID, got %v", err)
+	}
+	if _, err := svc.AdvanceReplay(ctx, contracts.AdvanceReplayInput{TenantID: "tenant-x", RunID: "123", CurrentOffset: 1}); !errors.Is(err, contracts.ErrInvalidRunID) {
+		t.Fatalf("advance: expected ErrInvalidRunID, got %v", err)
+	}
+	if _, err := svc.GetReplayRun(ctx, contracts.GetReplayRunInput{TenantID: "tenant-x", RunID: "zzz"}); !errors.Is(err, contracts.ErrInvalidRunID) {
+		t.Fatalf("get: expected ErrInvalidRunID, got %v", err)
+	}
+	if _, err := svc.GetReplayRun(ctx, contracts.GetReplayRunInput{TenantID: "tenant-x", RunID: "018f3a20-8b9a-7c22-b25b-f350c316cf5a"}); !errors.Is(err, contracts.ErrReplayRunNotFound) {
+		t.Fatalf("get unknown: expected ErrReplayRunNotFound, got %v", err)
+	}
+}
+
+func TestServiceEvaluateEffect_DefaultsAndPersistsMinimalRequest(t *testing.T) {
+	repo := adapters.NewReplayMemoryRepositoryAdapter()
+	svc := service.NewReplayService(repo)
+	ctx := context.Background()
+
+	run, _ := svc.CreateReplayRun(ctx, sampleCreateInput("tenant-min", "ledger_view", contracts.ModeRebuild, 0, 500))
+	_, err := svc.EvaluateEffect(ctx, contracts.EvaluateEffectInput{
+		TenantID:       "tenant-min",
+		RunID:          run.ID,
+		EffectType:     contracts.EffectSearchIndex,
+		IdempotencyKey: "idem-1",
+	})
+	if err != nil {
+		t.Fatalf("minimal effect request should succeed: %v", err)
+	}
+
+	_, err = svc.EvaluateEffect(ctx, contracts.EvaluateEffectInput{
+		TenantID: "tenant-min", RunID: run.ID, EffectType: contracts.EffectSearchIndex,
+		IdempotencyKey: "idem-1", CorrelationID: "corr-not-uuid",
+	})
+	if !errors.Is(err, contracts.ErrInvalidCorrelationID) {
+		t.Fatalf("expected ErrInvalidCorrelationID, got %v", err)
+	}
+}

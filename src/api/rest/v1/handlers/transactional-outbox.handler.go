@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -99,7 +100,8 @@ func (h *TransactionalOutboxHandler) CreateOutboxRecord(w http.ResponseWriter, r
 
 	record, err := h.service.StageEvent(ctx, input, idempotencyKey)
 	if err != nil {
-		if appErr, ok := err.(*appErrors.ApplicationError); ok {
+		var appErr *appErrors.ApplicationError
+		if errors.As(err, &appErr) {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
 			return
 		}
@@ -163,7 +165,8 @@ func (h *TransactionalOutboxHandler) RelayBatch(w http.ResponseWriter, r *http.R
 
 	count, err := h.service.RelayBatch(ctx, batchSize)
 	if err != nil {
-		if appErr, ok := err.(*appErrors.ApplicationError); ok {
+		var appErr *appErrors.ApplicationError
+		if errors.As(err, &appErr) {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
 			return
 		}

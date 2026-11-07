@@ -57,14 +57,14 @@ INSERT INTO transaction_group_ledger (
     id, public_id, tenant_id, source_service, external_id, correlation_id,
     transaction_group_id, expected_group_size, received_count, is_complete, created_at, completed_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6, $7, $8, 1, ($8 = 1), $9,
-    CASE WHEN $8 = 1 THEN $9 ELSE '1970-01-01 00:00:00+00' END
+    $1, $2, $3, $4, $5, $6, $7, $8, 1, ($8 = 1), $9::timestamptz,
+    CASE WHEN $8 = 1 THEN $9::timestamptz ELSE '1970-01-01 00:00:00+00'::timestamptz END
 )
 ON CONFLICT (tenant_id, transaction_group_id) DO UPDATE SET
     received_count = transaction_group_ledger.received_count + 1,
     is_complete = (transaction_group_ledger.received_count + 1 >= transaction_group_ledger.expected_group_size),
     completed_at = CASE 
-        WHEN (transaction_group_ledger.received_count + 1 >= transaction_group_ledger.expected_group_size) THEN $9 
+        WHEN (transaction_group_ledger.received_count + 1 >= transaction_group_ledger.expected_group_size) THEN $9::timestamptz
         ELSE transaction_group_ledger.completed_at 
     END
 RETURNING transaction_group_id, expected_group_size, received_count, is_complete;

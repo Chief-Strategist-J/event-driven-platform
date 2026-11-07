@@ -92,7 +92,7 @@ func (a *BackpressurePostgresRepositoryAdapter) GetBackpressureRecord(ctx contex
 	)
 
 	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("backpressure record not found for handler=%s dependency=%s", handlerID, dependencyID)
+		return nil, fmt.Errorf("%w for handler=%s dependency=%s", contracts.ErrRecordNotFound, handlerID, dependencyID)
 	}
 	if err != nil {
 		observability.RecordError(span, err)

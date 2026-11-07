@@ -82,3 +82,14 @@ INSERT INTO async_command_reply_ledger (
 ON CONFLICT (tenant_id, command_id) DO NOTHING;
 `
 
+
+// InsertOutboundCommandOutbox writes a command into the transactional outbox
+// table (owned by the transactional-outbox feature) for the relay to publish.
+const InsertOutboundCommandOutbox = `
+INSERT INTO outbox (
+    id, public_id, tenant_id, source_service, external_id, correlation_id, causation_id,
+    aggregate_type, aggregate_id, aggregate_version, event_type, schema_version,
+    payload, headers, status, created_at, updated_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12::jsonb, $13::jsonb, 'PENDING', NOW(), NOW()
+);`

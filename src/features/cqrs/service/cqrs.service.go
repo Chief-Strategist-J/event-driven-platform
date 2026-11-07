@@ -209,12 +209,7 @@ func (s *CQRSService) ResolveQuery(ctx context.Context, in contracts.ResolveQuer
 
 	token, valid := rules.VerifyConsistencyToken(norm.ConsistencyTokenRaw, secretValue, time.Now().UTC())
 	if !valid {
-		return &contracts.ResolveQueryOutput{
-			Data:              fmt.Sprintf(`{"view_name":"%s","aggregate_id":"%s"}`, norm.ViewName, norm.AggregateID),
-			Version:           1,
-			ConsistencyStatus: contracts.ResolutionImmediate,
-			ExpectedVersion:   1,
-		}, nil
+		return nil, contracts.ErrInvalidConsistencyToken
 	}
 
 	var simulatedViewVersion int64 = 1

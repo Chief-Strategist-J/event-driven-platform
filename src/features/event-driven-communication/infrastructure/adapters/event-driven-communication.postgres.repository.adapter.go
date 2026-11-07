@@ -7,6 +7,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/lib/pq"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 
@@ -390,3 +391,44 @@ func (a *PostgresEventCommunicationAdapter) SaveCommandReply(
 	return nil
 }
 
+
+func (a *PostgresEventCommunicationAdapter) SaveOutboundCommand(ctx context.Context, cmd ports.OutboundCommand) error {
+	tr := otel.Tracer("event-driven-communication")
+	ctx, span := tr.Start(ctx, "PostgresEventCommunicationAdapter.SaveOutboundCommand")
+	defer span.End()
+
+	if a.db == nil {
+		return errors.New("database unavailable: cannot persist outbound command")
+	}
+	headers, err := json.Marshal(cmd.Headers)
+	if err != nil {
+		return err
+	}
+	_, err = a.db.ExecContext(
+		ctx,
+		queries.InsertOutboundCommandOutbox,
+		cmd.ID,
+		cmd.PublicID,
+		cmd.TenantID,
+		cmd.SourceService,
+		cmd.ExternalID,
+		cmd.CorrelationID,
+		cmd.CausationID,
+		cmd.AggregateType,
+		cmd.AggregateID,
+		cmd.EventType,
+		cmd.SchemaVersion,
+		cmd.Payload,
+		string(headers),
+	)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		var pqErr *pq.Error
+		if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+			return ports.ErrDuplicateCommand
+		}
+		return err
+	}
+	return nil
+}

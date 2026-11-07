@@ -12,6 +12,8 @@ var (
 	ErrMissingSourceService = errors.New("sourceService is required")
 	ErrMissingExternalID    = errors.New("externalId is required")
 	ErrMissingCorrelationID = errors.New("correlationId is required")
+	ErrRecordNotFound       = errors.New("backpressure record not found")
+	ErrSignalNotSaturated   = errors.New("signal does not indicate saturation")
 )
 
 func ValidateReportSaturationInput(input ReportSaturationInput) (ReportSaturationInput, error) {

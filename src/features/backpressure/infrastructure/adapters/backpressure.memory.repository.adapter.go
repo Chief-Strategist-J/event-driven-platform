@@ -59,7 +59,7 @@ func (a *BackpressureMemoryRepositoryAdapter) GetBackpressureRecord(ctx context.
 	key := memKey(tenantID, handlerID, dependencyID)
 	rec, ok := a.records[key]
 	if !ok {
-		return nil, fmt.Errorf("backpressure record not found: %s", key)
+		return nil, fmt.Errorf("%w: %s", contracts.ErrRecordNotFound, key)
 	}
 	clone := *rec
 	return &clone, nil

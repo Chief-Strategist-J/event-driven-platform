@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -66,6 +68,10 @@ func (h *DeadLetterHandler) Quarantine(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.Headers == nil {
+		req.Headers = map[string]string{}
+	}
+
 	input := contracts.QuarantineEventInput{
 		TenantID:         req.TenantID,
 		SourceService:    req.SourceService,
@@ -89,7 +95,8 @@ func (h *DeadLetterHandler) Quarantine(w http.ResponseWriter, r *http.Request) {
 
 	rec, err := h.service.QuarantineEvent(ctx, input)
 	if err != nil {
-		if appErr, ok := err.(*appErrors.ApplicationError); ok {
+		var appErr *appErrors.ApplicationError
+		if errors.As(err, &appErr) {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
 			return
 		}
@@ -152,7 +159,8 @@ func (h *DeadLetterHandler) Redrive(w http.ResponseWriter, r *http.Request) {
 
 	res, err := h.service.RedriveEvent(ctx, req.TenantID, req.QuarantineID, invoker)
 	if err != nil {
-		if appErr, ok := err.(*appErrors.ApplicationError); ok {
+		var appErr *appErrors.ApplicationError
+		if errors.As(err, &appErr) {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
 			return
 		}
@@ -212,7 +220,8 @@ func (h *DeadLetterHandler) Discard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.service.DiscardEvent(ctx, req.TenantID, req.QuarantineID, req.Reason); err != nil {
-		if appErr, ok := err.(*appErrors.ApplicationError); ok {
+		var appErr *appErrors.ApplicationError
+		if errors.As(err, &appErr) {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
 			return
 		}
@@ -259,6 +268,10 @@ func (h *DeadLetterHandler) List(w http.ResponseWriter, r *http.Request) {
 	)
 
 	tenantID := r.URL.Query().Get("tenantId")
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenantId query parameter is required", start, reqID, corrID, causationID)
+		return
+	}
 	handlerID := r.URL.Query().Get("handlerId")
 	status := contracts.QuarantineStatus(r.URL.Query().Get("status"))
 

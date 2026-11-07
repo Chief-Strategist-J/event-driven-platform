@@ -21,10 +21,19 @@ type UpcasterEngine struct {
 	transformers map[string]UpcastTransformerFunc
 }
 
+// IdentityTransformerName names the built-in transformer that passes the payload
+// through unchanged. It lets registered upcasters express purely additive version
+// bumps (the schema changed but no field rewrite is needed).
+const IdentityTransformerName = "identity"
+
 func NewUpcasterEngine() *UpcasterEngine {
-	return &UpcasterEngine{
+	e := &UpcasterEngine{
 		transformers: make(map[string]UpcastTransformerFunc),
 	}
+	e.transformers[IdentityTransformerName] = func(payload map[string]any) (map[string]any, error) {
+		return payload, nil
+	}
+	return e
 }
 
 func (e *UpcasterEngine) RegisterTransformer(name string, fn UpcastTransformerFunc) {

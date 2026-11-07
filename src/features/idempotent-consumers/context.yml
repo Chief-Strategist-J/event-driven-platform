@@ -197,63 +197,70 @@ design_principles:
 
 function_structure: |
   Legend
-    name(inputs) → output
+    action(inputs) → output
     ⚠  can fail      ↺  registers cleanup      ▶  service-owned code
     ✚  required at 100+ services, missing from the single-service tree
 
   Tree 1: main wiring (chassis serviceSpec)
 
-  main(args, env)
-  └── exit( chassis.Run(describeService(), args, env) )
+  bootPlatform(args, env)
+  └── exit( runChassisLifecycle(describePlatformSpec(), args, env) )
 
-  describeService() → serviceSpec
-  ├── buildServices(deps) → services                                        ▶
-  │   ├── config.LoadConfig("") → cfg                                   ⚠
-  │   ├── sql.Open("postgres", cfg.Database.URL) → db                  ↺ ⚠
-  │   ├── consumerAdapters.NewPostgresConsumerRepositoryAdapter(db) → consumerRepo
-  │   ├── consumerService.NewConsumerService(consumerRepo) → consumerSvc
-  │   └── chassis.Services{ Registry: {"consumerService": consumerSvc} }
+  describePlatformSpec() → serviceSpec
+  ├── buildCoreServices(dependencies) → instantiatedServices                ▶
+  │   ├── loadConfigurationFile() → databaseAndBrokerConfig             ⚠
+  │   ├── openDatabaseConnectionPool(postgresURL) → dbConnectionPool   ↺ ⚠
+  │   ├── bindPostgresStorageAdapter(dbConnectionPool) → consumerStorageAdapter
+  │   ├── instantiateConsumerDomainService(consumerStorageAdapter) → consumerService
+  │   └── registerServiceInChassisRegistry("consumerService", consumerService)
   │
-  └── registerApiRoutes(router, services)                                   ▶
-      ├── services.Registry["consumerService"] → consumerSvc
-      ├── handlers.NewIdempotentConsumerHandler(consumerSvc) → consumerHandler
-      ├── routers.NewIdempotentConsumerRouter(consumerHandler) → consumerRouter
-      └── consumerRouter.RegisterRoutes(router)
-          └── router.HandleFunc("POST /api/v1/consumers/inbox", consumerHandler.Consume)
+  └── registerHttpEndpoints(router, instantiatedServices)                   ▶
+      ├── extractFromRegistry("consumerService") → consumerService
+      ├── injectServiceIntoHttpHandler(consumerService) → consumerHttpHandler
+      ├── bindHandlerToRouter(consumerHttpHandler) → consumerRouter
+      └── attachRoute(router, "POST /api/v1/consumers/inbox", consumerHttpHandler)
 
-  Tree 2: end-to-end runtime execution function stack
+  Tree 2: end-to-end runtime execution stack (what happens on request)
 
-  handlers.IdempotentConsumerHandler.Consume(w, r)                          ▶ ⚠
-  ├── observability.StartSpan(r.Context(), "POST /api/v1/consumers/events") → ctx, span ↺
-  ├── json.NewDecoder(r.Body).Decode(&req)                              ⚠ EXIT_BAD_REQUEST
-  │   └── fail → h.writeError(w, http.StatusBadRequest, ...)
-  ├── json.Marshal(req.Payload) → payloadBytes                          ⚠ EXIT_BAD_REQUEST
-  │   └── fail → h.writeError(w, http.StatusBadRequest, ...)
-  ├── service.ConsumerService.ConsumeEvent(ctx, event) → consumeResult, err ▶ ⚠
-  │   ├── contracts.ValidateInboundConsumerEvent(event) → error         ⚠
-  │   │   └── invalid → return nil, appError
-  │   ├── contracts.ComputePayloadHash(event.Payload) → payloadHash
-  │   ├── utils.GenerateUUIDv7() → inboxID                              ⚠
-  │   ├── repo.RecordInbox(ctx, inboxRecord) → inserted, err            ↺ ⚠
-  │   │   ├── db.ExecContext(ctx, queries.FlowInsertConsumerInboxRecord, ...) → res ⚠
-  │   │   ├── res.RowsAffected() → rows
-  │   │   └── rows == 0 (inserted == false) → return {ActionSkip, "transport duplicate"}
-  │   ├── repo.GetProjection(ctx, tenantID, handlerID, aggType, aggID) → proj, err ↺ ⚠
-  │   │   └── db.QueryRowContext(ctx, queries.FlowGetAggregateProjection, ...).Scan(...)
-  │   ├── proj != nil && proj.IsParked == true → return {ActionParkPoison}
-  │   ├── proj != nil && event.Version == proj.LastVersion && !rules.IsContentHashConsistent(proj.LastPayloadHash, payloadHash)
-  │   │   ├── repo.ParkAggregate(ctx, tenantID, handlerID, aggType, aggID, reason) ↺ ⚠
-  │   │   │   └── db.ExecContext(ctx, queries.FlowParkAggregateProjection, ...) ⚠
-  │   │   └── return {ActionParkPoison, "divergent content detected for same version"}
-  │   ├── rules.EvaluateVersionRule(currentVersion, event.AggregateVersion, event.SemanticClass) → action
-  │   │   ├── incoming <= currentVersion → return {ActionSkip, "duplicate skipped"}
-  │   │   ├── incoming > currentVersion + 1 (DELTA) → return {ActionHoldGap, "version gap detected"}
-  │   │   └── ActionApply:
-  │   └── repo.ApplyProjectionEffect(ctx, tenantID, handlerID, aggType, aggID, version, eventID, payloadHash) ↺ ⚠
-  │       ├── db.ExecContext(ctx, queries.FlowUpsertAggregateProjection, ...) ⚠
-  │       └── return {ActionApply, "effect applied and version advanced atomically"}
-  ├── err != nil → h.writeError(w, err.StatusCode, ...)                 ⚠ EXIT_INTERNAL
-  ├── res.Action == ActionHoldGap → w.WriteHeader(http.StatusConflict)
-  ├── res.Action == ActionParkPoison → w.WriteHeader(http.StatusLocked)
-  ├── res.Action == ActionApply || ActionSkip → w.WriteHeader(http.StatusOK)
-  └── json.NewEncoder(w).Encode(res)                                    ↺
+  receiveInboundHttpEvent(httpWriter, httpRequest)                          ▶ ⚠
+  ├── startDistributedTraceSpan("POST /api/v1/consumers/events") → traceSpan ↺
+  ├── parseAndSanitizeJsonBody(requestBody) → parsedEventPayload        ⚠ EXIT_BAD_REQUEST
+  │   └── unmarshalError → returnHttpBadRequestResponse()
+  ├── serializePayloadToBytes(payloadField) → rawPayloadBytes           ⚠ EXIT_BAD_REQUEST
+  │   └── serializationError → returnHttpBadRequestResponse()
+  ├── mapRequestToDomainEvent(parsedEventPayload, rawPayloadBytes) → inboundConsumerEvent
+  │
+  └── executeIdempotentEventProcessing(inboundConsumerEvent) → processResult ▶ ⚠
+      ├── validateMandatoryFields(tenantId, handlerId, eventId, aggId)   ⚠ EXIT_VALIDATION
+      │   └── missingRequiredField → returnValidationError()
+      ├── calculateSha256Checksum(rawPayloadBytes) → payloadContentHash
+      ├── generateMonotonicTimeUUID() → uniqueInboxEntryId              ⚠
+      │
+      ├── attemptAtomicInboxReservation(uniqueInboxEntryId, tenantId, handlerId, eventId) → wasReserved ↺ ⚠
+      │   ├── executeSqlInsertOnConflictDoNothing(consumerInboxTable)   ⚠
+      │   └── wasReserved == false → returnResult(ACTION_SKIP, "transport duplicate delivery detected")
+      │
+      ├── fetchCurrentAggregateVersion(tenantId, handlerId, aggregateType, aggregateId) → currentProjectionState ↺ ⚠
+      │   ├── queryProjectionsTable() → existingStateRecord
+      │   └── stateRecord.isParked == true → returnResult(ACTION_PARK_POISON, "aggregate is quarantined")
+      │
+      ├── detectPoisonPayloadCollision(existingStateRecord.lastHash, payloadContentHash)
+      │   └── sameVersionWithDivergentHash →
+      │       ├── quarantineAggregateInDatabase(tenantId, handlerId, aggregateId) ↺ ⚠
+      │       └── returnResult(ACTION_PARK_POISON, "split-brain payload hash collision detected")
+      │
+      ├── evaluateVersionProgressionRules(currentVersion, incomingVersion, semanticClass) → decidedAction
+      │   ├── incomingVersion <= currentVersion → returnResult(ACTION_SKIP, "stale or already applied version")
+      │   ├── semanticClass == DELTA && incomingVersion > currentVersion + 1 → returnResult(ACTION_HOLD_GAP, "out of order event missing predecessor")
+      │   └── incomingVersion == currentVersion + 1 (or STATE > currentVersion) → ACTION_APPLY
+      │
+      ├── executeStateMutationAtomically(tenantId, handlerId, aggregateId, newVersion, eventId, payloadHash) ↺ ⚠
+      │   ├── executeSqlUpsertAggregateProjection(consumerProjectionsTable) ⚠
+      │   └── returnResult(ACTION_APPLY, "version advanced and state updated atomically")
+      │
+      ├── mapResultToHttpStatus(decidedAction)
+      │   ├── ACTION_HOLD_GAP → sendHttpResponseStatus(409_Conflict)
+      │   ├── ACTION_PARK_POISON → sendHttpResponseStatus(423_Locked)
+      │   └── ACTION_APPLY or ACTION_SKIP → sendHttpResponseStatus(200_OK)
+      │
+      └── writeJsonResponseBody(httpWriter, processResult)              ↺

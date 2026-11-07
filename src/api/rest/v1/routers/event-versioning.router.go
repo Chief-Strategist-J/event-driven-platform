@@ -17,5 +17,6 @@ func NewEventVersioningRouter(handler *handlers.EventVersioningHandler) *EventVe
 func (r *EventVersioningRouter) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/schemas/versions", r.handler.RegisterSchema)
 	mux.HandleFunc("POST /api/v1/schemas/compatibility/check", r.handler.CheckCompatibility)
+	mux.HandleFunc("POST /api/v1/schemas/upcasters", r.handler.RegisterUpcaster)
 	mux.HandleFunc("POST /api/v1/schemas/upcast", r.handler.Upcast)
 }

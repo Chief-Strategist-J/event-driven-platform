@@ -11,6 +11,9 @@ var (
 	ErrAutoCommitBanned         = errors.New("auto-commit strategy is strictly banned per Tier 1 rules")
 	ErrNegativeOffsetDisallowed = errors.New("partition offset must be non-negative")
 	ErrOffsetRegression         = errors.New("commit offset cannot regress below currently stored offset without administrative rewind")
+	ErrRewindForwardJump        = errors.New("rewind target offset cannot exceed the currently stored offset")
+	ErrRewindBeyondLogEnd       = errors.New("rewind target offset cannot exceed the log end offset")
+	ErrInvalidFastForward       = errors.New("shiftBy must be positive")
 	ErrConsumerGroupMustBeStopped = errors.New("administrative offset reset requires consumer group to be stopped")
 )
 
@@ -59,7 +62,7 @@ func EvaluateLagSeverity(storedOffset, logEndOffset int64, duration time.Duratio
 
 func ComputeFastForwardOffset(currentOffset, shiftBy, logEndOffset int64) (int64, error) {
 	if shiftBy <= 0 {
-		return 0, errors.New("shiftBy must be positive")
+		return 0, ErrInvalidFastForward
 	}
 	target := currentOffset + shiftBy
 	if logEndOffset > 0 && target > logEndOffset {

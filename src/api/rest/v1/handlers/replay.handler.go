@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 
 	replayFeature "event-driven-platform/src/features/replay-mechanism"
 	"event-driven-platform/src/features/replay-mechanism/contracts"
+	"event-driven-platform/src/features/replay-mechanism/domain/machines"
+	"event-driven-platform/src/features/replay-mechanism/domain/rules"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
 	"event-driven-platform/src/shared/types"
@@ -63,7 +66,7 @@ func (h *ReplayHandler) HandleCreateReplayRun(w http.ResponseWriter, r *http.Req
 	res, err := h.feat.Service.CreateReplayRun(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "CREATE_REPLAY_FAILED"))
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -103,7 +106,7 @@ func (h *ReplayHandler) HandleStartStreaming(w http.ResponseWriter, r *http.Requ
 	res, err := h.feat.Service.StartStreaming(ctx, tenantID, body.RunID)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "START_STREAMING_FAILED"))
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -134,7 +137,7 @@ func (h *ReplayHandler) HandleAdvanceReplay(w http.ResponseWriter, r *http.Reque
 	res, err := h.feat.Service.AdvanceReplay(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "ADVANCE_REPLAY_FAILED"))
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -165,7 +168,7 @@ func (h *ReplayHandler) HandlePromoteReplay(w http.ResponseWriter, r *http.Reque
 	res, err := h.feat.Service.PromoteReplay(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "PROMOTE_REPLAY_FAILED"))
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -196,7 +199,7 @@ func (h *ReplayHandler) HandleCompleteCutover(w http.ResponseWriter, r *http.Req
 	res, err := h.feat.Service.CompleteCutover(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "CUTOVER_FAILED"))
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -223,11 +226,14 @@ func (h *ReplayHandler) HandleEvaluateEffect(w http.ResponseWriter, r *http.Requ
 	if input.TenantID == "" {
 		input.TenantID = tenantID
 	}
+	if input.CorrelationID == "" {
+		input.CorrelationID = corrID
+	}
 
 	res, err := h.feat.Service.EvaluateEffect(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "EVALUATE_EFFECT_FAILED"))
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -254,11 +260,29 @@ func (h *ReplayHandler) HandleGetReplayRun(w http.ResponseWriter, r *http.Reques
 	res, err := h.feat.Service.GetReplayRun(ctx, input)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "GET_REPLAY_FAILED"))
-		h.writeError(w, http.StatusNotFound, constants.ErrCodeNotFound, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
 	h.writeSuccess(w, http.StatusOK, res, start, reqID, corrID, causationID)
+}
+
+// writeServiceError maps sentinel errors to HTTP statuses: unknown run 404,
+// state/lifecycle violations and duplicates 409, storage failures 500, and
+// everything else (input validation, offset rules) 400.
+func (h *ReplayHandler) writeServiceError(w http.ResponseWriter, err error, start time.Time, reqID, corrID, causationID string) {
+	switch {
+	case errors.Is(err, contracts.ErrReplayRunNotFound):
+		h.writeError(w, http.StatusNotFound, constants.ErrCodeNotFound, err.Error(), start, reqID, corrID, causationID)
+	case errors.Is(err, machines.ErrInvalidReplayTransition),
+		errors.Is(err, rules.ErrReplayNotAdvanceable),
+		errors.Is(err, contracts.ErrReplayConflict):
+		h.writeError(w, http.StatusConflict, constants.ErrCodeConflict, err.Error(), start, reqID, corrID, causationID)
+	case errors.Is(err, contracts.ErrReplayStorageFailure):
+		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "internal server error", start, reqID, corrID, causationID)
+	default:
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+	}
 }
 
 func (h *ReplayHandler) writeSuccess(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {

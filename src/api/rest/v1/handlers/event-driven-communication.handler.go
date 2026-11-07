@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"event-driven-platform/src/features/event-driven-communication/contracts"
+	"event-driven-platform/src/features/event-driven-communication/infrastructure/ports"
 	"event-driven-platform/src/features/event-driven-communication/service"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
@@ -205,7 +207,14 @@ func (h *EventCommunicationHandler) HandleDispatchAsyncCommand(w http.ResponseWr
 
 	res, err := h.svc.DispatchAsyncCommand(ctx, req)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		switch {
+		case errors.Is(err, service.ErrInvalidCommand):
+			h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		case errors.Is(err, ports.ErrDuplicateCommand):
+			h.writeError(w, http.StatusConflict, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		default:
+			h.writeError(w, http.StatusInternalServerError, constants.ErrCodeValidationFailed, "failed to persist command to outbox", start, reqID, corrID, causationID)
+		}
 		return
 	}
 

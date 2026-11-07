@@ -1,10 +1,12 @@
 package tests
 
 import (
+	"errors"
 	"testing"
 
 	"event-driven-platform/src/features/multi-tenant-event-isolation/contracts"
 	"event-driven-platform/src/features/multi-tenant-event-isolation/domain/machines"
+	errs "event-driven-platform/src/shared/errors"
 )
 
 func TestTenantLifecycleMachine_ValidTransitions(t *testing.T) {
@@ -64,3 +66,18 @@ func TestTenantLifecycleMachine_InvalidTransitions(t *testing.T) {
 	}
 }
 
+
+func TestTenantLifecycleMachine_UnknownTargetIsValidationError(t *testing.T) {
+	m := machines.NewTenantLifecycleMachine()
+
+	_, err := m.Transition(contracts.LifecycleActive, contracts.TenantLifecycleState("BOGUS"))
+	var appErr *errs.ApplicationError
+	if !errors.As(err, &appErr) || appErr.StatusCode != 400 {
+		t.Fatalf("expected 400 validation error for unknown target, got %v", err)
+	}
+
+	_, err = m.Transition(contracts.LifecycleActive, contracts.LifecycleOnboarding)
+	if !errors.As(err, &appErr) || appErr.StatusCode != 409 {
+		t.Fatalf("expected 409 conflict for invalid known transition, got %v", err)
+	}
+}

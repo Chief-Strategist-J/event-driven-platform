@@ -68,7 +68,8 @@ func (h *EventVersioningHandler) RegisterSchema(w http.ResponseWriter, r *http.R
 			"event_type":    req.EventType,
 			"schema_version": req.SchemaVersion,
 		})
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusBadRequest, constants.ErrCodeValidationFailed)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -125,6 +126,47 @@ func (h *EventVersioningHandler) CheckCompatibility(w http.ResponseWriter, r *ht
 	}
 
 	h.writeSuccess(w, http.StatusOK, result, start, reqID, corrID, causationID)
+}
+
+func (h *EventVersioningHandler) RegisterUpcaster(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "POST /api/v1/schemas/upcasters", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
+	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+	reqID := r.Header.Get(constants.HeaderXRequestID)
+	corrID := r.Header.Get(constants.HeaderXCorrelationID)
+	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	span.SetAttributes(
+		attribute.String("http.method", r.Method),
+		attribute.String("http.route", "/api/v1/schemas/upcasters"),
+		attribute.String("correlation_id", corrID),
+	)
+
+	var req contracts.RegisterUpcasterInput
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "MALFORMED_JSON"))
+		observability.LogWarn(ctx, "event-versioning", "malformed upcaster request payload", req.TenantID, map[string]any{"error": err.Error()})
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "malformed request payload", start, reqID, corrID, causationID)
+		return
+	}
+
+	record, err := h.svc.RegisterUpcaster(ctx, req)
+	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "UPCASTER_REGISTRATION_FAILED"))
+		observability.LogWarn(ctx, "event-versioning", "upcaster registration rejected", req.TenantID, map[string]any{"error": err.Error()})
+		st, cd, msg := classifyServiceError(err, http.StatusBadRequest, constants.ErrCodeValidationFailed)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
+		return
+	}
+
+	h.writeSuccess(w, http.StatusCreated, record, start, reqID, corrID, causationID)
 }
 
 func (h *EventVersioningHandler) Upcast(w http.ResponseWriter, r *http.Request) {

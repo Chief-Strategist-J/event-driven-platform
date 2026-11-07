@@ -70,6 +70,9 @@ func (h *DomainEventHandler) HandleBuildEnvelope(w http.ResponseWriter, r *http.
 		} else if errors.Is(err, rules.ErrAggregateTerminal) {
 			statusCode = http.StatusUnprocessableEntity
 			errCode = "AGGREGATE_TERMINAL"
+		} else if errors.Is(err, service.ErrPersistence) {
+			h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "failed to persist event envelope records", start, reqID, corrID, causationID)
+			return
 		}
 		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
 		return
@@ -111,7 +114,8 @@ func (h *DomainEventHandler) HandleRegisterCatalogEvent(w http.ResponseWriter, r
 
 	res, err := h.svc.RegisterCatalogEvent(ctx, cmd)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusBadRequest, constants.ErrCodeValidationFailed)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -159,6 +163,9 @@ func (h *DomainEventHandler) HandleReserveAggregateVersion(w http.ResponseWriter
 		} else if errors.Is(err, rules.ErrAggregateTerminal) {
 			statusCode = http.StatusUnprocessableEntity
 			errCode = "AGGREGATE_TERMINAL"
+		} else if errors.Is(err, service.ErrPersistence) {
+			h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "failed to persist event envelope records", start, reqID, corrID, causationID)
+			return
 		}
 		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
 		return

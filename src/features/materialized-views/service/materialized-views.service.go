@@ -464,6 +464,18 @@ func (s *ViewService) QueryViewWithConsistencyToken(ctx context.Context, in cont
 	ctx, span := s.tracer.Start(ctx, "ViewService.QueryViewWithConsistencyToken")
 	defer span.End()
 
+	if strings.TrimSpace(in.TenantID) == "" || strings.TrimSpace(in.ViewName) == "" {
+		err := errors.NewValidationError("tenant_id and view_name must not be empty")
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+	if _, err := s.repo.GetViewByName(ctx, in.TenantID, in.ViewName); err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, err
+	}
+
 	var requiredSeq int64
 	if in.ConsistencyToken != "" {
 		_, seq, err := rules.ParseConsistencyToken(in.ConsistencyToken)

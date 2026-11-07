@@ -294,6 +294,9 @@ func TestServiceRecovery_FullLifecycle(t *testing.T) {
 	if confirmed.State != contracts.StateNormal {
 		t.Fatalf("expected NORMAL after confirm, got %s", confirmed.State)
 	}
+	if confirmed.ConcurrencyLimit != rules.DefaultConcurrencyLimit {
+		t.Fatalf("expected baseline concurrency %d after confirm, got %d", rules.DefaultConcurrencyLimit, confirmed.ConcurrencyLimit)
+	}
 }
 
 func TestServiceGetState_AfterSaturation(t *testing.T) {

@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"event-driven-platform/src/shared/constants"
 	"event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
@@ -72,6 +74,22 @@ func ValidateQuarantineInput(input QuarantineEventInput) *errors.ApplicationErro
 			Field: constants.FieldEventID,
 			Issue: "event_id cannot be empty",
 			Rule:  constants.ValidationRuleRequired,
+		})
+	}
+
+	if _, err := uuid.Parse(strings.TrimSpace(input.EventID)); err != nil && len(strings.TrimSpace(input.EventID)) > 0 {
+		details = append(details, types.ResponseErrorDetail{
+			Field: constants.FieldEventID,
+			Issue: "event_id must be a valid UUID",
+			Rule:  constants.ValidationRuleFormat,
+		})
+	}
+
+	if _, err := uuid.Parse(strings.TrimSpace(input.CorrelationID)); err != nil {
+		details = append(details, types.ResponseErrorDetail{
+			Field: "correlation_id",
+			Issue: "correlation_id must be a valid UUID",
+			Rule:  constants.ValidationRuleFormat,
 		})
 	}
 

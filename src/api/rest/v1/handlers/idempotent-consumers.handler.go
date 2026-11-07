@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"errors"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -60,9 +61,9 @@ func (h *IdempotentConsumerHandler) Consume(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	semantic := contracts.SemanticDelta
-	if req.SemanticClass == constants.SemanticClassState {
-		semantic = contracts.SemanticState
+	semantic := contracts.SemanticClass(req.SemanticClass)
+	if req.SemanticClass == "" {
+		semantic = contracts.SemanticDelta
 	}
 
 	event := contracts.InboundConsumerEvent{
@@ -82,7 +83,8 @@ func (h *IdempotentConsumerHandler) Consume(w http.ResponseWriter, r *http.Reque
 
 	res, err := h.service.ConsumeEvent(ctx, event)
 	if err != nil {
-		if appErr, ok := err.(*appErrors.ApplicationError); ok {
+		var appErr *appErrors.ApplicationError
+		if errors.As(err, &appErr) {
 			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
 			return
 		}

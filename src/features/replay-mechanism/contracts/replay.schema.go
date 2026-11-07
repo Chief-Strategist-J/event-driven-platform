@@ -3,6 +3,8 @@ package contracts
 import (
 	"errors"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 var (
@@ -15,6 +17,11 @@ var (
 	ErrInvalidRunMode          = errors.New("invalid replay run mode")
 	ErrInvalidScope            = errors.New("invalid replay scope")
 	ErrNegativeOffsetRange     = errors.New("startOffset and endOffset must be non-negative with endOffset >= startOffset")
+	ErrInvalidRunID            = errors.New("runId must be a valid UUID")
+	ErrInvalidCorrelationID    = errors.New("correlationId must be a valid UUID")
+	ErrReplayRunNotFound       = errors.New("replay run not found")
+	ErrReplayConflict          = errors.New("replay record already exists")
+	ErrReplayStorageFailure    = errors.New("replay storage failure")
 	ErrMissingIdempotencyKey   = errors.New("idempotencyKey is required for effect evaluation")
 )
 
@@ -66,8 +73,8 @@ func ValidateAdvanceReplayInput(input AdvanceReplayInput) (AdvanceReplayInput, e
 	if input.TenantID == "" {
 		return input, ErrMissingTenantID
 	}
-	if input.RunID == "" {
-		return input, ErrMissingRunID
+	if err := ValidateRunID(input.RunID); err != nil {
+		return input, err
 	}
 	if input.CurrentOffset < 0 {
 		return input, ErrNegativeOffsetRange
@@ -86,8 +93,8 @@ func ValidatePromoteReplayInput(input PromoteReplayInput) (PromoteReplayInput, e
 	if input.TenantID == "" {
 		return input, ErrMissingTenantID
 	}
-	if input.RunID == "" {
-		return input, ErrMissingRunID
+	if err := ValidateRunID(input.RunID); err != nil {
+		return input, err
 	}
 	return input, nil
 }
@@ -103,8 +110,8 @@ func ValidateCompleteCutoverInput(input CompleteCutoverInput) (CompleteCutoverIn
 	if input.TenantID == "" {
 		return input, ErrMissingTenantID
 	}
-	if input.RunID == "" {
-		return input, ErrMissingRunID
+	if err := ValidateRunID(input.RunID); err != nil {
+		return input, err
 	}
 	return input, nil
 }
@@ -121,11 +128,29 @@ func ValidateEvaluateEffectInput(input EvaluateEffectInput) (EvaluateEffectInput
 	if input.TenantID == "" {
 		return input, ErrMissingTenantID
 	}
-	if input.RunID == "" {
-		return input, ErrMissingRunID
+	if err := ValidateRunID(input.RunID); err != nil {
+		return input, err
 	}
 	if input.IdempotencyKey == "" {
 		return input, ErrMissingIdempotencyKey
 	}
+	if input.CorrelationID != "" {
+		if _, err := uuid.Parse(input.CorrelationID); err != nil {
+			return input, ErrInvalidCorrelationID
+		}
+	}
 	return input, nil
+}
+
+// ValidateRunID rejects empty and non-UUID run identifiers so malformed ids are
+// reported as client errors instead of surfacing raw database cast errors.
+func ValidateRunID(runID string) error {
+	runID = strings.TrimSpace(runID)
+	if runID == "" {
+		return ErrMissingRunID
+	}
+	if _, err := uuid.Parse(runID); err != nil {
+		return ErrInvalidRunID
+	}
+	return nil
 }

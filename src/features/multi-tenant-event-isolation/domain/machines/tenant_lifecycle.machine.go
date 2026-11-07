@@ -18,7 +18,20 @@ func NewTenantLifecycleMachine() *TenantLifecycleMachine {
 	return &TenantLifecycleMachine{}
 }
 
+func isKnownLifecycleState(state contracts.TenantLifecycleState) bool {
+	switch state {
+	case contracts.LifecycleOnboarding, contracts.LifecycleActive, contracts.LifecycleSuspended,
+		contracts.LifecycleOffboarding, contracts.LifecycleOffboarded:
+		return true
+	}
+	return false
+}
+
 func (m *TenantLifecycleMachine) Transition(current contracts.TenantLifecycleState, target contracts.TenantLifecycleState) (contracts.TenantLifecycleState, error) {
+	if !isKnownLifecycleState(target) {
+		return current, errors.NewValidationError(fmt.Sprintf("unknown target_state: %q", string(target)))
+	}
+
 	if current == contracts.LifecycleOffboarded {
 		return current, ErrTombstonedTenantImmutable
 	}

@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strconv"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -10,7 +12,9 @@ import (
 
 	"event-driven-platform/src/features/offset-management/contracts"
 	offsetFeature "event-driven-platform/src/features/offset-management"
+	"event-driven-platform/src/features/offset-management/domain/rules"
 	"event-driven-platform/src/infra/observability"
+	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/constants"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
@@ -74,7 +78,7 @@ func (h *OffsetManagementHandler) HandleCommitOffset(w http.ResponseWriter, r *h
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "COMMIT_OFFSET_FAILED"))
 		observability.LogWarn(ctx, "offset-management", "offset commit rejected", input.TenantID, map[string]any{"error": err.Error()})
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -145,7 +149,7 @@ func (h *OffsetManagementHandler) HandleRewindOffset(w http.ResponseWriter, r *h
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "REWIND_OFFSET_FAILED"))
 		observability.LogWarn(ctx, "offset-management", "offset rewind rejected", input.TenantID, map[string]any{"error": err.Error()})
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -215,7 +219,7 @@ func (h *OffsetManagementHandler) HandleFastForwardOffset(w http.ResponseWriter,
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "FAST_FORWARD_OFFSET_FAILED"))
 		observability.LogWarn(ctx, "offset-management", "offset fast-forward rejected", input.TenantID, map[string]any{"error": err.Error()})
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -234,6 +238,86 @@ func (h *OffsetManagementHandler) HandleFastForwardOffset(w http.ResponseWriter,
 	})
 
 	h.writeSuccess(w, http.StatusOK, res, start, reqID, corrID, causationID)
+}
+
+func (h *OffsetManagementHandler) HandleEvaluateLag(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	ctx, span := observability.StartSpan(r.Context(), "GET /api/v1/offsets/lag", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+
+	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+	reqID := r.Header.Get(constants.HeaderXRequestID)
+	corrID := r.Header.Get(constants.HeaderXCorrelationID)
+	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
+
+	q := r.URL.Query()
+	first := func(keys ...string) string {
+		for _, k := range keys {
+			if v := q.Get(k); v != "" {
+				return v
+			}
+		}
+		return ""
+	}
+	tenantID := first("tenant_id", "tenantId")
+	if tenantID == "" {
+		tenantID = r.Header.Get(constants.HeaderXTenantID)
+	}
+	groupID := first("group_id", "groupId")
+	topic := q.Get("topic")
+	if tenantID == "" || groupID == "" || topic == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id, group_id and topic are required", start, reqID, corrID, causationID)
+		return
+	}
+	partition := int64(0)
+	if v := q.Get("partition"); v != "" {
+		p, err := strconv.ParseInt(v, 10, 32)
+		if err != nil || p < 0 {
+			h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "partition must be a non-negative integer", start, reqID, corrID, causationID)
+			return
+		}
+		partition = p
+	}
+	rate := 1.0
+	if v := q.Get("rate"); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f < 0 {
+			h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "rate must be a non-negative number", start, reqID, corrID, causationID)
+			return
+		}
+		rate = f
+	}
+
+	res, err := h.feat.EvaluateLag(ctx, tenantID, groupID, topic, int32(partition), rate)
+	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "EVALUATE_LAG_FAILED"))
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
+		return
+	}
+
+	h.writeSuccess(w, http.StatusOK, res, start, reqID, corrID, causationID)
+}
+
+// writeServiceError maps typed application errors to their own status, known
+// domain rule violations to 400, and anything else to 500.
+func (h *OffsetManagementHandler) writeServiceError(w http.ResponseWriter, err error, start time.Time, reqID, corrID, causationID string) {
+	var appErr *appErrors.ApplicationError
+	if errors.As(err, &appErr) {
+		h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
+		return
+	}
+	for _, domainErr := range []error{rules.ErrAutoCommitBanned, rules.ErrNegativeOffsetDisallowed, rules.ErrOffsetRegression, rules.ErrConsumerGroupMustBeStopped, rules.ErrRewindForwardJump, rules.ErrRewindBeyondLogEnd, rules.ErrInvalidFastForward} {
+		if errors.Is(err, domainErr) {
+			h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+			return
+		}
+	}
+	h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "internal server error", start, reqID, corrID, causationID)
 }
 
 func (h *OffsetManagementHandler) writeSuccess(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {

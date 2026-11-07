@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"errors"
+	"strings"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"event-driven-platform/src/features/consumer-groups/service"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
+	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
 )
@@ -65,7 +68,7 @@ func (h *ConsumerGroupsHandler) RegisterMember(w http.ResponseWriter, r *http.Re
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "REGISTRATION_FAILED"))
 		observability.LogWarn(ctx, "consumer-groups", "member registration failed", req.TenantID, map[string]any{"error": err.Error()})
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -123,7 +126,7 @@ func (h *ConsumerGroupsHandler) Heartbeat(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "HEARTBEAT_FAILED"))
 		observability.LogWarn(ctx, "consumer-groups", "heartbeat processing failed", req.TenantID, map[string]any{"error": err.Error()})
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -184,7 +187,7 @@ func (h *ConsumerGroupsHandler) RebalanceSync(w http.ResponseWriter, r *http.Req
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "REBALANCE_FAILED"))
 		observability.LogError(ctx, "consumer-groups", "rebalance sync failed", req.TenantID, map[string]any{"error": err.Error()})
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -218,6 +221,11 @@ func (h *ConsumerGroupsHandler) ListMembers(w http.ResponseWriter, r *http.Reque
 	tenantID := r.URL.Query().Get("tenant_id")
 	groupID := r.URL.Query().Get("group_id")
 
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
+	}
+
 	span.SetAttributes(
 		attribute.String("http.method", r.Method),
 		attribute.String("http.route", "/api/v1/consumer-groups/members"),
@@ -230,7 +238,12 @@ func (h *ConsumerGroupsHandler) ListMembers(w http.ResponseWriter, r *http.Reque
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "QUERY_FAILED"))
 		observability.LogError(ctx, "consumer-groups", "failed listing members", tenantID, map[string]any{"error": err.Error()})
-		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, err.Error(), start, reqID, corrID, causationID)
+		var appErr *appErrors.ApplicationError
+		if errors.As(err, &appErr) {
+			h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
+		} else {
+			h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "internal list error", start, reqID, corrID, causationID)
+		}
 		return
 	}
 
@@ -240,6 +253,15 @@ func (h *ConsumerGroupsHandler) ListMembers(w http.ResponseWriter, r *http.Reque
 	})
 
 	h.writeSuccess(w, http.StatusOK, members, start, reqID, corrID, causationID)
+}
+
+func (h *ConsumerGroupsHandler) writeServiceError(w http.ResponseWriter, err error, start time.Time, reqID, corrID, causationID string) {
+	var appErr *appErrors.ApplicationError
+	if errors.As(err, &appErr) {
+		h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
+		return
+	}
+	h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 }
 
 func (h *ConsumerGroupsHandler) writeSuccess(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {

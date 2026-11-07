@@ -22,6 +22,7 @@ var (
 	ErrInvalidKeyVersion    = errors.New("key_version must be positive")
 	ErrInvalidKeyExpiry     = errors.New("signing key expires_at must be in the future")
 	ErrInvalidViewName      = errors.New("view_name must not be empty or whitespace")
+	ErrInvalidConsistencyToken = errors.New("x-consistency-token is malformed, expired, or has an invalid signature")
 )
 
 func NormalizeDispatchCommandInput(in DispatchCommandInput) (DispatchCommandInput, error) {

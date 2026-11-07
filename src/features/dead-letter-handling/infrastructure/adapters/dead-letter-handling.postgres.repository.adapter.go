@@ -23,6 +23,9 @@ func NewPostgresDeadLetterRepositoryAdapter(db *sql.DB) ports.DeadLetterReposito
 }
 
 func (p *PostgresDeadLetterRepositoryAdapter) Quarantine(ctx context.Context, record contracts.DeadLetterQuarantineRecord) error {
+	if record.Headers == nil {
+		record.Headers = map[string]string{}
+	}
 	headersJSON, err := json.Marshal(record.Headers)
 	if err != nil {
 		headersJSON = []byte("{}")

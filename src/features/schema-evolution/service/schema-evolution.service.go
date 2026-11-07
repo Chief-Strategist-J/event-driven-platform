@@ -18,6 +18,7 @@ import (
 
 var (
 	ErrDuplicateSchemaFingerprint = errors.New("identical schema fingerprint already registered in lineage")
+	ErrIncompatibleSchema         = errors.New("schema is incompatible with registered lineage")
 	ErrNonMonotonicVersion        = errors.New("new schema version must be strictly greater than latest registered version")
 )
 
@@ -51,6 +52,10 @@ func (s *SchemaEvolutionService) RegisterSchema(ctx context.Context, in contract
 
 	if !rules.EvaluateTransitiveCompatibility(fingerprint, lineage) {
 		return nil, ErrDuplicateSchemaFingerprint
+	}
+
+	if violations := rules.CheckSchemaCompatibility(norm.CompatibilityMode, norm.SchemaDefinition, lineage); len(violations) > 0 {
+		return nil, fmt.Errorf("%w under %s: %s", ErrIncompatibleSchema, norm.CompatibilityMode, strings.Join(violations, "; "))
 	}
 
 	if len(lineage) > 0 {

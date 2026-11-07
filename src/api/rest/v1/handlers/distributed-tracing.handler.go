@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -173,7 +174,12 @@ func (h *DistributedTracingHandler) HandleReportCoverage(w http.ResponseWriter, 
 
 	res, err := h.svc.ReportCoverage(ctx, cmd)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		if errors.Is(err, service.ErrInvalidCoverageReport) {
+			h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+			return
+		}
+		st, cd, msg := classifyServiceError(err, http.StatusInternalServerError, constants.ErrCodeInternalError)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 

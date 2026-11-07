@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -101,6 +102,12 @@ func TestAggregateStateMachine(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected terminal rejection")
 	}
+}
+
+type failingGroupRepo struct{ *memoryRepo }
+
+func (failingGroupRepo) UpsertTransactionGroup(context.Context, contracts.RegisterTransactionGroupPartCommand) (contracts.RegisterTransactionGroupPartResult, error) {
+	return contracts.RegisterTransactionGroupPartResult{}, errors.New("db down")
 }
 
 type memoryRepo struct {
@@ -279,3 +286,17 @@ func TestCausalLoopVerification(t *testing.T) {
 	}
 }
 
+
+func TestBuildEnvelopeSurfacesTransactionGroupFailure(t *testing.T) {
+	svc := service.NewDomainEventService(failingGroupRepo{newMemoryRepo()})
+	_, err := svc.BuildCanonicalEnvelope(context.Background(), contracts.BuildEnvelopeCommand{
+		TenantID: "tenant_1", SourceService: "order-service", EventType: "commerce.order.placed.v1",
+		AggregateType: "commerce.order", AggregateID: "ord_889", VersionIncrement: 1,
+		EffectiveAt: time.Now().UTC(), CausationID: "cmd_100",
+		CorrelationID: "0194857b-7b2a-7963-8a9d-5a8b2413e001", CausationDepth: 1,
+		TransactionGroupID: "txg_9", GroupSize: 2, Payload: map[string]any{"total": 1},
+	})
+	if !errors.Is(err, service.ErrPersistence) {
+		t.Fatalf("expected ErrPersistence, got %v", err)
+	}
+}

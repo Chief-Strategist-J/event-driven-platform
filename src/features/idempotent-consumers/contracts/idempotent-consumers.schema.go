@@ -5,6 +5,8 @@ import (
 	"encoding/hex"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"event-driven-platform/src/shared/constants"
 	"event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
@@ -37,6 +39,24 @@ func ValidateInboundConsumerEvent(event InboundConsumerEvent) *errors.Applicatio
 			Field: constants.FieldEventID,
 			Issue: "event_id cannot be empty",
 			Rule:  constants.ValidationRuleRequired,
+		})
+	}
+
+	if trimmed := strings.TrimSpace(event.EventID); len(trimmed) > 0 {
+		if _, err := uuid.Parse(trimmed); err != nil {
+			details = append(details, types.ResponseErrorDetail{
+				Field: constants.FieldEventID,
+				Issue: "event_id must be a valid UUID",
+				Rule:  constants.ValidationRuleFormat,
+			})
+		}
+	}
+
+	if event.SemanticClass != SemanticState && event.SemanticClass != SemanticDelta {
+		details = append(details, types.ResponseErrorDetail{
+			Field: "semantic_class",
+			Issue: "semantic_class must be STATE or DELTA",
+			Rule:  constants.ValidationRuleFormat,
 		})
 	}
 

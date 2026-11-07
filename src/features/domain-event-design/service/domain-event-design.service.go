@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 )
 
 var (
+	// ErrPersistence marks failures writing envelope side records (causal chain, transaction group).
+	ErrPersistence = errors.New("persistence failure")
 	ErrCatalogInactive = errors.New("event catalog entry is inactive")
 )
 
@@ -117,7 +120,7 @@ func (s *DomainEventService) BuildCanonicalEnvelope(
 		corrUUID = uuid.New()
 	}
 
-	_ = s.repo.RecordCausalEntry(ctx, contracts.CausalChainEntry{
+	if err := s.repo.RecordCausalEntry(ctx, contracts.CausalChainEntry{
 		ID:                uuid.New(),
 		PublicID:          contracts.GeneratePublicID("csl"),
 		TenantID:          cmd.TenantID,
@@ -129,17 +132,21 @@ func (s *DomainEventService) BuildCanonicalEnvelope(
 		CausationDepth:    cmd.CausationDepth,
 		CausationPathHash: pathHash,
 		CreatedAt:         recordedAt,
-	})
+	}); err != nil {
+		return contracts.BuildEnvelopeResult{}, fmt.Errorf("%w: failed to record causal chain entry: %v", ErrPersistence, err)
+	}
 
 	if cmd.TransactionGroupID != "" {
-		_, _ = s.repo.UpsertTransactionGroup(ctx, contracts.RegisterTransactionGroupPartCommand{
+		if _, err := s.repo.UpsertTransactionGroup(ctx, contracts.RegisterTransactionGroupPartCommand{
 			TenantID:           cmd.TenantID,
 			SourceService:      cmd.SourceService,
 			ExternalID:         eventID,
 			CorrelationID:      cmd.CorrelationID,
 			TransactionGroupID: cmd.TransactionGroupID,
 			ExpectedGroupSize:  groupSize,
-		})
+		}); err != nil {
+			return contracts.BuildEnvelopeResult{}, fmt.Errorf("%w: failed to register transaction group: %v", ErrPersistence, err)
+		}
 	}
 
 	return contracts.BuildEnvelopeResult{

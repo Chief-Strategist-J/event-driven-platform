@@ -113,3 +113,18 @@ func TestEventOpsDashboard_ContractsNormalization(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, contracts.ValidateHopPublicID(rec.PublicID))
 }
+
+func TestLocalizeBrokenHop_HealthyReturnsNonEmptyLink(t *testing.T) {
+	now := time.Now().UTC()
+	hops := []*contracts.PipelineHopRecord{{
+		HopCode: contracts.HopH1Outbox, Status: contracts.StatusOk, Tier: contracts.Tier0, LastReportedAt: now,
+	}}
+	for _, in := range [][]*contracts.PipelineHopRecord{hops, nil} {
+		broken, status, sev, action, cctl := rules.LocalizeBrokenHop(in, now)
+		assert.Nil(t, broken)
+		assert.Equal(t, contracts.StatusOk, status)
+		assert.Equal(t, contracts.SevInfo, sev)
+		assert.NotEmpty(t, action)
+		assert.Equal(t, rules.HealthyCCTLActionLink, cctl)
+	}
+}

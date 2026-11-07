@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
@@ -18,6 +19,21 @@ import (
 
 type CQRSHandler struct {
 	svc *cqrsfeature.CQRSService
+}
+
+type signingKeyResponse struct {
+	ID            uuid.UUID `json:"id"`
+	PublicID      string    `json:"public_id"`
+	TenantID      string    `json:"tenant_id"`
+	SourceService string    `json:"source_service"`
+	ExternalID    string    `json:"external_id"`
+	CorrelationID uuid.UUID `json:"correlation_id"`
+	KeyVersion    int       `json:"key_version"`
+	SecretKeyHash string    `json:"secret_key_hash"`
+	Status        string    `json:"status"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func NewCQRSHandler(svc *cqrsfeature.CQRSService) *CQRSHandler {
@@ -164,7 +180,21 @@ func (h *CQRSHandler) HandleRegisterSigningKey(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	h.writeResponse(w, http.StatusCreated, record, start, reqID, corrID, causationID)
+	// raw_secret_value is write-only: never echo key material back to the caller.
+	h.writeResponse(w, http.StatusCreated, signingKeyResponse{
+		ID:            record.ID,
+		PublicID:      record.PublicID,
+		TenantID:      record.TenantID,
+		SourceService: record.SourceService,
+		ExternalID:    record.ExternalID,
+		CorrelationID: record.CorrelationID,
+		KeyVersion:    record.KeyVersion,
+		SecretKeyHash: record.SecretKeyHash,
+		Status:        record.Status,
+		ExpiresAt:     record.ExpiresAt,
+		CreatedAt:     record.CreatedAt,
+		UpdatedAt:     record.UpdatedAt,
+	}, start, reqID, corrID, causationID)
 }
 
 func (h *CQRSHandler) HandleAuthoritativeRead(w http.ResponseWriter, r *http.Request) {

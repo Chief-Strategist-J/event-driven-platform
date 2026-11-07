@@ -5,6 +5,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -17,7 +19,8 @@ import (
 )
 
 var (
-	ErrCarrierMissing = errors.New("carrier map cannot be nil")
+	ErrCarrierMissing        = errors.New("carrier map cannot be nil")
+	ErrInvalidCoverageReport = errors.New("invalid coverage report")
 )
 
 type DistributedTracingService struct {
@@ -84,7 +87,9 @@ func (s *DistributedTracingService) InjectTraceContext(
 		corrUUID = uuid.New()
 	}
 
-	_ = s.repo.RecordSpanAudit(ctx, contracts.TraceSpanAudit{
+	// The audit trail is best-effort relative to the injected carrier, but a
+	// failure must be visible rather than silently dropped.
+	if err := s.repo.RecordSpanAudit(ctx, contracts.TraceSpanAudit{
 		ID:                      uuid.New(),
 		PublicID:                contracts.GeneratePublicID("tsa"),
 		TenantID:                cmd.TenantID,
@@ -100,7 +105,9 @@ func (s *DistributedTracingService) InjectTraceContext(
 		HasError:                false,
 		SanitizedAttributesJSON: rules.SanitizeAttributes(cmd.Carrier),
 		CreatedAt:               time.Now().UTC(),
-	})
+	}); err != nil {
+		log.Printf("distributed-tracing: failed to record span audit for trace %s: %v", w3c.TraceID, err)
+	}
 
 	return contracts.InjectTraceContextResult{
 		Traceparent: traceparent,
@@ -168,6 +175,10 @@ func (s *DistributedTracingService) ReportCoverage(
 	ctx context.Context,
 	cmd contracts.ReportCoverageCommand,
 ) (contracts.ReportCoverageResult, error) {
+	if err := validateCoverageCommand(&cmd); err != nil {
+		return contracts.ReportCoverageResult{}, err
+	}
+
 	ratio := 1.0
 	if cmd.TotalSpans > 0 {
 		ratio = float64(cmd.PropagatedSpans) / float64(cmd.TotalSpans)
@@ -198,7 +209,9 @@ func (s *DistributedTracingService) ReportCoverage(
 		UpdatedAt:       time.Now().UTC(),
 	}
 
-	_ = s.repo.UpsertPropagationCoverage(ctx, cov)
+	if err := s.repo.UpsertPropagationCoverage(ctx, cov); err != nil {
+		return contracts.ReportCoverageResult{}, err
+	}
 
 	return contracts.ReportCoverageResult{
 		HopSource:     cmd.HopSource,
@@ -206,4 +219,36 @@ func (s *DistributedTracingService) ReportCoverage(
 		CoverageRatio: ratio,
 		IsHealthy:     ratio >= 0.95,
 	}, nil
+}
+
+func validateCoverageCommand(cmd *contracts.ReportCoverageCommand) error {
+	cmd.TenantID = strings.TrimSpace(cmd.TenantID)
+	cmd.SourceService = strings.TrimSpace(cmd.SourceService)
+	cmd.ExternalID = strings.TrimSpace(cmd.ExternalID)
+	cmd.HopSource = strings.TrimSpace(cmd.HopSource)
+	cmd.HopTarget = strings.TrimSpace(cmd.HopTarget)
+
+	for name, v := range map[string]string{
+		"tenant_id":      cmd.TenantID,
+		"source_service": cmd.SourceService,
+		"external_id":    cmd.ExternalID,
+		"hop_source":     cmd.HopSource,
+		"hop_target":     cmd.HopTarget,
+	} {
+		if v == "" {
+			return fmt.Errorf("%w: %s is required", ErrInvalidCoverageReport, name)
+		}
+	}
+	switch cmd.HopType {
+	case contracts.HopTypeConnectRPC, contracts.HopTypeOutboxRelay, contracts.HopTypeKafkaConsumer, contracts.HopTypeAsyncReaction:
+	default:
+		return fmt.Errorf("%w: hop_type must be one of CONNECT_RPC, OUTBOX_RELAY, KAFKA_CONSUMER, ASYNC_REACTION", ErrInvalidCoverageReport)
+	}
+	if cmd.TotalSpans < 0 || cmd.PropagatedSpans < 0 {
+		return fmt.Errorf("%w: span counts must be non-negative", ErrInvalidCoverageReport)
+	}
+	if cmd.PropagatedSpans > cmd.TotalSpans {
+		return fmt.Errorf("%w: propagated_spans cannot exceed total_spans", ErrInvalidCoverageReport)
+	}
+	return nil
 }

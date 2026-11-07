@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/lib/pq"
+
 	"event-driven-platform/src/features/partitioning-strategy/contracts"
 	"event-driven-platform/src/features/partitioning-strategy/infrastructure/ports"
 	"event-driven-platform/src/features/partitioning-strategy/infrastructure/queries"
@@ -17,6 +19,16 @@ type PartitionPostgresAdapter struct {
 
 func NewPartitionPostgresAdapter(db *sql.DB) ports.PartitionRepositoryPort {
 	return &PartitionPostgresAdapter{db: db}
+}
+
+// mapInsertError turns unique violations into a 409 with a domain message
+// (no raw constraint name); everything else is an internal error.
+func mapInsertError(err error, conflictMessage string) error {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+		return platformErrors.NewConflictError(conflictMessage)
+	}
+	return platformErrors.NewInternalError(err.Error())
 }
 
 func (a *PartitionPostgresAdapter) SaveTopicTopology(ctx context.Context, top contracts.TopicTopology) error {
@@ -38,7 +50,7 @@ func (a *PartitionPostgresAdapter) SaveTopicTopology(ctx context.Context, top co
 		top.UpdatedAt,
 	)
 	if err != nil {
-		return platformErrors.NewInternalError(err.Error())
+		return mapInsertError(err, "a topic topology with this topic_name already exists for the tenant")
 	}
 	return nil
 }
@@ -118,7 +130,7 @@ func (a *PartitionPostgresAdapter) CreateMigrationRunbook(ctx context.Context, r
 		rec.UpdatedAt,
 	)
 	if err != nil {
-		return platformErrors.NewInternalError(err.Error())
+		return mapInsertError(err, "a migration with this migration_id already exists for the tenant")
 	}
 	return nil
 }

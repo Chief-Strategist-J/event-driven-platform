@@ -11,6 +11,7 @@ import (
 	"event-driven-platform/src/features/audit-trail/contracts"
 	"event-driven-platform/src/features/audit-trail/infrastructure/ports"
 	"event-driven-platform/src/features/audit-trail/infrastructure/queries"
+	infraDb "event-driven-platform/src/infra/database"
 )
 
 type PostgresAuditTrailRepositoryAdapter struct {
@@ -42,7 +43,7 @@ func (a *PostgresAuditTrailRepositoryAdapter) GetLatestRecord(ctx context.Contex
 	}
 	if err != nil {
 		span.RecordError(err)
-		return nil, err
+		return nil, infraDb.MapDatabaseError(err)
 	}
 	return &rec, nil
 }
@@ -61,7 +62,7 @@ func (a *PostgresAuditTrailRepositoryAdapter) AppendAuditRecord(ctx context.Cont
 	)
 	if err != nil {
 		span.RecordError(err)
-		return err
+		return infraDb.MapDatabaseError(err)
 	}
 	return nil
 }
@@ -73,7 +74,7 @@ func (a *PostgresAuditTrailRepositoryAdapter) GetShardRecordsRange(ctx context.C
 	rows, err := a.db.QueryContext(ctx, queries.GetShardRecordsRangeQuery, in.TenantID, in.ShardID, startSeq, endSeq)
 	if err != nil {
 		span.RecordError(err)
-		return nil, err
+		return nil, infraDb.MapDatabaseError(err)
 	}
 	defer rows.Close()
 
@@ -87,7 +88,7 @@ func (a *PostgresAuditTrailRepositoryAdapter) GetShardRecordsRange(ctx context.C
 			&rec.RecordHash, &rec.CanonicalPayload, &rec.OccurredAt, &rec.IngestedAt,
 		); err != nil {
 			span.RecordError(err)
-			return nil, err
+			return nil, infraDb.MapDatabaseError(err)
 		}
 		records = append(records, rec)
 	}
@@ -110,7 +111,7 @@ func (a *PostgresAuditTrailRepositoryAdapter) GetLatestCheckpoint(ctx context.Co
 	}
 	if err != nil {
 		span.RecordError(err)
-		return nil, err
+		return nil, infraDb.MapDatabaseError(err)
 	}
 	return &cp, nil
 }
@@ -128,7 +129,7 @@ func (a *PostgresAuditTrailRepositoryAdapter) AppendCheckpoint(ctx context.Conte
 	)
 	if err != nil {
 		span.RecordError(err)
-		return err
+		return infraDb.MapDatabaseError(err)
 	}
 	return nil
 }
@@ -145,7 +146,7 @@ func (a *PostgresAuditTrailRepositoryAdapter) RecordAccessLog(ctx context.Contex
 	)
 	if err != nil {
 		span.RecordError(err)
-		return err
+		return infraDb.MapDatabaseError(err)
 	}
 	return nil
 }
@@ -157,7 +158,7 @@ func (a *PostgresAuditTrailRepositoryAdapter) QueryAuditRecords(ctx context.Cont
 	rows, err := a.db.QueryContext(ctx, queries.QueryAuditRecordsBase, in.TenantID, in.ShardID, in.Limit)
 	if err != nil {
 		span.RecordError(err)
-		return nil, err
+		return nil, infraDb.MapDatabaseError(err)
 	}
 	defer rows.Close()
 
@@ -171,7 +172,7 @@ func (a *PostgresAuditTrailRepositoryAdapter) QueryAuditRecords(ctx context.Cont
 			&rec.RecordHash, &rec.CanonicalPayload, &rec.OccurredAt, &rec.IngestedAt,
 		); err != nil {
 			span.RecordError(err)
-			return nil, err
+			return nil, infraDb.MapDatabaseError(err)
 		}
 		records = append(records, rec)
 	}
