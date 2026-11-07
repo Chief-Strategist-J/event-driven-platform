@@ -119,3 +119,37 @@ sequenceDiagram
 ### Negative & Mitigations
 * **Write Amplification**: Every batch updates `consumer_stored_offset`. *Mitigation*: Piggybacked directly onto existing business database transactions.
 
+
+## Amendment 2026-11-07: Rewind invariants, input validation and lag route
+
+### Problem observed
+1. `POST /api/v1/offsets/rewind` accepted a target offset ahead of the stored offset (a forward jump disguised as a rewind) and accepted a rewind for a partition that had no stored offset.
+2. `GET /api/v1/offsets/lag` was not registered (404/405 from the mux).
+3. `POST /api/v1/offsets/commit` with blank ids, negative values or a non-UUID `correlationId` reached Postgres and returned raw `pq:` errors.
+
+### Root cause
+1. `RewindOffset` read the stored offset but ignored the error (`if err == nil && existing != nil`), defaulting `prevOffset` and `logEndOffset` to 0, and never compared the target with either (RC3, RC4 stub-like behavior).
+2. The handler `HandleEvaluateLag` existed but the router never registered it (RC5).
+3. Validation was delegated to Postgres types/CHECKs (RC2).
+
+### Decision / fix
+Rewind invariants now enforced in `OffsetManagementService.RewindOffset`, in this order:
+1. Partition key valid (`tenantId`, `groupId`, `topic` non-empty with no leading/trailing whitespace; `partition >= 0`) and envelope valid (`sourceService`, `externalId` trimmed non-empty; `correlationId` a UUID) -> 400.
+2. A stored offset must exist for the partition, otherwise the repository's not-found error is returned (404). Rewind never creates an offset.
+3. `targetOffset <= stored offset`, else `ErrRewindForwardJump` surfaced as 400 ("use fast-forward to move forward").
+4. `targetOffset <= logEndOffset`, else `ErrRewindBeyondLogEnd` as 400.
+`CommitOffset` now validates the same key/envelope plus `0 <= offset <= logEndOffset` and `logEndOffset >= 0` before touching the repository (400). `ComputeFastForwardOffset` returns the sentinel `ErrInvalidFastForward` when `shiftBy <= 0`. Service-level validation was chosen over DB constraints so clients get clean 400s without constraint text.
+
+`GET /api/v1/offsets/lag` is registered in `offset-management.router.go`. Parameters: `tenant_id` or `tenantId` (fallback header `X-Tenant-Id`), `group_id`/`groupId`, `topic` (all required, else 400), optional `partition` (non-negative integer, default 0), `rate` (default 1 per the verified facts).
+
+### API-visible behavior change
+- Rewind forward jump / beyond log end: accepted -> `400`; unknown partition: accepted -> `404` (**breaking** for callers that used rewind to seed or advance offsets).
+- Commit invalid input: raw-pq error -> clean `400`.
+- New endpoint `GET /api/v1/offsets/lag` (additive).
+
+### Verification
+Live: forward-jump and unknown-partition rewinds rejected; lag endpoint returned lag 90 for a seeded partition. Unit test `TestRewindAndCommitBounds` in `src/features/offset-management/tests/offset_bounds_test.go`.
+
+### Remaining gaps
+- The rewind precondition "consumer group must be stopped" (`ErrConsumerGroupMustBeStopped`) is defined in rules; this amendment did not verify that rewind enforces it.
+- No HTTP-level tests for the router/handler.

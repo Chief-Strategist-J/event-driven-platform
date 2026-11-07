@@ -33,3 +33,4 @@
 | E10.1 | Single shared KEK used across all service workloads | SECURITY | Compromised peripheral service decrypts core customer data | Role-gated KEK policies and field-class decryption entitlements |
 | E12.1 | Crypto library upgrade alters AAD serialization silently | OUTAGE | Historical ciphertexts fail authentication tag check | Cross-version golden ciphertext test suite in CI |
 
+| E13.1 | Decrypt denied or failed but envelope reports `success:true` (Amendment 2026-11-07) | SECURITY | Callers branching on the envelope flag treat unauthorized/tampered/malformed decrypt as success | Envelope `success` is `status < 400`; decrypt returns 403 `UNAUTHORIZED` / 400 `TAMPERED` / 400 `MALFORMED` with `success:false`. Operator: alert on 403/400 decrypt rates (possible probing or corruption). |

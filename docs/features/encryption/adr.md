@@ -41,3 +41,23 @@ Event-driven distributed architectures stream and store personally identifiable 
 - **Positive**: Strict GDPR/CCPA crypto-shredding compliance on append-only streams, zero cross-subject ciphertext transplantation, bounded KMS API overhead, explicit error classification.
 - **Negative**: Added CPU overhead for AES-256-GCM AEAD operations, reduced compression ratios for encrypted message fields, blind index management overhead.
 
+
+## Amendment 2026-11-07: Envelope success flag on decrypt failures
+
+### Problem observed
+`POST` decrypt returned HTTP 403 (outcome `UNAUTHORIZED`) or HTTP 400 (outcomes `TAMPERED`, `MALFORMED`) while the JSON envelope said `"success": true`. Clients and gateways that key off the envelope flag treated a denied or tampered decryption as success.
+
+### Root cause
+`EncryptionHandler.writeResponse` hard-coded `Success: true` for every call routed through it. `DecryptField` sets the HTTP status from `out.Outcome` after the service returns without error, then reuses `writeResponse`, so the status and the envelope disagreed (RC5: handler-level contract never tested).
+
+### Decision / fix
+Envelope success rule: `success = (HTTP status < 400)`. `writeResponse` now sets `Success: status < http.StatusBadRequest`, so any response the handler emits with a 4xx/5xx status carries `success:false`. The decrypt `data` payload (including the outcome) is still returned alongside it. The HTTP status mapping itself is unchanged.
+
+### API-visible behavior change
+Decrypt with UNAUTHORIZED/TAMPERED/MALFORMED: envelope `success` changes from `true` to `false` (status codes unchanged at 403/400). **Breaking** for any client that ignored the status code and branched on `success`.
+
+### Verification
+Re-tested live: unauthorized decrypt returns 403 with `success:false`. No new unit test was added for the envelope flag.
+
+### Remaining gaps
+No automated handler-level test for the flag. Other features' envelopes were not audited in this change for the same pattern.

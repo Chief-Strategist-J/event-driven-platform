@@ -64,3 +64,16 @@ This failure catalog documents all failure modes across the event schema evoluti
      }
      ```
 
+
+## 3. Amendment 2026-11-07: Failure Modes Added
+
+| Failure ID | Failure Mode | Severity | Invariant Violated | Detection Mechanism | Response / Operator Action |
+|---|---|---|---|---|---|
+| **F-SE-A1** | Breaking schema registered unchecked (fixed) | OUTAGE | SE-04 | `CheckSchemaCompatibility` at `POST /api/v1/schemas/register` | `409` listing violations such as `BACKWARD: new required field "x" has no default (vs version N)`. Fix the schema (add a default / keep the field) or fork the subject. |
+| **F-SE-A2** | Non-monotonic version | DEGRADE | SE-04 | `ErrNonMonotonicVersion` | `409`; re-register with a higher version. |
+| **F-SE-A3** | Duplicate fingerprint | LOW | SE-04 | `ErrDuplicateSchemaFingerprint` | `409`; the schema already exists in the lineage. |
+| **F-SE-A4** | Unknown compatibility mode | LOW | n/a | `ErrInvalidCompatibilityMode` | `400`; use one of the six modes. `NONE` is not accepted. |
+| **F-SE-A5** | Unparseable / non-JSON definition | MEDIUM | SE-04 | Not detected: comparison is skipped | Registration passes without semantic check; review such schemas manually (open gap). |
+| **F-SE-A6** | Type widening flagged as break | LOW | n/a | Strict canonical-JSON type equality | `409`; add a new field or fork the subject instead of changing a type. |
+
+Migration 0028 rollback: run `0028_..._per_tenant.rollback.sql`; it fails if two tenants already share a topic_name, migration_id or rebuild_id (resolve duplicates first).

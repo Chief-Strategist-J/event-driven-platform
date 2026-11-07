@@ -35,3 +35,5 @@
 | E9.1 | Investigator searches audit logs of self or peers without case | SECURITY | Unauthorized covert snooping on colleagues | Query path restricted; every query audited in `audit_trail_access_log` |
 | E10.1 | Audit capture flag disabled during production incident | LOSS | Critical operational events go unrecorded | Class A/C audit capture cannot be disabled via configuration flags |
 
+| E11.1 | Database error leaks driver text or constraint name via audit API (Amendment 2026-11-07) | SECURITY | Schema details exposed to clients; integrity violations misreported as 400 | Adapter errors pass through `MapDatabaseError`; handler `writeServiceError` uses `errors.As`; class-23 violations return 409 with a generic message. Operator: inspect server logs for the underlying error. |
+| E11.2 | `GET /audits/query` without `tenant_id` | COMPLIANCE | Query silently scoped to tenant `default` | **Open**: handler defaults tenant to `default`; `shard_id` is required (400 if missing). Operator: always pass `tenant_id`. |

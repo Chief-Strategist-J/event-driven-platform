@@ -78,3 +78,13 @@ This failure catalog documents all critical failure modes across the eventual co
    - Transitions incident to `MANUAL_INTERVENTION_REQUIRED`.
    - P1 page dispatched with tag `REPEAT_HEAL_CIRCUIT_TRIPPED`.
 
+
+## 3. Amendment 2026-11-07: Failure Modes Added
+
+| Failure ID | Failure Mode | Severity | Trigger | Detection | Response / Operator Action |
+|---|---|---|---|---|---|
+| **F-ECM-A1** | Heal requested for nonexistent incident | MEDIUM | `POST .../incidents/{id}/heal` with unknown id (or wrong tenant) | `GetDriftIncident` / `UpdateDriftIncidentStatus` return `ErrIncidentNotFound` | `404`. Verify the incident id and tenant; nothing was modified. Previously a false `healed:true`. |
+| **F-ECM-A2** | Heal limit reached | HIGH | `heal_attempts` >= max attempts (persisted counter now honored) | Heal returns not-healed; incident status `MANUAL_INTERVENTION` | Stop automated healing; operator investigates the drift root cause (see Scenario 2, F21.1). |
+| **F-ECM-A3** | Heal status write fails | HIGH | DB error while updating incident status | Error returned (previously discarded) | Request fails with a server error instead of reporting success; retry after DB recovery. |
+| **F-ECM-A4** | Canary delivery unproven | MEDIUM | `POST .../probes/canary` | Outcome `UNKNOWN` + `CANARY_PROBE` row in `consistency_check_run_history` (unknown_count 1, coverage 0) | Treat UNKNOWN as not-green (three-valued logic). The probe does not yet observe delivery; confirm arrival out-of-band until a reconciliation step exists. |
+| **F-ECM-A5** | Canary record write fails | MEDIUM | DB error recording the probe | Error returned | Request fails; no false MATCH is reported. |

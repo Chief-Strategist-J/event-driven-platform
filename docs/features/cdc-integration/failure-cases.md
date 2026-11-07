@@ -145,3 +145,14 @@ This catalog documents failure modes across the Change Data Capture (CDC) lifecy
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **F14.1** | Shredded data resurfaces via CDC snapshots | **COMPLIANCE** | Erased customer data resurrected in downstream analytics through unmanaged CDC table snapshots. | PII fields in outbox and raw tables must be ciphertext-encrypted (`MT-09`). Shredding DEK guarantees irrecoverable ciphertext. | Data privacy compliance scanner. |
 
+
+---
+
+### Category 15: API Error Mapping (Amendment 2026-11-07)
+
+| Node | Scenario | Severity | Root Cause | Handling & Mitigation | Detection |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **F15.1** | `GET /api/v1/cdc/connectors/{name}` returns 404 for a registered connector | **DEGRADE** | Name taken from `pathParts[3]` (the literal `connectors` segment) instead of the route parameter. | Handler uses `r.PathValue("name")`; unknown name returns 404 `NOT_FOUND`. Operator: confirm the name matches `connector_name` in `cdc_connector_inventory`. | HTTP-level route test (not yet automated); live smoke test. |
+| **F15.2** | Duplicate `slot_name` or connector name on register | **DEGRADE** | Unique violation previously wrapped as internal error with raw `pq:` text. | `database.MapDatabaseError` returns 409 `CONFLICT` with a generic message; service pre-check returns 409 `cdc connector already registered`. Operator: choose a unique slot/connector name or fetch the existing connector. | 409 rate on `POST /cdc/connectors`. |
+| **F15.3** | Signal or heartbeat sent without `X-Correlation-Id` | **DEGRADE** | No correlation id generated at the edge. | Handler generates a UUIDv7 correlation id and uses it for the request (propagation into the response body is unverified). | Absence of correlation-id validation errors on signal/heartbeat. |
+| **F15.4** | Non-application error during CDC call | **DEGRADE** | Unclassified repository or driver failure. | 500 with generic `internal cdc error`; details only in server logs. Operator: inspect logs by request id. | 5xx rate; log search by `X-Request-Id`. |

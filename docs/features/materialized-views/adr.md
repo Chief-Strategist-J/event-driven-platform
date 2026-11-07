@@ -189,3 +189,28 @@ flowchart TD
 * **Full Diagram Inventory**: Complete 9-diagram operational suite is cataloged in [Materialized Views Diagrams](file:///home/btpl-lap-22/live/System-Architect/event-driven-platform/docs/features/materialized-views/diagrams.md).
 * **Failure Catalog**: Complete 18-scenario forensic catalog is maintained in [Materialized Views Failure Cases](file:///home/btpl-lap-22/live/System-Architect/event-driven-platform/docs/features/materialized-views/failure-cases.md).
 * **CI Verification Gate**: Every commit verifies version monotonicity guards, state machine transitions, and zero inline comments.
+
+## Amendment 2026-11-07: Duplicate-view 409, unknown-view 404, and per-tenant rebuild uniqueness
+
+### Problem observed
+- Registering a duplicate view or starting a duplicate rebuild returned `400` carrying a raw constraint name.
+- `POST /api/v1/materialized-views/query` for an unknown view returned `200` with `version 0`, indistinguishable from an empty-but-real view.
+
+### Root cause
+- RC2: unique violations went through the generic `database.MapDatabaseError`, which produced a class-23 message including the constraint name.
+- RC3/RC4: `QueryViewWithConsistencyToken` never checked that the view exists.
+
+### Decision / fix
+- `mapUniqueViolation` in the Postgres adapter converts SQLSTATE 23505 into a conflict `ApplicationError` (409) with domain messages: "a materialized view with this view_name is already registered for the tenant" (`RegisterView`) and "a rebuild with this rebuild_id already exists" (`InitiateRebuild`). Other errors keep using `MapDatabaseError`.
+- `QueryViewWithConsistencyToken` validates `tenant_id` and `view_name` non-empty (400), then calls `GetViewByName`, so an unknown view returns 404.
+- Uniqueness facts: `materialized_view_registry.view_name` is already `UNIQUE (tenant_id, view_name)` (an earlier claim that it was global was wrong). `materialized_view_rebuild_log.rebuild_id` was globally unique (migration 0015), which let one tenant block another.
+- **Migration 0028** (`database/migrations/sql/0028_scope_partitioning_and_rebuild_uniqueness_per_tenant.sql`, with `.rollback.sql`) changes it to `UNIQUE (tenant_id, rebuild_id)` (constraint `uk_materialized_view_rebuild_log_tenant_rebuild_id`, replacing `uk_materialized_view_rebuild_log_rebuild_id`); it also scopes two partitioning constraints (see partitioning-strategy). Reversible, lock risk LOW, schema only. **NOT applied to the live database** (`serve` does not run migrations; the live DB has no `schema_migrations` table) - apply through the migration tooling. Rollback re-adds global uniqueness and fails if tenants already share a rebuild_id.
+
+### API-visible behavior change
+Duplicate view/rebuild `400` -> `409`; unknown view query `200 version 0` -> `404` (**breaking** for clients that polled until the view appeared); missing tenant/view `400`.
+
+### Verification
+Live: duplicate view -> 409; unknown view query -> 404. Unit test `TestQueryViewUnknownViewIsNotFound` in `src/features/materialized-views/tests/materialized_views_query_unit_test.go`.
+
+### Remaining gaps
+The rebuild-duplicate 409 and the 0028 constraint change are unverified against live Postgres (migration not applied; no Postgres-backed CI test). Until 0028 is applied, a rebuild_id collision across tenants still conflicts.

@@ -79,3 +79,26 @@ This document details failure modes, impact ratings, automated mitigations, and 
   3. Permanent poison pills are emitted directly to the Dead-Letter Queue (DLQ) with exception stacktraces, original headers, and failure metadata, allowing partition consumption to resume.
 * **Detection:** Prometheus alert on `dlq_messages_published_total` rate spike and consumer lag growth.
 
+
+## 5. Amendment 2026-11-07: Failure Modes Added
+
+### FC-EDC-A1: Command dispatch silently dropped (fixed)
+* **Scenario:** `commands/dispatch` returned success without persisting anything.
+* **Severity:** LOSS
+* **Detection:** Status was `DISPATCHED_TO_OUTBOX` with no outbox row. Now an outbox row (PENDING) must exist for every `QUEUED_IN_OUTBOX` response.
+* **Handling:** Persisted via `SaveOutboundCommand`; failure to persist returns an error instead of success.
+
+### FC-EDC-A2: Invalid dispatch request
+* **Trigger:** missing `target_topic`, `reply_to_topic`, `tenant_id`, `source_service` or `command_name`; non-JSON `command_payload`.
+* **Response:** `400` (`ErrInvalidCommand`).
+* **Operator action:** Fix the request; `command_payload` is a JSON string.
+
+### FC-EDC-A3: Duplicate command external_id
+* **Trigger:** same `external_id` re-sent for the same tenant/source service.
+* **Response:** `409 CONFLICT` (`ErrDuplicateCommand`).
+* **Operator action:** Treat as already queued.
+
+### FC-EDC-A4: Queued command never delivered (topic missing)
+* **Trigger:** `target_topic` does not exist on the broker (auto-create disabled).
+* **Detection:** outbox row PARKED after 5 retries with "Unknown Topic Or Partition".
+* **Operator action:** create the topic, then reset the row (see transactional-outbox failure cases F-OBX-A3).

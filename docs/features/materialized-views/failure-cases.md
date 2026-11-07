@@ -47,3 +47,13 @@ This failure catalog documents all failure modes across the materialized view li
 5. When lag reaches near-zero, worker transitions to `PROMOTED`: an atomic transaction renames `{view_name}_shadow` $\rightarrow$ `{view_name}` while demoting the old table.
 6. Worker decommissions and drops the old table, transitioning to `DECOMMISSIONED_OLD`.
 
+
+## 3. Amendment 2026-11-07: Failure Modes Added
+
+| Failure ID | Failure Mode | Severity | Trigger | Detection | Response / Operator Action |
+|---|---|---|---|---|---|
+| **F-MV-A1** | Duplicate view registration | LOW | Same `view_name` for a tenant | SQLSTATE 23505 -> `mapUniqueViolation` | `409` with domain message (no constraint name). Use a different name or reuse the existing view. |
+| **F-MV-A2** | Duplicate rebuild id | LOW | Same `rebuild_id` (globally unique until migration 0028 is applied, then per tenant) | 23505 | `409`. Generate a fresh `rebuild_id`. |
+| **F-MV-A3** | Query of unknown view | MEDIUM | `POST /materialized-views/query` for a view not registered | `GetViewByName` not found | `404` (previously 200 with version 0, which looked like an empty view). Register the view first. |
+| **F-MV-A4** | Query missing tenant/view | LOW | Empty `tenant_id` or `view_name` | Service validation | `400`. |
+| **F-MV-A5** | Migration 0028 rollback blocked | LOW | Tenants share a `rebuild_id` when rolling back | Constraint creation fails | Resolve duplicate ids per tenant, then re-run the rollback. |

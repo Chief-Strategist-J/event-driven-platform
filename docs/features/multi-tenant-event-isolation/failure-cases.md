@@ -101,3 +101,13 @@ This catalog documents failure modes across the multi-tenant event lifecycle, de
 | **F10.1** | "Deleting the key equals complete erasure" | **COMPLIANCE** | DEK is shredded, but plaintext copies persist in search indices, Redis caches, and database projections. | Enforce `MT-10`: erasure orchestrator executes active checklist across projections, search indices, and caches. | Post-erasure synthetic search scan. |
 | **F10.5** | Historical replay resurrects shredded data | **COMPLIANCE** | Replaying event streams attempts to decrypt shredded records and throws errors, or restores historical plaintext. | Crypto adapter catches shredded status and emits `[ERASED]` marker; replay pipelines recognize and preserve marker. | Replay audit ledger verification. |
 
+
+## Amendment 2026-11-07: Failure Modes Added (API layer)
+
+| ID | Failure Mode | Trigger | Detection | Response | Operator Action |
+|---|---|---|---|---|---|
+| **F-MT-A1** | Invalid tenant tier | `POST /api/v1/tenants` with unsupported tier | Service/contract validation | `400` (previously 500) | Use a supported tier. |
+| **F-MT-A2** | Lifecycle update for unknown tenant | `PUT /api/v1/tenants/{tenant_id}/lifecycle` | Not-found `ApplicationError` | `404` (previously 500) | Check `tenant_id`; register the tenant first. |
+| **F-MT-A3** | Unknown lifecycle target | `target_state` not one of ONBOARDING/ACTIVE/SUSPENDED/OFFBOARDING/OFFBOARDED | `isKnownLifecycleState` | `400` (previously 409) | Fix the request. |
+| **F-MT-A4** | Illegal lifecycle transition | Known target not reachable from current state | State machine | `409` (unchanged) | Follow the allowed lifecycle path. |
+| **F-MT-A5** | Verify-envelope accepts SUSPENDED tenant (open) | `POST /api/v1/tenants/verify-envelope` for a suspended tenant | Not detected | Passes | Known gap: do not rely on verify-envelope as a suspension gate. |

@@ -163,3 +163,34 @@ The CDC feature exposes 4 REST operations under `/api/v1/cdc`:
 * **Tier 3 (PostgreSQL Adapter)**: Verifies relational persistence, check constraints, and optimistic locking against live PostgreSQL.
 * **Tier 4 (Canary Reconciliation)**: Simulates synthetic end-to-end event injection and verifies 5000ms SLA evaluation.
 
+
+## Amendment 2026-11-07: Connector lookup route, error mapping, and signal correlation defaults
+
+### Problem observed
+- `GET /api/v1/cdc/connectors/{name}` returned 404 for every name, including connectors that had just been registered.
+- `POST /api/v1/cdc/connectors` with a duplicate `slot_name` or connector name returned 500 containing raw `pq:` driver text.
+- Signal and heartbeat requests sent without `X-Correlation-Id` failed downstream because no correlation id was generated.
+
+### Root cause
+- `cdc.handler.go: HandleGetConnector` derived the name with `strings.Split(path, "/")` and `pathParts[3]`. With the mounted route that element is the literal segment `connectors`, so the lookup key was always wrong (RC5: no HTTP-level test exercised the route).
+- Handlers mapped errors with `strings.Contains(err.Error(), "validation"/"blank"/"already registered"/"not found")` (RC1). Any error whose text did not match fell through to 500.
+- `cdc_postgres.adapter.go: RegisterConnector` wrapped every insert failure in `NewInternalError(fmt.Sprintf(... %v, err))`, so a unique violation (RC2) became a 500 with driver text.
+
+### Decision / fix
+- `HandleGetConnector` reads `r.PathValue("name")`.
+- New `CDCHandler.writeServiceError` uses `errors.As` against `*ApplicationError` and returns its status, canonical code and message (validation 400, not found 404, conflict 409). Non-application errors return 500 with the generic message `internal cdc error`.
+- `RegisterConnector` returns `database.MapDatabaseError(err)`, so unique violations become 409 with the generic integrity message (no constraint name, see `src/infra/database/error_mapper.go`).
+- `HandleDispatchSignal` and `HandleHeartbeat` generate a UUIDv7 correlation id when the header is absent.
+
+### API-visible behavior change
+- `GET /cdc/connectors/{name}`: 404 for existing connectors becomes 200 (bug fix; clients that worked around it are unaffected).
+- Duplicate connector or slot: 500 becomes 409.
+- Error messages for non-application errors are now generic (`internal cdc error`) instead of the raw error text.
+- Not breaking for correct clients.
+
+### Verification
+Re-tested live against the rebuilt image (`chiefj/event-driven-platform:fixes`): GET by name returns 200, duplicate slot_name and duplicate connector return 409. No new CDC unit test was added in this change and the handler routes have no HTTP-level test (unverified in CI).
+
+### Remaining gaps
+- CDC still runs on the mock Kafka Connect adapter; Debezium is not integrated, so a registered connector does not stream WAL changes.
+- Handler behavior is covered only by manual live re-test, not an automated HTTP test.

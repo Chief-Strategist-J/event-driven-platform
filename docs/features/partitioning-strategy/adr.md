@@ -157,3 +157,25 @@ The Partitioning Strategy feature exposes 5 REST operations under `/api/v1/parti
 * **Tier 3 (Murmur2 Affinity)**: Tests hash determinism, 31-bit positive bitmasking, and demonstrates key remapping risks under partition expansion.
 * **Tier 4 (PostgreSQL Integration)**: Tests persistence, check constraints, optimistic locking, and immutability triggers against live PostgreSQL.
 
+
+## Amendment 2026-11-07: Duplicate handling and per-tenant uniqueness (migration 0028)
+
+### Problem observed
+Registering a duplicate topic topology, migration runbook, or advancing a migration with a stale `expectedPhase` returned `400`/`500` with raw constraint text or a plain string error instead of a conflict.
+
+### Root cause
+RC1/RC2: `SaveTopicTopology` and `CreateMigrationRunbook` wrapped every database error as `NewInternalError(err.Error())`, leaking the constraint message; the phase-conflict error in `AdvanceMigration` was a plain `fmt.Errorf` the handler could not map to 409. Separately, migration 0014 declared `topic_name` and `migration_id` globally unique, so one tenant could block another.
+
+### Decision / fix
+- `mapInsertError` in `partition_postgres.adapter.go`: SQLSTATE 23505 -> `NewConflictError` (409): "a topic topology with this topic_name already exists for the tenant" / "a migration with this migration_id already exists for the tenant"; other errors remain internal errors.
+- `AdvanceMigration` returns `NewConflictError("phase conflict: expected X, current Y")` (409).
+- **Migration 0028** (`database/migrations/sql/0028_scope_partitioning_and_rebuild_uniqueness_per_tenant.sql`, rollback `...rollback.sql`): drops `uk_partition_topic_topology_topic_name` and adds `uk_partition_topic_topology_tenant_topic_name UNIQUE (tenant_id, topic_name)`; drops `uk_partition_migration_runbook_log_migration_id` and adds `uk_partition_migration_runbook_log_tenant_migration_id UNIQUE (tenant_id, migration_id)`; same for `materialized_view_rebuild_log.rebuild_id`. Why: all lookups are already tenant-scoped, so global uniqueness only caused cross-tenant interference. Reversible, lock risk LOW, schema only. **NOT applied to the live database** (startup `serve` does not run migrations; the live DB has no `schema_migrations` table): apply via the migration tooling. Rollback restores global uniqueness and fails if tenants now share values.
+
+### API-visible behavior change
+Duplicate topology/migration and phase conflicts: `400/500` -> `409` with a domain message. After 0028 is applied, two tenants may use the same `topic_name`/`migration_id` (before, the second got a conflict). Note the 409 message already says "for the tenant" although the database constraint is global until 0028 is applied.
+
+### Verification
+Mapping verified by code reading and the live materialized-views duplicate check (the shared pattern); no dedicated live run or unit test for partitioning duplicates was recorded in the verified facts (unverified).
+
+### Remaining gaps
+Migration 0028 is unapplied; no Postgres-backed CI coverage for the unique-violation mapping.

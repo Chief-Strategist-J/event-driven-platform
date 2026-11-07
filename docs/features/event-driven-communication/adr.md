@@ -70,3 +70,30 @@ We selected **Option 3: Hybrid Architecture with ConnectRPC Reads, Outbox-Backed
 * Increased architectural complexity (requires outbox pollers, deduplication tables, and saga coordinator ledgers).
 * Eventual consistency requires UI/UX paradigms that accommodate asynchronous completion (e.g., polling, WebSockets, optimistic UI).
 
+
+## Amendment 2026-11-07: Command dispatch now persists to the transactional outbox
+
+### Problem observed
+`POST /api/v1/communication/commands/dispatch` returned `202` with status `DISPATCHED_TO_OUTBOX`, but no outbox row existed and nothing was ever published. (Note: `/api/v1/commands/dispatch` is a different route belonging to CQRS.)
+
+### Root cause
+RC4: `EventCommunicationService.DispatchAsyncCommand` was a scaffolded stub that generated a `cmd_...` id and returned a success status without any repository call. The status string described a side effect that never happened.
+
+### Decision / fix
+- `DispatchAsyncCommand` now builds a JSON envelope (`command_id`, `command_name`, `reply_to_topic`, `timeout_seconds`, `payload`) and persists one outbox row through the new repository method `SaveOutboundCommand` (query `InsertOutboundCommandOutbox`). Row shape: `aggregate_type` = `target_topic` (the relay uses `aggregate_type` as the Kafka topic), `aggregate_id` = command id, `event_type` = `command_name`, `schema_version` = v1, state PENDING, headers `{reply_to_topic: ...}`.
+- Status renamed to `QUEUED_IN_OUTBOX`: the service only guarantees durable queuing; delivery is asynchronous via the relay. We chose to reuse the outbox rather than publish directly to Kafka so the command shares the dual-write protection and retry/parking behavior of every other event.
+- Validation (`ErrInvalidCommand`): non-empty `target_topic`, `reply_to_topic`, `tenant_id`, `source_service`, `command_name`; `command_payload` must be valid JSON (empty means `{}`). `external_id` defaults to the command id when absent; a non-UUID `correlation_id` is replaced by a generated UUID. A unique violation maps to `ports.ErrDuplicateCommand` (409).
+
+### API-visible behavior change
+- Response `status`: `DISPATCHED_TO_OUTBOX` -> `QUEUED_IN_OUTBOX` (**breaking** for clients matching the old string).
+- New `400` for missing/invalid fields; new `409` for duplicate `external_id`.
+- `command_payload` must be a JSON string containing valid JSON.
+
+### Verification
+- Live: dispatch returned QUEUED_IN_OUTBOX, an outbox row was created and the relay moved it to PUBLISHED.
+- Unit tests updated in `src/features/event-driven-communication/tests/event_driven_communication_unit_test.go`.
+
+### Remaining gaps
+- Because `target_topic` becomes the Kafka topic, it must exist beforehand or the row is PARKED (see transactional-outbox RC6).
+- The relay publishes only the stored headers for these rows (`reply_to_topic`); `event_type`/`schema_version`/`source_service` headers are set by `OutboxService.StageEvent`, which this path bypasses (verified from the code; the live header output for this path was not checked).
+- No reply correlation/timeout enforcement is implemented in this path (not verified beyond the envelope fields).

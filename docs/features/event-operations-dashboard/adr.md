@@ -27,3 +27,23 @@ Operators and on-call engineers require a centralized, production-grade observab
 ## Consequences
 - **Positive**: Strict decoupling of metric aggregation from operational actions; fail-closed triage recommendations; complete audit trail for incident analysis.
 - **Trade-off**: Requires periodic hop status reporting and metadata synchronization from running services.
+
+## Amendment 2026-11-07: Triage localization for healthy flows
+
+### Problem observed
+`POST /api/v1/ops/triage/localize` for a flow with no degraded hop (healthy or unknown) returned `400`. The request itself was valid.
+
+### Root cause
+`rules.LocalizeBrokenHop` returned an empty C-CTL action link for the all-healthy case. The persisted triage record (`ops_incident_triage`) has constraint `ck_ops_incident_triage_link_btrim`, which rejects an empty link; the insert failed and the database error surfaced as 400 (RC2: validation delegated to a DB CHECK).
+
+### Decision / fix
+`LocalizeBrokenHop` now returns the constant `rules.HealthyCCTLActionLink` = `/control-plane/consumers/status` for the healthy case. It is a non-empty, read-only control-plane link, so the triage record satisfies the constraint and operators get a harmless pointer instead of nothing. We kept the DB constraint (it protects the "every triage points at a control action" invariant) and fixed the producer of the value.
+
+### API-visible behavior change
+Healthy/unknown flow: `400` -> `200` with `localized_hop` `NONE` and the default link above. Degraded flows are unchanged.
+
+### Verification
+Live re-test returned 200 with localized_hop NONE. Unit test updated in `src/features/event-operations-dashboard/tests/event_operations_dashboard_unit_test.go`.
+
+### Remaining gaps
+The default link is a fixed string, not checked against an actual control-plane route (unverified that the path exists).

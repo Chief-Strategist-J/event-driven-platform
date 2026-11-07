@@ -199,3 +199,35 @@ All business rules and invariants are verified by automated tests in `src/featur
 * `TestRuleMustNeverShed_StrictOnly`: Verifies that `O-STRICT` records are never dropped or sampled.
 * `TestMachineTransition_Lifecycle`: Verifies deterministic state transitions and rejects illegal jumps.
 
+
+## Amendment 2026-11-07: Error classification, correlationId validation, and concurrency-limit restoration
+
+### Problem observed
+- `POST` saturation / recovery / confirm-recovery with a non-UUID `correlationId` returned 400 carrying raw `pq:` UUID-parse text from Postgres.
+- Every service error on these routes was reported as 400 (and `GET` state errors as 404), regardless of cause, so a missing record on recovery, an illegal state transition, and a storage failure were indistinguishable.
+- After `ConfirmRecovery` the record returned to `NORMAL` but `concurrency_limit` stayed at the ramp value (observed stuck at 1), permanently throttling the handler.
+
+### Root cause
+- RC2: `correlationId` format was enforced only by the Postgres UUID column type.
+- RC1: handlers called `writeError(..., http.StatusBadRequest, ..., err.Error())` unconditionally; service errors were plain `fmt.Errorf` strings with no sentinels to classify.
+- State bug: `ConfirmRecovery` copied the stored record and changed only `State` and `PauseReason`; the limit written during the 25% recovery ramp (`ComputeRampConcurrency`) or the multiplicative decrease was never restored.
+
+### Decision / fix
+- Handlers validate `correlationId` with `uuid.Parse` and return 400 `correlationId must be a valid UUID` before calling the service (saturation, recovery, confirm).
+- New sentinels `contracts.ErrRecordNotFound` and `contracts.ErrSignalNotSaturated`; both repository adapters wrap not-found with `%w`. New `BackpressureHandler.writeServiceError` maps: `ApplicationError` keeps its own status; `ErrRecordNotFound` 404; `machines.ErrInvalidTransition` 409; `ErrSignalNotSaturated` and the `ErrMissing*` validation errors 400; anything else 500 with generic `internal backpressure error`.
+- Limit restoration: `ConfirmRecovery` now sets `ConcurrencyLimit = rules.ComputeConfirmedConcurrency(existing.ConcurrencyLimit)`, which returns the baseline `rules.DefaultConcurrencyLimit` (10) when the current limit is below it and otherwise leaves the limit unchanged. `ReportSaturation` uses the same constant as the initial limit for new records.
+- Limitation: the pre-pause limit is not stored anywhere, so restoration is to the fixed baseline of 10, not to the value in force before saturation. A handler that ran above 10 before pausing is restored to 10 if its ramp value was lower than 10 (and keeps the ramp value if that is already at or above 10).
+
+### API-visible behavior change
+- Non-UUID `correlationId`: raw-text 400 becomes clean 400.
+- Unknown record on recovery/confirm/state: 404 (was 400 on write routes). **Status change** on `recovery` and `confirm-recovery` for unknown handler/dependency.
+- Illegal transition: 409 (was 400). **Status change.**
+- Non-saturating signal: remains 400.
+- After confirm, `concurrencyLimit` is at least 10 instead of the ramp value.
+
+### Verification
+Re-tested live: non-UUID `correlationId` returns a clean 400. The limit restoration is covered by a unit assertion added to `tests/backpressure_test.go` (`confirmed.ConcurrencyLimit == rules.DefaultConcurrencyLimit`); it was not re-verified live. The 404/409 mappings are covered by code reading only (no HTTP-level test).
+
+### Remaining gaps
+- Pre-pause limit is not persisted (see limitation above).
+- No HTTP-level test for the new status mappings.

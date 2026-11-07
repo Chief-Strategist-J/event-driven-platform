@@ -220,3 +220,30 @@ To satisfy **05-db-writing-rules.md Section 8**, database constraint violations 
 * **Negative**:
   - Version gaps (`ActionHoldGap`) block partition processing unless delegated to non-blocking retry topics.
   - Inbox table requires periodic partition archiving (`PurgeIntervalHours = 48`) to prevent storage bloat.
+
+## Amendment 2026-11-07: Inbox event validation (eventId UUID, semanticClass enum)
+
+### Problem observed
+- `POST /api/v1/consumers/inbox` with a non-UUID `eventId` returned 500.
+- An unrecognised `semanticClass` (e.g. `BOGUS`) was silently treated as `DELTA`, applying the gap-hold version rule to a stream the caller intended otherwise.
+
+### Root cause
+- RC2: `eventId` format was enforced only by the Postgres UUID column, so the failure surfaced as a 500.
+- Handler mapping: `idempotent-consumers.handler.go: Consume` set `semantic = DELTA` and switched to `STATE` only when the string equalled the STATE constant; any other value fell into DELTA. The service-level contract did not validate the enum.
+- RC1: the handler used a bare `err.(*appErrors.ApplicationError)` assertion, which misses wrapped errors.
+
+### Decision / fix
+- `ValidateInboundConsumerEvent` rejects a non-empty `eventId` that is not a UUID and any `semanticClass` other than `STATE` or `DELTA`, with 400 field-level details.
+- The handler passes the caller's `semanticClass` through unchanged; only an empty value defaults to `DELTA` (preserving the previous default for omitted fields).
+- The handler uses `errors.As`.
+
+### API-visible behavior change
+- Non-UUID `eventId`: 500 becomes 400.
+- Unknown `semanticClass`: silent DELTA becomes 400. **Breaking** for clients sending unrecognised values; empty still defaults to `DELTA`.
+- Existing rule tests were updated to UUID fixtures.
+
+### Verification
+Re-tested live: both cases return 400; empty `semanticClass` still accepted. Unit test `TestValidateInboundConsumerEvent_EventIDAndSemanticClass` added (`tests/idempotent_consumers_validation_test.go`).
+
+### Remaining gaps
+- No HTTP-level test; the default-to-`DELTA` for empty `semanticClass` remains an implicit choice that could mask producer omissions.

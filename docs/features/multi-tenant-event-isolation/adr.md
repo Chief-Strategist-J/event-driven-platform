@@ -242,3 +242,26 @@ erDiagram
    - Tier 4: Concurrent interleaved worker lanes guaranteeing zero ambient bleed (`tenant_concurrency_interleaving_test.go`).
 3. **OpenAPI 3.1 Parity**: 37 routes synchronized and verified across HTTP routers and OpenAPI definitions.
 
+
+## Amendment 2026-11-07: Correct status codes for tenant registration and lifecycle
+
+### Problem observed
+- `POST /api/v1/tenants` with an invalid tier returned `500`.
+- `PUT /api/v1/tenants/{tenant_id}/lifecycle` for an unknown tenant returned `500`; with an unknown `target_state` it returned `409` (as if a valid-but-forbidden transition).
+
+### Root cause
+RC1/RC2: the handler mapped errors with a status guess instead of reading the typed `ApplicationError` (wrapped errors defeated a bare assertion), tier validity was left to the database, and `TenantLifecycleMachine.Transition` checked the transition table without first checking that the target state exists, so garbage looked like a forbidden transition.
+
+### Decision / fix
+- `mapTenantError` uses `errors.As` on `*ApplicationError` and returns its status and canonical code; anything else is a generic 500. The handler reads the tenant id from `r.PathValue("tenant_id")` (matches the registered route).
+- `Transition` first rejects a target not in {ONBOARDING, ACTIVE, SUSPENDED, OFFBOARDING, OFFBOARDED} with a validation error (400), then applies the existing transition rules (still 409 for valid-but-illegal moves).
+- Invalid tier -> validation 400; unknown tenant on lifecycle update -> 404.
+
+### API-visible behavior change
+Invalid tier `500` -> `400`; lifecycle unknown tenant `500` -> `404`; unknown `target_state` `409` -> `400`. Illegal-but-known transitions remain `409`.
+
+### Verification
+Live re-test confirmed all three. Unit tests: `src/features/multi-tenant-event-isolation/tests/tenant_lifecycle_machine_test.go` and `src/api/rest/v1/handlers/multi_tenant_handler_test.go` (`TestMapTenantError`).
+
+### Remaining gaps
+`POST /api/v1/tenants/verify-envelope` still passes for a SUSPENDED tenant (not fixed). HTTP-level coverage is limited to the error-mapping test.

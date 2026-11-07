@@ -63,3 +63,14 @@ This failure catalog documents all failure modes across the Command and Query re
 8. Handler B rejects mutation immediately with HTTP `409 Conflict` (`CONFLICT` outcome).
 9. Account balance is never overdrawn; invariants are strictly maintained.
 
+
+---
+
+## 3. Amendment 2026-11-07: Token and Key Handling
+
+| Failure ID | Failure Mode | Severity | Invariant Violated | Detection Mechanism | Automated / Operational Remediation |
+|---|---|---|---|---|---|
+| **F7.1** | Invalid consistency token silently treated as IMMEDIATE | CORRUPT | CQ-04 (read-your-writes) | Client receives 200 without the version it expected | `ResolveQuery` returns `ErrInvalidConsistencyToken`; HTTP 400. Malformed, expired and bad-signature tokens are intentionally indistinguishable. Operator: have the client re-mint a token from the command response, or omit the token to accept IMMEDIATE. |
+| **F7.2** | Signing key secret echoed in API response | SECURITY | Secret write-only | Response contract review | `signingKeyResponse` omits `raw_secret_value`. Operator: rotate any key whose response was logged before this fix. |
+| **F7.3** | `secret_key_hash` still returned | SECURITY | Minimise key-derived material | Response contract review | **Open**: still echoed. Operator: treat the hash as sensitive in logs. |
+| **F7.4** | No active tenant signing key at resolve time | SECURITY | Per-tenant keys | Code review (default secret in `ResolveQuery`) | **Open**: falls back to a built-in default secret. Operator: register a signing key for every tenant. |

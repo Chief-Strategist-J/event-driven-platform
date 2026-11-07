@@ -108,3 +108,12 @@ This catalog documents failure modes across the Kafka topic partitioning and key
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | **F10.1** | Consumer caches keyed by partition ID | **CORRUPT** | Consumer caches aggregate state indexed by assigned partition, serving stale state after rebalance or migration. | Consumer caches must be keyed by domain aggregate ID (`tenant_id:aggregate_id`), never by partition number. | Consumer cache validation test suite. |
 
+
+## Amendment 2026-11-07: Failure Modes Added
+
+| ID | Failure Mode | Trigger | Detection | Response | Operator Action |
+|---|---|---|---|---|---|
+| **F-PT-A1** | Duplicate topic topology | Same `topic_name` registered again (per tenant after migration 0028; globally before) | SQLSTATE 23505 via `mapInsertError` | `409` domain message (previously internal error with raw text) | Reuse the existing topology or choose another name. |
+| **F-PT-A2** | Duplicate migration runbook | Same `migration_id` registered again | 23505 | `409` | Use a new `migration_id`. |
+| **F-PT-A3** | Migration phase conflict | `AdvanceMigration` with `expectedPhase` != current phase | Service check | `409 phase conflict: expected X, current Y` | Re-read the runbook state and retry with the current phase. |
+| **F-PT-A4** | Cross-tenant name collision before 0028 | Tenant B registers a `topic_name`/`migration_id` tenant A already uses | 23505 on the global constraint | `409` (misleading "for the tenant" message) | Apply migration 0028 via migration tooling; rollback fails if tenants share values. |

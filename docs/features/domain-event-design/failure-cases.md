@@ -130,3 +130,16 @@ This document details failure modes, severity ratings, edge-node scenarios, auto
   2. Further version reservations are permanently rejected with `422 Unprocessable Entity`.
 * **Detection:** Alert on `TerminalAggregateMutationAttempted`.
 
+
+## 6. Amendment 2026-11-07: Failure Modes Added
+
+### FC-DED-A1: Transaction-group ledger write fails (fixed hidden failure)
+* **Scenario:** The group upsert or causal-chain insert fails while building an envelope (the original trigger was a SQL parameter-typing error on `$9`).
+* **Severity:** CORRUPT (group completion could never be detected)
+* **Handling:** `BuildCanonicalEnvelope` returns `ErrPersistence`; the client receives a generic 500 and no envelope.
+* **Detection:** 5xx on envelope/build; missing `transaction_group_ledger` rows for known group ids.
+* **Operator action:** Check server logs for the underlying error; retry the build after fixing storage. Reconcile any groups built before this fix (they have no ledger row).
+
+### FC-DED-A2: Envelope returned without causal entry (fixed)
+* **Scenario:** Causal-chain insert failure was previously swallowed.
+* **Handling:** Now a 500 via `ErrPersistence`.
