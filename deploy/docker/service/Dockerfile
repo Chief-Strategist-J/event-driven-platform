@@ -52,7 +52,8 @@ LABEL org.opencontainers.image.source="https://github.com/Chief-Strategist-J/Sys
       org.opencontainers.image.created="${BUILD_DATE}" \
       org.opencontainers.image.title="event-driven-platform"
 
-ENV PORT=8080 \
+ENV GIT_SHA=${GIT_SHA} \
+    PORT=8080 \
     ADMIN_PORT=8081 \
     ADMIN_HOST=0.0.0.0
 

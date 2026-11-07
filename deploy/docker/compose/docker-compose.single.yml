@@ -48,6 +48,14 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       OTEL_SERVICE_NAME: event-driven-platform
       DB_PASSWORD_FILE: /run/secrets/db_password
+      # Real CDC via Kafka Connect/Debezium (leave KAFKA_CONNECT_URL unset to use the in-memory mock)
+      KAFKA_CONNECT_URL: http://debezium:8083
+      CDC_DB_HOST: db
+      CDC_DB_PORT: "5432"
+      CDC_DB_USER: postgres
+      CDC_DB_NAME: event_store
+      CDC_DB_PASSWORD: ${CDC_DB_PASSWORD:-postgres}
+      MAX_REQUEST_BODY_BYTES: "1048576"
     secrets: [db_password]
     tmpfs: [/tmp]
     stop_grace_period: 30s

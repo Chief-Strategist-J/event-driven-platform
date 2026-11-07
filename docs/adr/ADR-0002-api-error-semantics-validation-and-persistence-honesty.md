@@ -172,14 +172,15 @@ The following rules are normative for all API handlers and services.
 * Migration 0028 applied to the live dev database; two tenants registering the same `topic_name` both succeed.
 
 ### Still open (not fixed)
-* `POST /consistency/incidents/{id}/heal` still defaults `tenant_id` to `"default"` (a write with the same silent-default pattern).
 * Apicurio is written only by `POST /api/v1/schemas`.
-* `/metrics` is absent.
 * HTTP-level tests exist only for a subset of the fixes (`handlers/multi_tenant_handler_test.go`, `handlers/tenant_scope_handler_test.go`).
 * Postgres-backed integration paths (unique-violation mapping, replay adapter) are untested in CI; the Postgres integration tests skip without a DSN.
 * Custom upcast transformers are not registered at startup; an unknown transformer name is accepted at registration and fails with 400 at upcast time.
-* CDC still uses the mock Kafka Connect adapter; Debezium is not integrated.
 * The compose `no-new-privileges` exec failure is worked around with `NO_NEW_PRIVILEGES=false` (ADR-0003 section 5), not root-caused.
+
+### Closed in a third pass (production-readiness, 2026-11-07)
+* `POST /consistency/incidents/{id}/heal` and `GET /schemas/{subject}/readiness` require `tenant_id` (400); the last silent `"default"` tenant fallbacks in handlers are gone.
+* `/metrics` exists on the admin listener; request body cap (413); producer topic auto-creation; real Kafka Connect CDC adapter selected by `KAFKA_CONNECT_URL` (mock otherwise). See ADR-0003 sections 7-11.
 
 ### Follow-ups
 1. Add an HTTP-level conformance suite that drives every route through the real router against PostgreSQL, asserting status code, `success` flag, absence of `pq:` / constraint names in bodies, and tenant-scope 400s.
