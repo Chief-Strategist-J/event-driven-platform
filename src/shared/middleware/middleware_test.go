@@ -2,8 +2,10 @@ package middleware
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"event-driven-platform/src/shared/constants"
@@ -88,5 +90,46 @@ func TestFormatErrorResponse_ApplicationError(t *testing.T) {
 	}
 	if resp.Error.Code != constants.ErrCodeValidationFailed {
 		t.Errorf("expected VALIDATION_FAILED, got %s", resp.Error.Code)
+	}
+}
+
+func TestBodyLimitMiddleware(t *testing.T) {
+	var readErr error
+	h := BodyLimitMiddleware(10)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, readErr = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("a", 11))))
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), `"success":false`) {
+		t.Fatalf("want 413 envelope, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("a", 11)))
+	req.ContentLength = -1
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if readErr == nil {
+		t.Fatal("chunked body over limit must fail to read")
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", strings.NewReader("ok")))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rec.Code)
+	}
+}
+
+func TestMaxRequestBodyBytesFromEnv(t *testing.T) {
+	if MaxRequestBodyBytesFromEnv() != DefaultMaxRequestBodyBytes {
+		t.Fatal("default")
+	}
+	t.Setenv("MAX_REQUEST_BODY_BYTES", "2048")
+	if MaxRequestBodyBytesFromEnv() != 2048 {
+		t.Fatal("env")
+	}
+	t.Setenv("MAX_REQUEST_BODY_BYTES", "bad")
+	if MaxRequestBodyBytesFromEnv() != DefaultMaxRequestBodyBytes {
+		t.Fatal("invalid falls back")
 	}
 }

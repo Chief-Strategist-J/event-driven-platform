@@ -176,8 +176,9 @@ func (h *ConsistencyMonitoringHandler) HandleAttemptHealing(w http.ResponseWrite
 	}
 
 	tenantID := r.URL.Query().Get("tenant_id")
-	if tenantID == "" {
-		tenantID = "default"
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 
 	healed, err := h.svc.AttemptHealing(ctx, incidentUUID, tenantID, 2)

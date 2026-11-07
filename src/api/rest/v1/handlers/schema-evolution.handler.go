@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -86,8 +87,9 @@ func (h *SchemaEvolutionHandler) HandleCheckConsumerReadiness(w http.ResponseWri
 
 	subject := r.PathValue("subject")
 	tenantID := r.URL.Query().Get("tenant_id")
-	if tenantID == "" {
-		tenantID = "default"
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 	targetVersionStr := r.URL.Query().Get("target_version")
 	if targetVersionStr == "" {

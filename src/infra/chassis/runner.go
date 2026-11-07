@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"event-driven-platform/src/infra/observability"
+	"event-driven-platform/src/infra/observability/metrics"
 	"event-driven-platform/src/shared/middleware"
 )
 
@@ -135,7 +136,10 @@ func Run(spec ServiceSpec, args []string, env []string) int {
 }
 
 func wireServe(app *App, lifecycle *Lifecycle) {
+	registry, httpMetrics := metrics.Default(os.Getenv("GIT_SHA"))
+
 	adminMux := http.NewServeMux()
+	adminMux.Handle("GET /metrics", registry.Handler())
 	adminMux.HandleFunc("/health/live", app.Health.LiveHandler())
 	adminMux.HandleFunc("/health/ready", app.Health.ReadyHandler())
 
@@ -160,14 +164,19 @@ func wireServe(app *App, lifecycle *Lifecycle) {
 		app.Spec.RegisterAPIRoutes(publicMux, app.Services)
 	}
 
-	wrappedHandler := middleware.TraceAndContextMiddleware(middleware.ErrorRecoveryMiddleware(publicMux))
+	// Metrics wraps the mux directly so it observes r.Pattern; recovery sits outside it.
+	wrappedHandler := middleware.TraceAndContextMiddleware(
+		middleware.ErrorRecoveryMiddleware(
+			middleware.BodyLimitMiddleware(middleware.MaxRequestBodyBytesFromEnv())(
+				httpMetrics.Middleware(publicMux))))
 
 	publicServer := &http.Server{
-		Addr:         app.Config.PublicAddr,
-		Handler:      wrappedHandler,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  75 * time.Second,
+		Addr:              app.Config.PublicAddr,
+		Handler:           wrappedHandler,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      15 * time.Second,
+		IdleTimeout:       75 * time.Second,
 	}
 
 	lifecycle.AddComponent("public-server", func(_ context.Context) error {
@@ -200,6 +209,7 @@ func runLongLived(app *App, lifecycle *Lifecycle) int {
 	}
 
 	app.Health.SetReady(false)
+	stop() // cancel rootCtx so daemons stop on the fatal-error path too
 
 	if err := lifecycle.StopAll(app.Config.ShutdownTimeout); err != nil {
 		log.Printf("Shutdown finished with errors: %v\n", err)
