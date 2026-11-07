@@ -1,0 +1,79 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: event_store
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 5s
+          --health-timeout 3s --health-retries 20
+    env:
+      DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/event_store?sslmode=disable
+      TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/event_store?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - name: Apply migrations
+        run: go run ./src/main.go migrate
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -count=1 -json ./... | tee test.json | grep -E '"Action":"(fail|skip)"' || true
+          python3 - <<'PY'
+          import json, sys
+          bad = [json.loads(l) for l in open("test.json") if l.startswith("{")]
+          fails = [e for e in bad if e.get("Action") == "fail"]
+          for e in fails: print("FAIL:", e.get("Package"), e.get("Test") or "")
+          sys.exit(1 if fails else 0)
+          PY
+      - name: Fail if any Postgres-backed test was skipped
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json, sys, collections
+          out = collections.defaultdict(str); skipped = []
+          for l in open("test.json"):
+              try: e = json.loads(l)
+              except ValueError: continue
+              k = (e.get("Package"), e.get("Test"))
+              if e.get("Action") == "output": out[k] += e.get("Output", "")
+              elif e.get("Action") == "skip" and e.get("Test"): skipped.append(k)
+          # Skips that are about the database (not e.g. the optional live Apicurio test).
+          bad = [k for k in skipped if any(w in out[k].lower() for w in ("postgres", "database"))]
+          for p, t in bad: print(f"SKIPPED (Postgres-backed): {p} {t}")
+          sys.exit(1 if bad else 0)
+          PY
+
+  compose-smoke:
+    runs-on: ubuntu-latest
+    needs: test
+    env:
+      COMPOSE_FILE: deploy/docker/compose/docker-compose.all.yml
+      NO_NEW_PRIVILEGES: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Start stack
+        run: docker compose -f "$COMPOSE_FILE" up -d --wait --wait-timeout 300
+      - name: Smoke test
+        run: scripts/test/smoke.sh
+      - name: Dump logs on failure
+        if: failure()
+        run: docker compose -f "$COMPOSE_FILE" logs --no-color --tail=200
+      - name: Tear down
+        if: always()
+        run: docker compose -f "$COMPOSE_FILE" down -v

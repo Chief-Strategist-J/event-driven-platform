@@ -46,3 +46,10 @@ See `docs/adr/ADR-0002-api-error-semantics-validation-and-persistence-honesty.md
 * `POST /api/v1/replay/runs`: non-UUID `correlationId` / `X-Correlation-ID` -> 400. BREAKING.
 * `POST /api/v1/tenants/verify-envelope`: SUSPENDED tenant -> 403. BREAKING.
 * Spec: added `servers` (Envoy gateway, direct port), the admin-listener health endpoints `GET /health/live` and `GET /health/ready`, and a runtime/deployment section in `info.description` (Docker Hub image, ports, `DATABASE_URL`, outbox topic prerequisite, no `/metrics`).
+
+## 1.3.0 (production-readiness pass, 2026-11-07)
+* New: `GET /metrics` on the admin listener (8081): Prometheus text format.
+* `POST /api/v1/consistency/incidents/{id}/heal`, `GET /api/v1/schemas/{subject}/readiness`: missing `tenant_id` now 400 (previously an implicit `default` tenant). BREAKING.
+* Request bodies over `MAX_REQUEST_BODY_BYTES` (default 1 MiB): 413 `PAYLOAD_TOO_LARGE`. BREAKING for clients sending very large bodies.
+* CDC routes call Kafka Connect/Debezium when `KAFKA_CONNECT_URL` is set (upstream conflict -> 409, unknown connector -> 404, other upstream failures -> generic 500); without it the in-memory mock is used.
+* Outbox publishing: the producer requests topic auto-creation (broker policy still applies).

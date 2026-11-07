@@ -137,3 +137,39 @@ curl -s http://127.0.0.1:8081/health/ready
 
 ### Neutral
 * No code changed for this ADR.
+
+
+---
+
+## Production-readiness pass (2026-11-07)
+
+### 7. One-command, self-contained stack
+
+`deploy/docker/compose/docker-compose.all.yml` starts Postgres (logical WAL), Kafka (single-node KRaft, topic auto-create on), Apicurio, Debezium/Kafka Connect, a one-shot `migrate` job (`platform-service migrate`, tracked by `schema_migrations`) and the app (starts only after `migrate` succeeded and dependencies are healthy). Every image, host port and password is an environment variable with a default (`deploy/docker/compose/.env.example`; table in the root `README.md`). Verified from scratch in an isolated project on alternate ports: `up -d --wait` reached all-healthy, the migrate job exited 0 with 28 migrations applied (74 public tables), and `scripts/test/smoke.sh` passed 10/10.
+
+Quickstart defaults are for local/dev: `POSTGRES_PASSWORD=postgres`, Kafka topic auto-create on, a single broker. Change the password (it must be URL-safe) and use a managed/replicated Kafka and registry outside local use.
+
+### 8. Kafka producer topic creation (bug found while verifying the one-command stack)
+
+`kafka-go` `Writer` does not ask the broker to create a missing topic unless `AllowAutoTopicCreation` is set, so even with `auto.create.topics.enable=true` on the broker the first outbox publish failed with `[3] Unknown Topic Or Partition` and the row was PARKED after 5 retries (a topic created by a console consumer masked this during earlier testing). The producer now sets `AllowAutoTopicCreation` (default on; `KAFKA_PRODUCER_AUTO_CREATE_TOPICS=false` disables). The broker policy still decides: with broker auto-create disabled, topics named after `aggregateType` must still be pre-created (section 1). Verified: a never-seen `aggregateType` published, with headers, in the fresh stack.
+
+### 9. Real CDC (Kafka Connect / Debezium)
+
+Setting `KAFKA_CONNECT_URL` makes the CDC feature call the Kafka Connect REST API instead of the in-memory mock (unset: mock, with a startup warning). Database settings for the connector: `CDC_DB_HOST` (default `db`), `CDC_DB_PORT` (`5432`), `CDC_DB_USER` (`postgres`), `CDC_DB_NAME` (`event_store`), `CDC_DB_PASSWORD` or `CDC_DB_PASSWORD_FILE`, `CDC_RAW_TABLE_INCLUDE_LIST` (raw-table mode). Verified live: `POST /api/v1/cdc/connectors` created a connector that Debezium reported as `RUNNING` (connector and task). Limits: create is never retried; other calls retry up to 3 times on 5xx/connection errors, so a retried delete can return 404 if the first attempt succeeded but its response was lost.
+
+### 10. Metrics, body limit, shutdown
+
+* `GET /metrics` (Prometheus text format) is on the admin listener (8081), not the public port: `http_requests_total{method,route,status}` (route = mux pattern, `unmatched` otherwise), `http_request_duration_seconds`, `http_requests_in_flight`, `go_goroutines`, `go_memstats_heap_alloc_bytes`, `go_gc_cycles_total`, `process_start_time_seconds`, `edp_build_info{version}` (image `GIT_SHA`).
+* Request bodies are capped (`MAX_REQUEST_BODY_BYTES`, default 1 MiB): a declared oversize body gets 413 `PAYLOAD_TOO_LARGE` (verified). Chunked bodies are capped by `MaxBytesReader` and surface as the handler's 400.
+* Shutdown: readiness flips to false first, then in-flight requests drain (15 s); a defect where the root context was not cancelled on the fatal-error path (daemons such as the outbox poller kept running) was fixed. **Not done:** the Postgres pool and Kafka producer are not closed on shutdown (no close hook in the service container), and components stop concurrently rather than in dependency order.
+
+### 11. Remaining limits (be explicit before calling this production-grade)
+
+* Single-node dev topology in the quickstart; no replication, no TLS between components, default credentials.
+* No outbox backlog / parked-row gauge; alert on the `outbox` table (`status = 'PARKED'`) until one exists.
+* Postgres-backed tests skip without a DSN locally; the new CI workflow runs them against a Postgres service and fails on skips (not yet run on GitHub).
+* The `no-new-privileges` exec failure is a host AppArmor issue worked around with `NO_NEW_PRIVILEGES=false` (section 5).
+
+### 12. Secret files and the container user
+
+The service runs as UID 10001. A compose secret bind-mounted from a host file owned by another user with mode 0600 is unreadable inside the container (`CDC: cannot read CDC_DB_PASSWORD_FILE` in the log). `docker-compose.single.yml` therefore passes `CDC_DB_PASSWORD` (default `postgres`, overridable) like `DATABASE_URL` already does; use `CDC_DB_PASSWORD_FILE` only when the file is readable by UID 10001. The app itself does not read `DB_PASSWORD_FILE`; only `DATABASE_URL` is used for the database.

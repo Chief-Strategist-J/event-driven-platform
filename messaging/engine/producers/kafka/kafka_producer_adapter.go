@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"time"
@@ -19,6 +20,10 @@ type KafkaProducerConfig struct {
 	BatchTimeout time.Duration
 	WriteTimeout time.Duration
 	RequiredAcks int
+	// AllowAutoTopicCreation asks the broker to create a missing topic on first publish.
+	// The broker's own auto.create.topics.enable policy still decides; with it disabled the
+	// publish fails with "Unknown Topic Or Partition" and the outbox row is parked after 5 retries.
+	AllowAutoTopicCreation bool
 }
 
 func DefaultKafkaProducerConfig(brokers []string) KafkaProducerConfig {
@@ -28,6 +33,8 @@ func DefaultKafkaProducerConfig(brokers []string) KafkaProducerConfig {
 		BatchTimeout: 10 * time.Millisecond,
 		WriteTimeout: 10 * time.Second,
 		RequiredAcks: -1,
+		// Default on; set KAFKA_PRODUCER_AUTO_CREATE_TOPICS=false to disable.
+		AllowAutoTopicCreation: os.Getenv("KAFKA_PRODUCER_AUTO_CREATE_TOPICS") != "false",
 	}
 }
 
@@ -45,6 +52,8 @@ func NewKafkaProducerAdapter(cfg KafkaProducerConfig) producers.ProducerPort {
 		WriteTimeout: cfg.WriteTimeout,
 		RequiredAcks: kafka.RequiredAcks(cfg.RequiredAcks),
 		Async:        false,
+
+		AllowAutoTopicCreation: cfg.AllowAutoTopicCreation,
 		Transport: &kafka.Transport{
 			Dial: (&net.Dialer{
 				Timeout:   3 * time.Second,
