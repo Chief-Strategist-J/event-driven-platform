@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: event-driven-platform API
-  version: 1.1.0
+  version: 1.2.0
   description: |
     Event-driven platform REST API. Every response uses the common envelope
     {success, statusCode, data, error, meta}. success is false for every status >= 400 and
@@ -29,7 +29,64 @@ info:
     dispatch, schema compatibility enforcement (409), replay run id/state rules, and corrected
     request schemas that had drifted from the Go contract structs (replay, offsets
     fast-forward/rewind, backpressure, auth, schema-evolution, domain-events, ops triage).
+
+    1.2.0 (second pass): tenant_id is now required (400) on the read endpoints that previously
+    returned 200 with null data or used an implicit "default" tenant; non-UUID quarantineId and
+    replay correlationId return 400; resolve returns 409 when a supplied consistency token needs
+    a signing key the tenant does not have; POST /api/v1/commands/keys no longer returns
+    secret_key_hash; verify-envelope returns 403 for a SUSPENDED tenant. Added servers and the
+    health endpoints (/health/live, /health/ready on the admin listener).
+
+    Runtime and deployment (see docs/adr/ADR-0003): the service image is published as
+    chiefj/event-driven-platform (tags latest, v2, fixes) on Docker Hub. It listens on 8080 (API)
+    and 8081 (admin: /health/live, /health/ready; there is no /metrics endpoint). In the compose
+    stack the API is reached through the Envoy gateway on host port 8080. The service reads only
+    DATABASE_URL (plus KAFKA_BROKERS, SCHEMA_REGISTRY_URL, OTEL_EXPORTER_OTLP_ENDPOINT, PORT,
+    ADMIN_PORT, ADMIN_HOST). The outbox relay publishes to a Kafka topic named after
+    aggregateType and the broker does not auto-create topics, so create the topic first.
+    Migrations are not run at startup; database/migrations/sql/0028 was applied by hand.
+
+servers:
+  - url: http://localhost:8080
+    description: Envoy gateway in the local compose stack (API, /api/v1/...)
+  - url: http://localhost:18080
+    description: Direct service port when run with `docker run -p 127.0.0.1:18080:8080`
+
 paths:
+  /health/live:
+    get:
+      summary: Liveness probe (admin listener)
+      operationId: getHealthLive
+      description: "Served on the admin listener (port 8081, not the public API port 8080). In a container the admin listener binds 0.0.0.0 when ADMIN_HOST=0.0.0.0 is set; it is not routed by Envoy."
+      servers:
+        - url: http://localhost:8081
+          description: Admin listener
+      responses:
+        "200":
+          description: "Process is alive"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [alive] }
+  /health/ready:
+    get:
+      summary: Readiness probe (admin listener)
+      operationId: getHealthReady
+      description: "Served on the admin listener (port 8081). Returns 200 {\"status\":\"ready\"} when the service is ready."
+      servers:
+        - url: http://localhost:8081
+          description: Admin listener
+      responses:
+        "200":
+          description: "Service is ready"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ready] }
   /api/v1/schemas:
     post:
       summary: Register Event Schema
@@ -342,6 +399,7 @@ paths:
     post:
       summary: Attempt Bounded Redrive of Quarantined Event
       operationId: redriveQuarantinedEvent
+      description: "quarantineId must be a UUID; a non-UUID value returns 400."
       requestBody:
         required: true
         content:
@@ -354,7 +412,7 @@ paths:
                 - quarantineId
               properties:
                 tenantId: { type: string }
-                quarantineId: { type: string }
+                quarantineId: { type: string, format: uuid }
       responses:
         "200":
           description: "Event redriven successfully and aggregate unparked"
@@ -381,7 +439,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: "Unexpected server error. Known gap: a non-UUID quarantineId currently surfaces as 500 instead of 400."
+          description: "Unexpected server error."
           content:
             application/json:
               schema:
@@ -391,6 +449,7 @@ paths:
     post:
       summary: Discard Quarantined Event and Release Aggregate Parking Lock
       operationId: discardQuarantinedEvent
+      description: "quarantineId must be a UUID; a non-UUID value returns 400."
       requestBody:
         required: true
         content:
@@ -405,7 +464,7 @@ paths:
                 - reason
               properties:
                 tenantId: { type: string }
-                quarantineId: { type: string }
+                quarantineId: { type: string, format: uuid }
                 actorId: { type: string }
                 reason: { type: string }
       responses:
@@ -428,7 +487,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: "Unexpected server error. Known gap: a non-UUID quarantineId currently surfaces as 500 instead of 400."
+          description: "Unexpected server error."
           content:
             application/json:
               schema:
@@ -799,7 +858,7 @@ paths:
     get:
       summary: List Parked Aggregate Trackers
       operationId: listHeldTrackers
-      description: "Query parameters are snake_case. Known gap: a missing tenant_id is not rejected and yields 200 with data null."
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400."
       parameters:
         - $ref: "#/components/parameters/XRequestID"
         - $ref: "#/components/parameters/XCorrelationID"
@@ -830,6 +889,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error: a required query parameter or header is missing or invalid (for example tenant_id)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
           description: "Internal server error"
           content:
@@ -985,7 +1050,7 @@ paths:
     get:
       summary: Get Due Retry Attempts Ready for Execution
       operationId: getDueRetries
-      description: "Query parameters are snake_case. Known gap: a missing tenant_id is not rejected and yields 200 with data null."
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400."
       parameters:
         - $ref: "#/components/parameters/XRequestID"
         - $ref: "#/components/parameters/XCorrelationID"
@@ -1004,6 +1069,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error: a required query parameter or header is missing or invalid (for example tenant_id)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
           description: "Internal error"
           content:
@@ -1650,7 +1721,7 @@ paths:
     post:
       summary: Create New Replay Run with Side-Car Consumer Group
       operationId: createReplayRun
-      description: "Body fields are camelCase. correlationId defaults to X-Correlation-ID. Known gap: a non-UUID correlationId on this route is not rejected."
+      description: "Body fields are camelCase. correlationId defaults to X-Correlation-ID. correlationId (and the X-Correlation-ID fallback) must be a UUID; otherwise 400."
       parameters:
         - $ref: "#/components/parameters/XRequestID"
         - $ref: "#/components/parameters/XCorrelationID"
@@ -2176,7 +2247,7 @@ paths:
     post:
       summary: Verify Event Ingress Tenant Scope and Residency
       operationId: verifyTenantEnvelope
-      description: "Body fields are snake_case. Known gap: verification passes for a SUSPENDED tenant."
+      description: "Body fields are snake_case. A SUSPENDED tenant is rejected at ingress with 403; an OFFBOARDED tenant returns 409."
       parameters:
         - $ref: "#/components/parameters/XRequestID"
         - $ref: "#/components/parameters/XCorrelationID"
@@ -3163,7 +3234,7 @@ paths:
     get:
       summary: Retrieve Partition Watermarks for View
       operationId: getViewWatermarks
-      description: "Query parameters are snake_case. tenant_id defaults to 'default' when omitted."
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400 (no implicit default tenant)."
       parameters:
         - $ref: "#/components/parameters/XRequestID"
         - $ref: "#/components/parameters/XCorrelationID"
@@ -3174,7 +3245,7 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
       responses:
@@ -3184,6 +3255,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error: a required query parameter or header is missing or invalid (for example tenant_id)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
           description: "Internal error"
           content:
@@ -3250,7 +3327,7 @@ paths:
     get:
       summary: Retrieve Active Drift Incidents for View
       operationId: getActiveDriftIncidents
-      description: "Query parameters are snake_case. tenant_id defaults to 'default' when omitted."
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400 (no implicit default tenant)."
       parameters:
         - $ref: "#/components/parameters/XRequestID"
         - $ref: "#/components/parameters/XCorrelationID"
@@ -3261,7 +3338,7 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
       responses:
@@ -3271,6 +3348,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error: a required query parameter or header is missing or invalid (for example tenant_id)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
           description: "Internal error"
           content:
@@ -3375,7 +3458,7 @@ paths:
     get:
       summary: List Audit Sweep History
       operationId: listCheckRuns
-      description: "Query parameters are snake_case. tenant_id defaults to 'default' when omitted."
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400 (no implicit default tenant)."
       parameters:
         - $ref: "#/components/parameters/XRequestID"
         - $ref: "#/components/parameters/XCorrelationID"
@@ -3386,7 +3469,7 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
       responses:
@@ -3396,6 +3479,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error: a required query parameter or header is missing or invalid (for example tenant_id)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
           description: "Internal error"
           content:
@@ -3583,7 +3672,7 @@ paths:
     get:
       summary: Resolve Query View with Signed Consistency Token
       operationId: resolveQueryWithToken
-      description: "Query parameters are snake_case. tenant_id defaults to 'default'. A garbage x-consistency-token is rejected rather than silently treated as IMMEDIATE."
+      description: "Query parameters are snake_case. tenant_id is required (400). x-consistency-token is optional; a malformed, expired or badly signed token returns 400, and a token that must be verified for a tenant with no active signing key returns 409. No token means no key is needed."
       parameters:
         - $ref: "#/components/parameters/XRequestID"
         - $ref: "#/components/parameters/XCorrelationID"
@@ -3594,7 +3683,7 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
         - name: view_name
@@ -3621,6 +3710,12 @@ paths:
                 $ref: "#/components/schemas/SuccessEnvelope"
         "400":
           description: "Validation error, including a malformed, expired or badly signed x-consistency-token (the cases are indistinguishable, ErrInvalidConsistencyToken)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "A consistency token was supplied but the tenant has no active signing key (ErrNoActiveSigningKey)"
           content:
             application/json:
               schema:
@@ -3660,7 +3755,7 @@ paths:
                 expires_at: { type: string, format: date-time }
       responses:
         "201":
-          description: "Token signing key registered. raw_secret_value is NOT echoed; secret_key_hash is returned."
+          description: "Token signing key registered. Neither raw_secret_value nor secret_key_hash is returned."
           content:
             application/json:
               schema:
@@ -3678,7 +3773,6 @@ paths:
                           external_id: { type: string }
                           correlation_id: { type: string, format: uuid }
                           key_version: { type: integer }
-                          secret_key_hash: { type: string }
                           status: { type: string }
                           expires_at: { type: string, format: date-time }
                           created_at: { type: string, format: date-time }
@@ -3700,7 +3794,7 @@ paths:
     get:
       summary: Authoritative Strongly-Consistent Read for Aggregate Owner
       operationId: authoritativeOwnRead
-      description: "Query parameters are snake_case. tenant_id defaults to 'default'."
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400 (no implicit default tenant)."
       parameters:
         - $ref: "#/components/parameters/XRequestID"
         - $ref: "#/components/parameters/XCorrelationID"
@@ -3711,7 +3805,7 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
         - name: aggregate_type
@@ -4078,7 +4172,7 @@ paths:
     get:
       summary: Query Audit Records with Mandatory Access Logging (AU-11)
       operationId: queryAuditRecords
-      description: "Query parameters are snake_case. tenant_id defaults to 'default' when omitted; shard_id and the X-Auditor-Id / X-Audit-Case-Id headers are required (400)."
+      description: "Query parameters are snake_case. tenant_id and shard_id are required (400 when missing; no implicit default tenant); the X-Auditor-Id and X-Audit-Case-Id headers are also required (400)."
       parameters:
         - $ref: "#/components/parameters/XRequestID"
         - $ref: "#/components/parameters/XCorrelationID"
@@ -4094,7 +4188,7 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
         - name: shard_id

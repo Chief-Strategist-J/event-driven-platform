@@ -39,9 +39,10 @@ See `docs/adr/ADR-0002-api-error-semantics-validation-and-persistence-honesty.md
 * Backpressure `ConfirmRecovery` restores the concurrency limit to the baseline 10.
 * Outbox relay publishes Kafka headers `event_type`, `schema_version`, `source_service` plus custom headers (not an HTTP contract change).
 
-## 1.1.0 addendum (second pass, 2026-11-07)
+## 1.2.0 (second pass, 2026-11-07)
 * `POST /api/v1/dlq/redrive`, `POST /api/v1/dlq/discard`: non-UUID `quarantineId` 500 -> 400. BREAKING (status only).
 * `GET /api/v1/retries/due`, `GET /api/v1/events/held`, `GET /api/v1/consistency/views/{view}/watermark|incidents|sweeps`, `GET /api/v1/queries/resolve`, `GET /api/v1/queries/authoritative-own`, `GET /api/v1/audits/query`: missing `tenant_id` 200 `data:null` (or silent `default` tenant) -> 400. BREAKING.
 * `GET /api/v1/queries/resolve` with a token and no active signing key for the tenant: -> 409 CONFLICT. `POST /api/v1/commands/dispatch` returns an empty `ConsistencyToken` when the tenant has no active key. `POST /api/v1/commands/keys` no longer returns `secret_key_hash`. BREAKING.
 * `POST /api/v1/replay/runs`: non-UUID `correlationId` / `X-Correlation-ID` -> 400. BREAKING.
 * `POST /api/v1/tenants/verify-envelope`: SUSPENDED tenant -> 403. BREAKING.
+* Spec: added `servers` (Envoy gateway, direct port), the admin-listener health endpoints `GET /health/live` and `GET /health/ready`, and a runtime/deployment section in `info.description` (Docker Hub image, ports, `DATABASE_URL`, outbox topic prerequisite, no `/metrics`).
