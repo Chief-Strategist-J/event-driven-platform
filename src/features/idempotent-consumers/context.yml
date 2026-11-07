@@ -177,3 +177,108 @@ adapters:
   outbound:
     - MemoryConsumerRepositoryAdapter: In-memory repository adapter for testing
     - PostgresConsumerRepositoryAdapter: Live PostgreSQL adapter using consumer_inbox and consumer_projections
+
+
+definition:
+  what: An idempotent consumer processes duplicate event deliveries safely by executing state mutations exactly once and dropping redundant deliveries without corrupting system state.
+  scope: Transport inbox deduplication (handler_id + event_id) and aggregate version projection monotonic progression.
+
+real_life_use:
+  - Payment processing deduplication preventing duplicate card charges on network retry
+  - Order fulfillment avoiding duplicate warehouse dispatch during consumer group rebalance
+  - CQRS read model updates ensuring out-of-order event replays do not overwrite newer state
+
+design_principles:
+  - At-Least-Once Broker Compensation
+  - Atomic Inbox Recording
+  - Deterministic State Transitions
+  - Semantic Delta vs State Separation
+  - Split-Brain Content Collision Quarantine
+
+function_structure: |
+  Legend
+    name(inputs) → output
+    ⚠  can fail      ↺  registers cleanup      ▶  service-owned code
+    ✚  required at 100+ services, missing from the single-service tree
+
+  Tree 1: main wiring (chassis serviceSpec)
+
+  main(args, env)
+  └── exit( chassis.Run(describeService(), args, env) )
+
+  describeService() → serviceSpec
+  ├── buildServices(deps) → services                                        ▶
+  │   ├── config.LoadConfig("") → cfg                                   ⚠
+  │   ├── sql.Open("postgres", cfg.Database.URL) → db                  ↺ ⚠
+  │   ├── consumerAdapters.NewPostgresConsumerRepositoryAdapter(db) → consumerRepo
+  │   ├── consumerService.NewConsumerService(consumerRepo) → consumerSvc
+  │   └── chassis.Services{ Registry: {"consumerService": consumerSvc} }
+  │
+  └── registerApiRoutes(router, services)                                   ▶
+      ├── services.Registry["consumerService"] → consumerSvc
+      ├── handlers.NewConsumerHandler(consumerSvc) → consumerHandler
+      └── router.HandleFunc("POST /v1/events/consume", consumerHandler.HandleConsume)
+
+  Tree 2: end-to-end runtime execution function stack
+
+  handleConsume(w, r) → httpResponse                                    ▶ ⚠
+  ├── json.NewDecoder(r.Body).Decode(&event) → inboundEvent             ⚠ EXIT_BAD_REQUEST
+  ├── validateInboundConsumerEvent(event) → error                       ⚠ EXIT_VALIDATION
+  └── consumerSvc.ConsumeEvent(ctx, event) → consumeResult              ▶ ⚠
+      ├── computePayloadHash(event.Payload) → payloadHash
+      ├── utils.GenerateUUIDv7() → inboxID                              ⚠
+      ├── repo.RecordInbox(ctx, inboxRecord) → inserted                 ↺ ⚠
+      │   └── inserted == false → return {ActionSkip, "transport duplicate"}
+      ├── repo.GetProjection(ctx, tenant, handler, type, id) → proj    ↺ ⚠
+      ├── proj.IsParked == true → return {ActionParkPoison}
+      ├── isContentHashConsistent(proj.LastPayloadHash, payloadHash)    ▶
+      │   └── inconsistent → repo.ParkAggregate(...) + return {ActionParkPoison}
+      ├── evaluateVersionRule(currentVersion, incomingVersion, class)   ▶
+      │   ├── incoming <= current → return {ActionSkip, "stale version"}
+      │   ├── delta & incoming > current + 1 → return {ActionHoldGap}
+      │   └── incoming == current + 1 (or state > current) → ActionApply
+      └── repo.UpsertProjection(ctx, updatedProjection)                 ↺ ⚠
+          └── return {ActionApply, appliedVersion}
+
+  Tree 3: chassis consumer worker & background pipeline
+
+  wireWorker(app, lifecycle) → LONG_RUNNING
+  ├── wireAdmin(app, lifecycle)
+  ├── buildConsumerGroup(app, schemaRegistry) → group
+  │   ├── standardConsumerWrapping()
+  │   │   ├── withTracing(tracer)                                       ↺
+  │   │   ├── withIdempotencyStore(app.infra.db)
+  │   │   ├── withRetryPolicy(spec.retryPolicy)                         ⚠
+  │   │   └── withDeadLetterSink(spec.dlqSink)                          ⚠
+  │   ├── exportLagMetric() → autoscalerSignal                          ✚
+  │   └── spec.registerConsumers(group, app.services)                  ▶
+  │       └── group.RegisterHandler("platform.events.ingest", consumerSvc.ConsumeEvent)
+  ├── lifecycle.addComponent("consumers", group.start, group.drainAndCommit)
+  └── wireJobs(app, lifecycle)
+      └── addComponent("inbox-compaction-job", withLeaderElection(job), job.stop)
+          └── repo.PurgeExpiredInbox(ctx, retentionWindow)              ↺ ⚠
+
+  Tree 4: storage & transactional persistence mechanics
+
+  repo.RecordInbox(ctx, record) → inserted                              ↺ ⚠
+  ├── db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted}) → tx ↺ ⚠
+  ├── tx.ExecContext(ctx, queryInsertInbox, params...) → result         ⚠
+  │   └── ON CONFLICT (tenant_id, handler_id, event_id) DO NOTHING
+  ├── result.RowsAffected() → rows
+  │   ├── rows == 0 → tx.Rollback() + return false                      ↺
+  │   └── rows == 1 → tx.Commit() + return true                         ↺
+  └── release connection to pool                                        ↺
+
+  repo.UpsertProjection(ctx, proj) → error                              ↺ ⚠
+  ├── db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted}) → tx ↺ ⚠
+  ├── tx.ExecContext(ctx, queryUpsertProjection, params...) → result    ⚠
+  │   └── ON CONFLICT (tenant_id, handler_id, aggregate_type, aggregate_id)
+  │       DO UPDATE SET last_version = excluded.last_version,
+  │                     last_event_id = excluded.last_event_id,
+  │                     last_payload_hash = excluded.last_payload_hash,
+  │                     updated_at = now()
+  │       WHERE consumer_projections.last_version < excluded.last_version
+  ├── result.RowsAffected() → rows
+  │   ├── rows == 0 → tx.Rollback() + return ErrStaleVersion            ↺ ⚠
+  │   └── rows == 1 → tx.Commit() + return nil                          ↺
+  └── release connection to pool                                        ↺

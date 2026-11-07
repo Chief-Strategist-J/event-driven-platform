@@ -9,3 +9,4 @@ bin/
 cpp-modules/build/
 cpp-modules/platform_cpp
 target/
+__debug_bin*

@@ -1,7 +1,7 @@
 server:
   name: "event-driven-platform"
-  bind_address: "0.0.0.0:8080"
-  admin_bind_address: "127.0.0.1:8081"
+  bind_address: "${SERVER_BIND_ADDRESS:-0.0.0.0:8080}"
+  admin_bind_address: "${SERVER_ADMIN_BIND_ADDRESS:-127.0.0.1:8081}"
   idle_timeout_seconds: 75
   header_timeout_seconds: 15
   drain_deadline_seconds: 15
