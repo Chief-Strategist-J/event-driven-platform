@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -13,6 +13,7 @@ import (
 	"event-driven-platform/src/features/materialized-views/contracts"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
+	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
 )
@@ -64,13 +65,7 @@ func (h *MaterializedViewsHandler) HandleRegisterView(w http.ResponseWriter, r *
 
 	record, err := h.svc.RegisterView(ctx, input)
 	if err != nil {
-		statusCode := http.StatusBadRequest
-		errCode := constants.ErrCodeValidationFailed
-		if strings.Contains(err.Error(), "conflict") || strings.Contains(err.Error(), "duplicate") {
-			statusCode = http.StatusConflict
-			errCode = constants.ErrCodeConflict
-		}
-		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -101,13 +96,7 @@ func (h *MaterializedViewsHandler) HandleGetViewByID(w http.ResponseWriter, r *h
 
 	record, err := h.svc.GetViewByPublicID(ctx, publicID)
 	if err != nil {
-		statusCode := http.StatusInternalServerError
-		errCode := constants.ErrCodeInternalError
-		if strings.Contains(err.Error(), "not found") {
-			statusCode = http.StatusNotFound
-			errCode = constants.ErrCodeNotFound
-		}
-		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -153,13 +142,7 @@ func (h *MaterializedViewsHandler) HandleApplyProjection(w http.ResponseWriter, 
 
 	eval, err := h.svc.ApplyProjection(ctx, input)
 	if err != nil {
-		statusCode := http.StatusBadRequest
-		errCode := constants.ErrCodeValidationFailed
-		if strings.Contains(err.Error(), "conflict") {
-			statusCode = http.StatusConflict
-			errCode = constants.ErrCodeConflict
-		}
-		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -205,13 +188,7 @@ func (h *MaterializedViewsHandler) HandleInitiateRebuild(w http.ResponseWriter, 
 
 	log, err := h.svc.InitiateRebuild(ctx, input)
 	if err != nil {
-		statusCode := http.StatusBadRequest
-		errCode := constants.ErrCodeValidationFailed
-		if strings.Contains(err.Error(), "conflict") {
-			statusCode = http.StatusConflict
-			errCode = constants.ErrCodeConflict
-		}
-		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -251,13 +228,7 @@ func (h *MaterializedViewsHandler) HandleAdvanceRebuild(w http.ResponseWriter, r
 
 	log, err := h.svc.AdvanceRebuild(ctx, input)
 	if err != nil {
-		statusCode := http.StatusBadRequest
-		errCode := constants.ErrCodeValidationFailed
-		if strings.Contains(err.Error(), "conflict") || strings.Contains(err.Error(), "mismatch") || strings.Contains(err.Error(), "terminal") {
-			statusCode = http.StatusConflict
-			errCode = constants.ErrCodeConflict
-		}
-		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -297,13 +268,7 @@ func (h *MaterializedViewsHandler) HandleApplyContribution(w http.ResponseWriter
 
 	record, err := h.svc.ApplyContribution(ctx, input)
 	if err != nil {
-		statusCode := http.StatusBadRequest
-		errCode := constants.ErrCodeValidationFailed
-		if strings.Contains(err.Error(), "conflict") || strings.Contains(err.Error(), "duplicate") {
-			statusCode = http.StatusConflict
-			errCode = constants.ErrCodeConflict
-		}
-		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -343,9 +308,7 @@ func (h *MaterializedViewsHandler) HandleRecordPeriodEvent(w http.ResponseWriter
 
 	record, err := h.svc.RecordPeriodEvent(ctx, input)
 	if err != nil {
-		statusCode := http.StatusBadRequest
-		errCode := constants.ErrCodeValidationFailed
-		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -376,17 +339,22 @@ func (h *MaterializedViewsHandler) HandleQueryView(w http.ResponseWriter, r *htt
 
 	out, err := h.svc.QueryViewWithConsistencyToken(ctx, input)
 	if err != nil {
-		statusCode := http.StatusBadRequest
-		errCode := constants.ErrCodeValidationFailed
-		if strings.Contains(err.Error(), "not found") {
-			statusCode = http.StatusNotFound
-			errCode = constants.ErrCodeNotFound
-		}
-		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
 	h.writeResponse(w, http.StatusOK, out, start, reqID, corrID, causationID)
+}
+
+// writeServiceError uses the status carried by the typed ApplicationError
+// (validation 400, not found 404, conflict 409, ...); untyped errors are 500.
+func (h *MaterializedViewsHandler) writeServiceError(w http.ResponseWriter, err error, start time.Time, reqID, corrID, causationID string) {
+	var appErr *appErrors.ApplicationError
+	if errors.As(err, &appErr) {
+		h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+	h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "internal server error", start, reqID, corrID, causationID)
 }
 
 func (h *MaterializedViewsHandler) writeResponse(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {

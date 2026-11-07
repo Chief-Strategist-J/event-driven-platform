@@ -14,6 +14,7 @@ var (
 	ErrCannotPromoteBeforeCatchUp = errors.New("cannot promote replay run before caught-up state")
 	ErrCannotCutoverBeforePromoted = errors.New("cannot complete cutover before writer is promoted")
 	ErrUnrecognizedReplayMode     = errors.New("unrecognized replay run mode")
+	ErrReplayNotAdvanceable       = errors.New("replay run cannot advance offsets in its current state")
 	ErrUnrecognizedEffectType     = errors.New("unrecognized effect type")
 )
 
@@ -67,4 +68,14 @@ func IsCaughtUp(currentOffset, endOffset int64) bool {
 		return true
 	}
 	return currentOffset >= endOffset
+}
+
+// CanAdvanceOffset reports whether a run in the given state may move its
+// offset: only after streaming started and before it is promoted or terminal.
+func CanAdvanceOffset(state contracts.ReplayState) bool {
+	switch state {
+	case contracts.StateStreaming, contracts.StateFollowing, contracts.StateCaughtUp:
+		return true
+	}
+	return false
 }

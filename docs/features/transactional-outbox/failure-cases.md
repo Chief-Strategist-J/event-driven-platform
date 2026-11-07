@@ -68,3 +68,24 @@
 | **F4.7** | Poison event | Partition outage | Retry count $\ge 5 \to \text{PARKED}$; queries block subsequent versions $k+1$ | Alert when `count(status='PARKED') > 0` |
 | **F4.11** | Retention purge deletes pending | Silent data loss | Purge query strictly filters `WHERE status = 'PUBLISHED'` | Purge count vs published count |
 | **F9.1** | Silent pipeline stoppage | Undetected loss | Synthetic canary emitted every ~30s (`EmitCanaryHeartbeat`) | Canary consumer latency SLO |
+
+## 3. Amendment 2026-11-07: Failure Modes Added
+
+### F-OBX-A1 Duplicate externalId on staging
+- **Trigger**: `POST /api/v1/outbox` re-sends an `externalId` already used for the same tenant and source service (no idempotency key), or an aggregate version already staged.
+- **Detection**: Postgres SQLSTATE 23505 on `outbox_external_uk` / `outbox_aggregate_version_uk`, mapped by `mapInsertError`.
+- **Response**: `409 CONFLICT` with a domain message (no constraint name). Previously `500`.
+- **Operator/client action**: Treat 409 as "already staged"; do not retry blindly. To make retries safe, send an idempotency key so the original record is returned.
+
+### F-OBX-A2 Relay publishes without headers (regression guard)
+- **Trigger**: A producer implementation that does not implement `HeaderedProducerPort`.
+- **Detection**: `producers.PublishRecord` falls back to plain `Publish`; consumers observe records with no `event_type`/`schema_version`/`source_service` headers.
+- **Response**: Message is still delivered (payload unchanged); only headers are missing.
+- **Operator action**: Use the Kafka adapter (implements `PublishWithHeaders`). Custom producers must implement `HeaderedProducerPort`.
+
+### F-OBX-A3 Row PARKED because target topic does not exist (RC6)
+- **Trigger**: An outbox row's `aggregate_type` names a Kafka topic that has not been created; broker auto-create is disabled.
+- **Detection**: Relay publish error "Unknown Topic Or Partition"; the row's failure message records it; after 5 retries the row is PARKED (stops being picked up).
+- **Response**: No data loss; the row stays in the outbox. Other aggregates continue.
+- **Operator action**: (1) Create the topic. (2) Reset the parked row/status back to pending so the relay picks it up again (exact reset SQL/status value: unverified here, check the outbox state machine in `diagrams.md` and the repository queries before running). (3) Confirm the row reaches PUBLISHED.
+- **Prevention**: Provision topics as part of onboarding a new `aggregate_type`.

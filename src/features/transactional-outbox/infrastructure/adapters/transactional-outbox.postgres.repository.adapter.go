@@ -7,12 +7,29 @@ import (
 	"errors"
 	"time"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 
 	"event-driven-platform/src/features/transactional-outbox/contracts"
 	"event-driven-platform/src/features/transactional-outbox/infrastructure/ports"
 	"event-driven-platform/src/features/transactional-outbox/infrastructure/queries"
+	appErrors "event-driven-platform/src/shared/errors"
 )
+
+// mapInsertError converts unique violations on outbox inserts into 409 conflicts.
+func mapInsertError(err error) error {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+		switch pqErr.Constraint {
+		case "outbox_external_uk":
+			return appErrors.NewConflictError("an outbox event with the same externalId already exists for this tenant and source service")
+		case "outbox_aggregate_version_uk":
+			return appErrors.NewConflictError("an outbox event for this aggregate version already exists")
+		default:
+			return appErrors.NewConflictError("duplicate outbox event")
+		}
+	}
+	return err
+}
 
 type PostgresOutboxRepositoryAdapter struct {
 	db *sql.DB
@@ -61,7 +78,7 @@ func (p *PostgresOutboxRepositoryAdapter) Save(ctx context.Context, record contr
 		record.Payload,
 		headersJSON,
 	)
-	return err
+	return mapInsertError(err)
 }
 
 func (p *PostgresOutboxRepositoryAdapter) SaveAndImmediateDelete(ctx context.Context, record contracts.OutboxRecord) error {
@@ -87,7 +104,7 @@ func (p *PostgresOutboxRepositoryAdapter) SaveAndImmediateDelete(ctx context.Con
 		record.Payload,
 		headersJSON,
 	)
-	return err
+	return mapInsertError(err)
 }
 
 func (p *PostgresOutboxRepositoryAdapter) GetByID(ctx context.Context, tenantID string, id string) (*contracts.OutboxRecord, error) {

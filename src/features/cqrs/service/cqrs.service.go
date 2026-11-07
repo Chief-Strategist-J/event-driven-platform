@@ -149,23 +149,26 @@ func (s *CQRSService) DispatchCommand(ctx context.Context, in contracts.Dispatch
 		return nil, err
 	}
 
-	var secretValue = "default_system_cqrs_secret_key_32"
-	var keyVersion = 1
+	// A consistency token is only minted when the tenant has an active signing key.
+	// Without one the command still succeeds but carries no token; there is no
+	// shared fallback secret.
+	tokenStr := ""
 	if signingKey != nil {
-		secretValue = signingKey.RawSecretValue
-		keyVersion = signingKey.KeyVersion
+		tokenObj := contracts.ConsistencyToken{
+			TenantID:      norm.TenantID,
+			PrincipalID:   norm.PrincipalID,
+			AggregateType: norm.AggregateType,
+			AggregateID:   norm.AggregateID,
+			MinVersion:    newVersion,
+			ExpiresAt:     now.Add(15 * time.Minute),
+			KeyVersion:    signingKey.KeyVersion,
+		}
+		minted, mintErr := rules.MintConsistencyToken(tokenObj, signingKey.RawSecretValue)
+		if mintErr != nil {
+			return nil, fmt.Errorf("mint consistency token: %w", mintErr)
+		}
+		tokenStr = minted
 	}
-
-	tokenObj := contracts.ConsistencyToken{
-		TenantID:      norm.TenantID,
-		PrincipalID:   norm.PrincipalID,
-		AggregateType: norm.AggregateType,
-		AggregateID:   norm.AggregateID,
-		MinVersion:    newVersion,
-		ExpiresAt:     now.Add(15 * time.Minute),
-		KeyVersion:    keyVersion,
-	}
-	tokenStr, _ := rules.MintConsistencyToken(tokenObj, secretValue)
 
 	responsePayload := fmt.Sprintf(`{"aggregate_id":"%s","version":%d,"status":"COMPLETED"}`, norm.AggregateID, newVersion)
 	if err := s.repo.UpdateIdempotencyRecord(ctx, cmdRecord.ID, norm.TenantID, contracts.CommandStatusCompleted, responsePayload, tokenStr); err != nil {
@@ -201,20 +204,18 @@ func (s *CQRSService) ResolveQuery(ctx context.Context, in contracts.ResolveQuer
 		}, nil
 	}
 
-	signingKey, _ := s.repo.GetActiveSigningKey(ctx, norm.TenantID)
-	secretValue := "default_system_cqrs_secret_key_32"
-	if signingKey != nil {
-		secretValue = signingKey.RawSecretValue
+	signingKey, keyErr := s.repo.GetActiveSigningKey(ctx, norm.TenantID)
+	if keyErr != nil {
+		span.RecordError(keyErr)
+		return nil, fmt.Errorf("%w: %v", contracts.ErrSigningKeyLookup, keyErr)
+	}
+	if signingKey == nil {
+		return nil, contracts.ErrNoActiveSigningKey
 	}
 
-	token, valid := rules.VerifyConsistencyToken(norm.ConsistencyTokenRaw, secretValue, time.Now().UTC())
+	token, valid := rules.VerifyConsistencyToken(norm.ConsistencyTokenRaw, signingKey.RawSecretValue, time.Now().UTC())
 	if !valid {
-		return &contracts.ResolveQueryOutput{
-			Data:              fmt.Sprintf(`{"view_name":"%s","aggregate_id":"%s"}`, norm.ViewName, norm.AggregateID),
-			Version:           1,
-			ConsistencyStatus: contracts.ResolutionImmediate,
-			ExpectedVersion:   1,
-		}, nil
+		return nil, contracts.ErrInvalidConsistencyToken
 	}
 
 	var simulatedViewVersion int64 = 1

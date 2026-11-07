@@ -47,3 +47,16 @@ flowchart TD
     H -->|Degraded| C
 ```
 
+
+---
+
+## 3. Amendment 2026-11-07: API and Recovery Failure Modes
+
+| Code | Failure Scenario | Severity | System Impact | Immediate Handling & Mitigation | Long-Term Prevention |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **FL-BP-A1** | **Concurrency limit stuck at ramp value after recovery** | **DEGRADE** | Handler stays throttled (observed limit 1) after state returns to NORMAL | `ConfirmRecovery` restores limit to at least `DefaultConcurrencyLimit` (10). Operator: verify `concurrency_limit` on `GET` state after confirm. | Persist the pre-pause limit (not yet stored; restoration is to the fixed baseline, not the prior value) |
+| **FL-BP-A2** | **Non-UUID `correlationId`** | **DEGRADE** | Previously raw `pq:` text in a 400 | 400 `correlationId must be a valid UUID` before service call. Operator: fix caller. | Contract validation at the edge |
+| **FL-BP-A3** | **Recovery/confirm/state for unknown handler+dependency** | **DEGRADE** | Previously 400 (write routes) with raw text | 404 `backpressure record not found`. Operator: report saturation first or correct ids. | Typed sentinel `ErrRecordNotFound` |
+| **FL-BP-A4** | **Illegal state transition (e.g. confirm while SATURATED)** | **DEGRADE** | Previously 400 | 409 with transition message from the state machine. Operator: follow the lifecycle (recovery signal, then confirm). | Machine-enforced transitions |
+| **FL-BP-A5** | **Saturation report whose signal is not saturated** | **DEGRADE** | No state change | 400 (`ErrSignalNotSaturated`) with recommendation text. | Callers evaluate thresholds before reporting |
+| **FL-BP-A6** | **Unclassified storage error** | **OUTAGE** | Previously leaked as 400 with raw text | 500 generic `internal backpressure error`; details in logs only. | Alert on 5xx |

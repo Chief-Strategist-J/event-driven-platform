@@ -3,14 +3,28 @@ package adapters
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/lib/pq"
 
 	"event-driven-platform/src/features/replay-mechanism/contracts"
 	"event-driven-platform/src/features/replay-mechanism/infrastructure/ports"
 	"event-driven-platform/src/features/replay-mechanism/infrastructure/queries"
 	"event-driven-platform/src/infra/observability"
 )
+
+// storageError classifies a database failure: unique violations become
+// ErrReplayConflict, everything else ErrReplayStorageFailure. The raw driver
+// error stays in the chain for logging but must not be echoed to clients.
+func storageError(op string, err error) error {
+	var pqErr *pq.Error
+	if errors.As(err, &pqErr) && pqErr.Code == "23505" {
+		return fmt.Errorf("%w: %s", contracts.ErrReplayConflict, op)
+	}
+	return fmt.Errorf("%w: %s: %w", contracts.ErrReplayStorageFailure, op, err)
+}
 
 type ReplayPostgresRepositoryAdapter struct {
 	db *sql.DB
@@ -50,7 +64,7 @@ func (a *ReplayPostgresRepositoryAdapter) CreateReplayRun(ctx context.Context, r
 
 	if err != nil {
 		observability.RecordError(span, err)
-		return nil, fmt.Errorf("replay run creation failed: %w", err)
+		return nil, storageError("replay run creation failed", err)
 	}
 
 	run.ID = returnedID
@@ -79,7 +93,7 @@ func (a *ReplayPostgresRepositoryAdapter) UpdateReplayRunState(ctx context.Conte
 
 	if err != nil {
 		observability.RecordError(span, err)
-		return nil, fmt.Errorf("replay state update failed: %w", err)
+		return nil, storageError("replay state update failed", err)
 	}
 
 	rec, err := a.GetReplayRun(ctx, tenantID, runID)
@@ -111,7 +125,7 @@ func (a *ReplayPostgresRepositoryAdapter) UpdateReplayRunOffset(ctx context.Cont
 
 	if err != nil {
 		observability.RecordError(span, err)
-		return nil, fmt.Errorf("replay offset update failed: %w", err)
+		return nil, storageError("replay offset update failed", err)
 	}
 
 	rec, err := a.GetReplayRun(ctx, tenantID, runID)
@@ -157,12 +171,12 @@ func (a *ReplayPostgresRepositoryAdapter) GetReplayRun(ctx context.Context, tena
 		&rec.UpdatedAt,
 	)
 
-	if err == sql.ErrNoRows {
-		return nil, fmt.Errorf("replay run not found: %s", runID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("%w: %s", contracts.ErrReplayRunNotFound, runID)
 	}
 	if err != nil {
 		observability.RecordError(span, err)
-		return nil, fmt.Errorf("replay get failed: %w", err)
+		return nil, storageError("replay get failed", err)
 	}
 
 	rec.Mode = contracts.ReplayRunMode(modeStr)
@@ -178,7 +192,7 @@ func (a *ReplayPostgresRepositoryAdapter) ListReplayRunsByTenant(ctx context.Con
 	rows, err := a.db.QueryContext(ctx, queries.FlowListReplayRunsByTenant, tenantID)
 	if err != nil {
 		observability.RecordError(span, err)
-		return nil, fmt.Errorf("replay list failed: %w", err)
+		return nil, storageError("replay list failed", err)
 	}
 	defer rows.Close()
 
@@ -194,7 +208,7 @@ func (a *ReplayPostgresRepositoryAdapter) ListReplayRunsByTenant(ctx context.Con
 			&rec.Version, &rec.CreatedAt, &rec.UpdatedAt,
 		); err != nil {
 			observability.RecordError(span, err)
-			return nil, fmt.Errorf("replay row scan failed: %w", err)
+			return nil, storageError("replay row scan failed", err)
 		}
 		rec.Mode = contracts.ReplayRunMode(modeStr)
 		rec.State = contracts.ReplayState(stateStr)
@@ -203,7 +217,7 @@ func (a *ReplayPostgresRepositoryAdapter) ListReplayRunsByTenant(ctx context.Con
 	}
 	if err := rows.Err(); err != nil {
 		observability.RecordError(span, err)
-		return nil, fmt.Errorf("replay rows iteration failed: %w", err)
+		return nil, storageError("replay rows iteration failed", err)
 	}
 	return res, nil
 }
@@ -232,7 +246,7 @@ func (a *ReplayPostgresRepositoryAdapter) RecordEffectLog(ctx context.Context, e
 
 	if err != nil {
 		observability.RecordError(span, err)
-		return fmt.Errorf("replay effect log insert failed: %w", err)
+		return storageError("replay effect log insert failed", err)
 	}
 	return nil
 }
@@ -260,7 +274,7 @@ func (a *ReplayPostgresRepositoryAdapter) RecordAuditLog(ctx context.Context, au
 
 	if err != nil {
 		observability.RecordError(span, err)
-		return fmt.Errorf("replay audit log insert failed: %w", err)
+		return storageError("replay audit log insert failed", err)
 	}
 	return nil
 }

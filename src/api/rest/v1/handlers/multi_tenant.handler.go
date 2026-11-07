@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -13,6 +13,7 @@ import (
 	"event-driven-platform/src/features/multi-tenant-event-isolation/contracts"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
+	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
 )
@@ -64,15 +65,7 @@ func (h *MultiTenantHandler) HandleRegisterTenant(w http.ResponseWriter, r *http
 
 	rec, err := h.feat.Service.RegisterTenant(ctx, input)
 	if err != nil {
-		status := http.StatusInternalServerError
-		code := constants.ErrCodeInternalError
-		if strings.Contains(err.Error(), "already registered") {
-			status = http.StatusConflict
-			code = constants.ErrCodeConflict
-		} else if strings.Contains(err.Error(), "validation") || strings.Contains(err.Error(), "blank") {
-			status = http.StatusBadRequest
-			code = constants.ErrCodeValidationFailed
-		}
+		status, code := mapTenantError(err)
 		h.writeError(w, status, code, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
@@ -90,11 +83,7 @@ func (h *MultiTenantHandler) HandleGetTenant(w http.ResponseWriter, r *http.Requ
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
 
-	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	var tenantID string
-	if len(pathParts) >= 4 {
-		tenantID = pathParts[3]
-	}
+	tenantID := r.PathValue("tenant_id")
 
 	span.SetAttributes(
 		attribute.String("http.method", r.Method),
@@ -104,12 +93,7 @@ func (h *MultiTenantHandler) HandleGetTenant(w http.ResponseWriter, r *http.Requ
 
 	rec, err := h.feat.Service.GetTenant(ctx, tenantID)
 	if err != nil {
-		status := http.StatusInternalServerError
-		code := constants.ErrCodeInternalError
-		if strings.Contains(err.Error(), "not found") {
-			status = http.StatusNotFound
-			code = constants.ErrCodeNotFound
-		}
+		status, code := mapTenantError(err)
 		h.writeError(w, status, code, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
@@ -127,11 +111,7 @@ func (h *MultiTenantHandler) HandleTransitionLifecycle(w http.ResponseWriter, r 
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
 
-	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	var tenantID string
-	if len(pathParts) >= 4 {
-		tenantID = pathParts[3]
-	}
+	tenantID := r.PathValue("tenant_id")
 
 	var input contracts.UpdateLifecycleInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -141,12 +121,7 @@ func (h *MultiTenantHandler) HandleTransitionLifecycle(w http.ResponseWriter, r 
 
 	rec, err := h.feat.Service.TransitionLifecycle(ctx, tenantID, input)
 	if err != nil {
-		status := http.StatusInternalServerError
-		code := constants.ErrCodeInternalError
-		if strings.Contains(err.Error(), "invalid tenant lifecycle transition") || strings.Contains(err.Error(), "tombstoned") {
-			status = http.StatusConflict
-			code = constants.ErrCodeConflict
-		}
+		status, code := mapTenantError(err)
 		h.writeError(w, status, code, err.Error(), start, reqID, corrID, causationID)
 		return
 	}
@@ -176,6 +151,16 @@ func (h *MultiTenantHandler) HandleVerifyEnvelope(w http.ResponseWriter, r *http
 	}
 
 	h.writeResponse(w, http.StatusOK, map[string]bool{"verified": true}, start, reqID, corrID, causationID)
+}
+
+// mapTenantError derives the HTTP status from the typed ApplicationError
+// carried by the service/adapters; anything untyped is an internal error.
+func mapTenantError(err error) (int, string) {
+	var appErr *appErrors.ApplicationError
+	if errors.As(err, &appErr) {
+		return appErr.StatusCode, appErr.CanonicalCode
+	}
+	return http.StatusInternalServerError, constants.ErrCodeInternalError
 }
 
 func (h *MultiTenantHandler) writeResponse(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {

@@ -17,6 +17,7 @@ var (
 	ErrInvalidDefinition    = errors.New("schema_definition must not be empty")
 	ErrInvalidTopicName     = errors.New("topic name must not be empty or whitespace")
 	ErrInvalidSunsetDeadline = errors.New("sunset_deadline must be in the future")
+	ErrInvalidCompatibilityMode = errors.New("compatibility_mode must be one of FULL_TRANSITIVE, BACKWARD_TRANSITIVE, FORWARD_TRANSITIVE, FULL, BACKWARD, FORWARD")
 	ErrInvalidConsumerGroup = errors.New("consumer_group must not be empty or whitespace")
 )
 
@@ -42,6 +43,13 @@ func NormalizeRegisterSchemaInput(in RegisterSchemaInput) (RegisterSchemaInput, 
 	}
 	if in.CompatibilityMode == "" {
 		in.CompatibilityMode = CompatibilityFullTransitive
+	}
+	in.CompatibilityMode = CompatibilityMode(strings.ToUpper(strings.TrimSpace(string(in.CompatibilityMode))))
+	switch in.CompatibilityMode {
+	case CompatibilityFullTransitive, CompatibilityBackwardTransitive, CompatibilityForwardTransitive,
+		CompatibilityFull, CompatibilityBackward, CompatibilityForward:
+	default:
+		return in, ErrInvalidCompatibilityMode
 	}
 	if in.CorrelationID == "" {
 		in.CorrelationID = uuid.New().String()

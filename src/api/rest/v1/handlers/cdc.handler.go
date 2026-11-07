@@ -2,8 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
-	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -13,6 +13,7 @@ import (
 	"event-driven-platform/src/features/cdc-integration/contracts"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
+	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
 )
@@ -64,16 +65,7 @@ func (h *CDCHandler) HandleRegisterConnector(w http.ResponseWriter, r *http.Requ
 
 	rec, err := h.feat.Service.RegisterConnector(ctx, input)
 	if err != nil {
-		status := http.StatusInternalServerError
-		code := constants.ErrCodeInternalError
-		if strings.Contains(err.Error(), "already registered") {
-			status = http.StatusConflict
-			code = constants.ErrCodeConflict
-		} else if strings.Contains(err.Error(), "validation") || strings.Contains(err.Error(), "blank") {
-			status = http.StatusBadRequest
-			code = constants.ErrCodeValidationFailed
-		}
-		h.writeError(w, status, code, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -90,11 +82,7 @@ func (h *CDCHandler) HandleGetConnector(w http.ResponseWriter, r *http.Request) 
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
 
-	pathParts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	var connName string
-	if len(pathParts) >= 4 {
-		connName = pathParts[3]
-	}
+	connName := r.PathValue("name")
 
 	span.SetAttributes(
 		attribute.String("http.method", r.Method),
@@ -104,13 +92,7 @@ func (h *CDCHandler) HandleGetConnector(w http.ResponseWriter, r *http.Request) 
 
 	rec, err := h.feat.Service.GetConnector(ctx, connName)
 	if err != nil {
-		status := http.StatusInternalServerError
-		code := constants.ErrCodeInternalError
-		if strings.Contains(err.Error(), "not found") {
-			status = http.StatusNotFound
-			code = constants.ErrCodeNotFound
-		}
-		h.writeError(w, status, code, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -126,6 +108,11 @@ func (h *CDCHandler) HandleDispatchSignal(w http.ResponseWriter, r *http.Request
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
 
 	var input contracts.DispatchSignalInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -145,13 +132,7 @@ func (h *CDCHandler) HandleDispatchSignal(w http.ResponseWriter, r *http.Request
 
 	sig, err := h.feat.Service.DispatchSignal(ctx, input)
 	if err != nil {
-		status := http.StatusInternalServerError
-		code := constants.ErrCodeInternalError
-		if strings.Contains(err.Error(), "validation") || strings.Contains(err.Error(), "forbidden") {
-			status = http.StatusBadRequest
-			code = constants.ErrCodeValidationFailed
-		}
-		h.writeError(w, status, code, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -167,6 +148,11 @@ func (h *CDCHandler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	reqID := r.Header.Get(constants.HeaderXRequestID)
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
+
+	if corrID == "" {
+		newUUID, _ := utils.GenerateUUIDv7()
+		corrID = newUUID
+	}
 
 	var input contracts.HeartbeatTickInput
 	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
@@ -185,11 +171,20 @@ func (h *CDCHandler) HandleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.feat.Service.EmitHeartbeat(ctx, input); err != nil {
-		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
 	h.writeResponse(w, http.StatusOK, map[string]string{"status": "HEARTBEAT_RECORDED"}, start, reqID, corrID, causationID)
+}
+
+func (h *CDCHandler) writeServiceError(w http.ResponseWriter, err error, start time.Time, reqID, corrID, causationID string) {
+	var appErr *appErrors.ApplicationError
+	if errors.As(err, &appErr) {
+		h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
+		return
+	}
+	h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "internal cdc error", start, reqID, corrID, causationID)
 }
 
 func (h *CDCHandler) writeResponse(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {

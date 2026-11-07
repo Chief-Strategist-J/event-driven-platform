@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"event-driven-platform/src/features/transactional-outbox/domain/rules"
 	"event-driven-platform/src/features/transactional-outbox/infrastructure/ports"
 	"event-driven-platform/src/shared/constants"
+	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/utils"
 )
 
@@ -88,12 +90,20 @@ func (s *OutboxService) StageEvent(ctx context.Context, input contracts.CreateOu
 
 	if input.CDCMode {
 		if err := s.repo.SaveAndImmediateDelete(ctx, record); err != nil {
+			var appErr *appErrors.ApplicationError
+			if errors.As(err, &appErr) {
+				return nil, appErr
+			}
 			return nil, fmt.Errorf("failed staging cdc outbox record: %w", err)
 		}
 		return &record, nil
 	}
 
 	if err := s.repo.Save(ctx, record); err != nil {
+		var appErr *appErrors.ApplicationError
+		if errors.As(err, &appErr) {
+			return nil, appErr
+		}
 		return nil, fmt.Errorf("failed staging outbox record: %w", err)
 	}
 
@@ -144,7 +154,7 @@ func (s *OutboxService) RelayBatch(ctx context.Context, batchSize int) (int, err
 		topic := rec.AggregateType
 		keyBytes := []byte(rec.AggregateID)
 
-		if err := s.producer.Publish(ctx, topic, keyBytes, rec.Payload); err != nil {
+		if err := producers.PublishRecord(ctx, s.producer, topic, keyBytes, rec.Payload, rec.Headers); err != nil {
 			_ = s.repo.MarkFailed(ctx, rec.TenantID, rec.ID, err.Error())
 			continue
 		}

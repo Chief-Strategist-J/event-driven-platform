@@ -80,3 +80,14 @@ This catalog documents failure modes across the replay lifecycle, derived from t
 | **F14.1** | Erased customer reappears in rebuilt view | **COMPLIANCE** | Crypto-shredded records decrypted or unmasked during historical replay. | Replay runner checks crypto-shredding keystore; missing key yields erased/redacted state. | GDPR privacy scanner. |
 | **F14.2** | Replay target with production PII in lower env | **COMPLIANCE** | Replaying production archive in staging without data anonymization. | Orchestrator restricts production archive access to production VPC networks only. | IAM permission guardrails. |
 
+
+## Amendment 2026-11-07: Failure Modes Added
+
+| ID | Severity | Failure Mode | Trigger | Detection | Response | Operator Action |
+|---|---|---|---|---|---|---|
+| **F-RPL-A1** | CORRUPT | Advance before streaming starts, or after promotion/terminal | `POST /replay/runs/advance` with run state not in STREAMING/FOLLOWING/CAUGHT_UP | `ErrReplayNotAdvanceable` | `409` | Start streaming first; a run in PROMOTED/COMPLETED/ABORTED cannot advance, create a new run. |
+| **F-RPL-A2** | DEGRADE | Invalid run id | non-UUID `runId` (e.g. public id `rpl_*`) | `ErrInvalidRunID` / `ErrMissingRunID` | `400` "runId must be a valid UUID" | Use the run's `id` (UUID), not `publicId`. |
+| **F-RPL-A3** | LOW | Unknown run | valid UUID that does not exist for the tenant | `ErrReplayRunNotFound` | `404` | Verify tenant and id. |
+| **F-RPL-A4** | CORRUPT | Effect decision not logged | `RecordEffectLog` fails during effects/evaluate (previously swallowed, returning 200 SUPPRESSED) | Insert error returned | `500` generic (`ErrReplayStorageFailure` path, detail hidden) | Check server logs; no decision should be assumed recorded. |
+| **F-RPL-A5** | LOW | Bad effect `correlation_id` | non-UUID `correlation_id` supplied | Service validation | `400`; if omitted a UUIDv7 is generated | Supply a UUID or omit it. |
+| **F-RPL-A6** | LOW | Offset regression/overrun on advance | new offset below current or above `end_offset` | `ValidateOffsetAdvance` | `400` | Send a monotonic offset within the run's end offset. |

@@ -39,6 +39,10 @@ func AssertZeroCustomerPayload(fields map[string]interface{}) error {
 	return nil
 }
 
+// HealthyCCTLActionLink is the non-empty read-only control-plane link returned when
+// no degraded hop exists; the triage log requires a non-empty c_ctl_action_link.
+const HealthyCCTLActionLink = "/control-plane/consumers/status"
+
 func LocalizeBrokenHop(hops []*contracts.PipelineHopRecord, now time.Time) (*contracts.PipelineHopRecord, contracts.HopStatus, contracts.IncidentSeverity, string, string) {
 	hopMap := make(map[contracts.HopCode]*contracts.PipelineHopRecord, len(hops))
 	for _, h := range hops {
@@ -99,5 +103,5 @@ func LocalizeBrokenHop(hops []*contracts.PipelineHopRecord, now time.Time) (*con
 		}
 	}
 
-	return nil, contracts.StatusOk, contracts.SevInfo, "All pipeline hops reporting healthy", ""
+	return nil, contracts.StatusOk, contracts.SevInfo, "All pipeline hops reporting healthy", HealthyCCTLActionLink
 }

@@ -9,6 +9,7 @@ import (
 
 	"event-driven-platform/src/features/cdc-integration/contracts"
 	"event-driven-platform/src/features/cdc-integration/infrastructure/queries"
+	"event-driven-platform/src/infra/database"
 	"event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/utils"
 )
@@ -27,7 +28,7 @@ func (a *PostgresCDCRepositoryAdapter) RegisterConnector(ctx context.Context, re
 		record.ConnectorName, record.SlotName, record.PublicationName, string(record.Mode), string(record.State),
 	)
 	if err != nil {
-		return errors.NewInternalError(fmt.Sprintf("failed to insert cdc connector inventory: %v", err))
+		return database.MapDatabaseError(err)
 	}
 	return nil
 }

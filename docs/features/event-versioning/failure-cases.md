@@ -70,3 +70,12 @@ sequenceDiagram
     Drift-->>Drift: Mean jump detected on schema change
 ```
 
+
+## 3. Amendment 2026-11-07: Failure Nodes Added
+
+| Failure Code | Severity | Scenario | Root Cause | Handling & Mitigation | Automated Detection |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **F-EV-A1** | `OUTAGE` | Upcast request with no registered chain (previously unavoidable because the register route was missing) | Upcasters could not be registered over HTTP | Register each step with `POST /api/v1/schemas/upcasters`; use `transformerName: "identity"` for additive bumps. Missing step still fails with `400 incomplete upcast chain`. | 400 on `/schemas/upcast`; chain-gap check |
+| **F-EV-A2** | `DEGRADE` | Duplicate upcaster registration | Same `externalId` re-sent | `409 CONFLICT` (treat as already registered) | 409 on `/schemas/upcasters` |
+| **F-EV-A3** | `DEGRADE` | Unknown `transformerName` registered | Name is not validated against the engine at registration (open gap) | Registration succeeds (201) but `/schemas/upcast` fails `400` | 400 at upcast time. Operator action: register a transformer in code at startup, or re-register the step with `identity`. |
+| **F-EV-A4** | `DEGRADE` | Custom transformer needed | No custom transformers are registered at startup | Deploy code that registers the transformer before the step is used | 400 at upcast |

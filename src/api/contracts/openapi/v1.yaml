@@ -2,22 +2,126 @@
 openapi: 3.1.0
 info:
   title: event-driven-platform API
-  version: 1.0.0
+  version: 1.2.0
+  description: |
+    Event-driven platform REST API. Every response uses the common envelope
+    {success, statusCode, data, error, meta}. success is false for every status >= 400 and
+    error carries {code, message, retryable, details?}. Server-side detail (SQL text, constraint
+    names) is never exposed: database integrity violations surface as a generic 409/400 message
+    and unexpected failures as a generic 500.
+
+    Headers (all optional, HTTP names are case-insensitive): X-Request-ID (echoed, generated as
+    UUIDv7 if absent), X-Correlation-ID (echoed; handlers default it to a UUIDv7, and routes
+    that persist it require a UUID), X-Causation-ID, X-Tenant-ID (fallback for a missing body
+    tenant on backpressure, replay, offsets and retries/attempts routes), X-Idempotency-Key
+    (POST /api/v1/outbox; POST /api/v1/commands/dispatch, where it is mandatory).
+
+    Field casing differs per feature and is documented on each route: camelCase for outbox,
+    consumers/inbox, dlq, schemas/versions|compatibility|upcast|upcasters, events, retries,
+    consumer-groups, offsets, backpressure and replay; snake_case for tenants, cdc,
+    partitioning, materialized-views, consistency, commands/queries (cqrs), schemas/register
+    and the rest of schema-evolution, audits, encryption, auth, domain-events, communication,
+    ops and tracing.
+
+    1.1.0: added POST /api/v1/schemas/upcasters and GET /api/v1/offsets/lag, shared
+    Error/Success envelope components, documented the 400/404/409 responses introduced by the
+    error-mapping fixes (typed errors via errors.As), 202 QUEUED_IN_OUTBOX for async command
+    dispatch, schema compatibility enforcement (409), replay run id/state rules, and corrected
+    request schemas that had drifted from the Go contract structs (replay, offsets
+    fast-forward/rewind, backpressure, auth, schema-evolution, domain-events, ops triage).
+
+    1.2.0 (second pass): tenant_id is now required (400) on the read endpoints that previously
+    returned 200 with null data or used an implicit "default" tenant; non-UUID quarantineId and
+    replay correlationId return 400; resolve returns 409 when a supplied consistency token needs
+    a signing key the tenant does not have; POST /api/v1/commands/keys no longer returns
+    secret_key_hash; verify-envelope returns 403 for a SUSPENDED tenant. Added servers and the
+    health endpoints (/health/live, /health/ready on the admin listener).
+
+    Runtime and deployment (see docs/adr/ADR-0003): the service image is published as
+    chiefj/event-driven-platform (tags latest, v2, fixes) on Docker Hub. It listens on 8080 (API)
+    and 8081 (admin: /health/live, /health/ready; there is no /metrics endpoint). In the compose
+    stack the API is reached through the Envoy gateway on host port 8080. The service reads only
+    DATABASE_URL (plus KAFKA_BROKERS, SCHEMA_REGISTRY_URL, OTEL_EXPORTER_OTLP_ENDPOINT, PORT,
+    ADMIN_PORT, ADMIN_HOST). The outbox relay publishes to a Kafka topic named after
+    aggregateType and the broker does not auto-create topics, so create the topic first.
+    Migrations are not run at startup; database/migrations/sql/0028 was applied by hand.
+
+servers:
+  - url: http://localhost:8080
+    description: Envoy gateway in the local compose stack (API, /api/v1/...)
+  - url: http://localhost:18080
+    description: Direct service port when run with `docker run -p 127.0.0.1:18080:8080`
+
 paths:
+  /health/live:
+    get:
+      summary: Liveness probe (admin listener)
+      operationId: getHealthLive
+      description: "Served on the admin listener (port 8081, not the public API port 8080). In a container the admin listener binds 0.0.0.0 when ADMIN_HOST=0.0.0.0 is set; it is not routed by Envoy."
+      servers:
+        - url: http://localhost:8081
+          description: Admin listener
+      responses:
+        "200":
+          description: "Process is alive"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [alive] }
+  /health/ready:
+    get:
+      summary: Readiness probe (admin listener)
+      operationId: getHealthReady
+      description: "Served on the admin listener (port 8081). Returns 200 {\"status\":\"ready\"} when the service is ready."
+      servers:
+        - url: http://localhost:8081
+          description: Admin listener
+      responses:
+        "200":
+          description: "Service is ready"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ready] }
   /api/v1/schemas:
     post:
       summary: Register Event Schema
       operationId: registerSchema
+      description: "Schema registry facade (Apicurio). Apicurio is only written by this route."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       responses:
         "201":
-          description: Schema successfully registered
+          description: "Schema successfully registered"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation failed
+          description: "Validation failed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
   /api/v1/outbox:
     post:
       summary: Stage Transactional Outbox Record
       operationId: createOutboxRecord
+      description: "Body fields are camelCase and unknown fields are rejected. The relay publishes to the Kafka topic named by aggregateType (topic must exist: broker auto-create is disabled, otherwise rows are PARKED after 5 retries with Unknown Topic Or Partition) and sends event_type, schema_version, source_service plus custom headers as Kafka record headers."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-idempotency-key
           in: header
           required: false
@@ -71,7 +175,7 @@ paths:
                   description: When true executes write path step 5 (insert and immediate delete in same tx for WAL CDC)
       responses:
         "201":
-          description: Outbox record successfully staged
+          description: "Outbox record successfully staged"
           content:
             application/json:
               schema:
@@ -85,13 +189,31 @@ paths:
                   meta:
                     type: object
         "400":
-          description: Validation failed
+          description: "Malformed JSON, unknown field or validation failure"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "CONFLICT - duplicate externalId submitted without an X-Idempotency-Key (idempotent replays with the same key return the stored record)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: Internal server error
+          description: "Internal server error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
   /api/v1/outbox/relay:
     post:
       summary: Trigger Outbox Relay Batch
       operationId: relayOutboxBatch
+      description: "Publishes PENDING outbox rows to Kafka (topic == aggregateType). Kafka headers event_type, schema_version and source_service are set on every record."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: false
         content:
@@ -106,7 +228,7 @@ paths:
                   default: 50
       responses:
         "200":
-          description: Batch successfully relayed
+          description: "Batch successfully relayed"
           content:
             application/json:
               schema:
@@ -130,97 +252,95 @@ paths:
                       executionTimeMs: { type: integer }
                       apiVersion: { type: string }
         "400":
-          description: Validation failed
+          description: "Validation failed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: Internal server error
+          description: "Internal server error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
   /api/v1/consumers/inbox:
     post:
       summary: Ingest and Process Event with Idempotent Consumer Gate
       operationId: consumeInboxEvent
+      description: "Body fields are camelCase."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - eventId
-                - tenantId
-                - handlerId
-                - aggregateType
-                - aggregateId
-                - aggregateVersion
-                - eventType
-                - schemaVersion
-                - semanticClass
-                - payload
+              required: [eventId, tenantId, handlerId, aggregateType, aggregateId, aggregateVersion, eventType, schemaVersion, payload]
               properties:
-                eventId:
-                  type: string
-                tenantId:
-                  type: string
-                handlerId:
-                  type: string
-                aggregateType:
-                  type: string
-                aggregateId:
-                  type: string
-                aggregateVersion:
-                  type: integer
-                  minimum: 1
-                eventType:
-                  type: string
-                schemaVersion:
-                  type: string
+                eventId: { type: string, format: uuid }
+                tenantId: { type: string }
+                handlerId: { type: string }
+                aggregateType: { type: string }
+                aggregateId: { type: string }
+                aggregateVersion: { type: integer, minimum: 1 }
+                eventType: { type: string }
+                schemaVersion: { type: string }
                 semanticClass:
                   type: string
                   enum: [STATE, DELTA]
-                payload:
-                  type: object
+                  description: Empty or omitted defaults to DELTA; any other value is a 400.
+                payload: {}
                 headers:
                   type: object
-                  additionalProperties:
-                    type: string
+                  additionalProperties: { type: string }
       responses:
         "200":
-          description: Event successfully processed or acknowledged duplicate
-        "409":
-          description: Version gap detected (upstream loss); event held
-        "423":
-          description: Aggregate locked or parked due to poison pill
+          description: "Event successfully processed or acknowledged duplicate"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation failed
+          description: "Validation failed (eventId not a UUID, semanticClass not STATE or DELTA, missing fields)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Version gap detected (upstream loss); event held"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "423":
+          description: "Aggregate locked or parked due to poison pill"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: Internal server error
+          description: "Internal server error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
   /api/v1/dlq/quarantine:
     post:
       summary: Quarantine Failed Event Message and Park Aggregate
       operationId: quarantineEvent
+      description: "Body fields are camelCase. The correlation id is taken from the X-Correlation-ID header and must be a UUID when supplied."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - tenantId
-                - sourceService
-                - externalId
-                - topic
-                - partition
-                - sourceOffset
-                - consumerGroup
-                - handlerId
-                - eventId
-                - aggregateType
-                - aggregateId
-                - aggregateVersion
-                - eventType
-                - payload
-                - failureReason
-                - errorCode
+              required: [tenantId, sourceService, externalId, topic, partition, sourceOffset, consumerGroup, handlerId, eventId, aggregateType, aggregateId, aggregateVersion, eventType, payload, failureReason, errorCode]
               properties:
                 tenantId: { type: string }
                 sourceService: { type: string }
@@ -230,29 +350,56 @@ paths:
                 sourceOffset: { type: integer, minimum: 0 }
                 consumerGroup: { type: string }
                 handlerId: { type: string }
-                eventId: { type: string }
+                eventId: { type: string, format: uuid }
                 aggregateType: { type: string }
                 aggregateId: { type: string }
                 aggregateVersion: { type: integer, minimum: 1 }
                 eventType: { type: string }
-                payload: { type: object }
+                payload: {}
                 headers:
                   type: object
                   additionalProperties: { type: string }
+                  default: {}
+                  description: Optional; omitted or null is stored as an empty object.
                 failureReason: { type: string }
                 errorCode: { type: string }
       responses:
         "201":
-          description: Event quarantined and aggregate key parked
+          description: "Event quarantined and aggregate key parked"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (eventId or X-Correlation-ID not a UUID, missing fields)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Duplicate externalId"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "412":
-          description: Precondition failed (infrastructure outages forbidden from DLQ)
+          description: "Precondition failed (infrastructure outages forbidden from DLQ)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/dlq/redrive:
     post:
       summary: Attempt Bounded Redrive of Quarantined Event
       operationId: redriveQuarantinedEvent
+      description: "quarantineId must be a UUID; a non-UUID value returns 400."
       requestBody:
         required: true
         content:
@@ -265,19 +412,44 @@ paths:
                 - quarantineId
               properties:
                 tenantId: { type: string }
-                quarantineId: { type: string }
+                quarantineId: { type: string, format: uuid }
       responses:
         "200":
-          description: Event redriven successfully and aggregate unparked
-        "409":
-          description: Redrive attempt failed or exceeded maximum attempts
+          description: "Event redriven successfully and aggregate unparked"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "404":
-          description: Quarantined record not found
+          description: "Quarantined record not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Redrive attempt failed or exceeded maximum attempts"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/dlq/discard:
     post:
       summary: Discard Quarantined Event and Release Aggregate Parking Lock
       operationId: discardQuarantinedEvent
+      description: "quarantineId must be a UUID; a non-UUID value returns 400."
       requestBody:
         required: true
         content:
@@ -292,20 +464,43 @@ paths:
                 - reason
               properties:
                 tenantId: { type: string }
-                quarantineId: { type: string }
+                quarantineId: { type: string, format: uuid }
                 actorId: { type: string }
                 reason: { type: string }
       responses:
         "200":
-          description: Event discarded and aggregate unparked
+          description: "Event discarded and aggregate unparked"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "404":
-          description: Quarantined record not found
+          description: "Quarantined record not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/dlq/quarantined:
     get:
       summary: List and Filter Quarantined Events
       operationId: listQuarantinedEvents
+      description: "Query parameters are camelCase. limit is 1-100 (default 20 when out of range)."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: tenantId
           in: query
           required: true
@@ -330,13 +525,32 @@ paths:
           schema: { type: integer, default: 0 }
       responses:
         "200":
-          description: List of quarantined records
+          description: "List of quarantined records"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "tenantId query parameter missing"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/schemas/versions:
     post:
       summary: Register Event Schema Version
       operationId: registerSchemaVersion
+      description: "Body fields are camelCase."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-correlation-id
           in: header
           required: false
@@ -379,14 +593,38 @@ paths:
                 schemaDefinition: { type: object }
       responses:
         "201":
-          description: Schema version successfully registered
+          description: "Schema version successfully registered"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation or compatibility check failed
+          description: "Malformed request or validation failure"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Conflict (duplicate externalId or schema version)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/schemas/compatibility/check:
     post:
       summary: Evaluate Schema Compatibility Preflight
       operationId: checkSchemaCompatibility
+      description: "Body fields are camelCase."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -412,14 +650,71 @@ paths:
                 newSchema: { type: object }
       responses:
         "200":
-          description: Compatibility check result
+          description: "Compatibility check result"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Malformed request
+          description: "Malformed request"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /api/v1/schemas/upcasters:
+    post:
+      summary: Register Event Upcaster Step
+      operationId: registerEventUpcaster
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - tenantId
+                - sourceService
+                - externalId
+                - eventType
+                - fromVersion
+                - toVersion
+                - transformerName
+              properties:
+                tenantId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string, format: uuid }
+                eventType: { type: string }
+                fromVersion: { type: integer, minimum: 1 }
+                toVersion: { type: integer, minimum: 1 }
+                transformerName:
+                  type: string
+                  description: Name of a transformer registered in code at startup. The built-in identity transformer covers additive version bumps. An unknown name is accepted at registration and only fails (400) when the step is executed by /api/v1/schemas/upcast.
+      responses:
+        "201":
+          description: Upcaster registered (UpcasterRecord with isActive)
+        "400":
+          description: Validation failed or malformed request
+        "409":
+          description: Duplicate externalId
+        "500":
+          description: Unexpected server error
 
   /api/v1/schemas/upcast:
     post:
       summary: Execute In-Memory Upcast Pipeline
       operationId: upcastEventPayload
+      description: "Body fields are camelCase. Steps must first be registered via POST /api/v1/schemas/upcasters; the built-in identity transformer handles additive bumps."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -441,38 +736,44 @@ paths:
                 payload: { type: object }
       responses:
         "200":
-          description: Successfully transformed event payload
+          description: "Successfully transformed event payload"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Transformation error or broken chain
+          description: "Malformed request, incomplete upcast chain or transformer failure (unknown transformer name fails here)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/events/evaluate-sequence:
     post:
       summary: Ingest and Evaluate Event Sequence Ordering
       operationId: evaluateEventSequence
+      description: "Body fields are camelCase; payload and headers are arbitrary JSON values."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - tenantId
-                - sourceService
-                - externalId
-                - consumerGroup
-                - handlerId
-                - aggregateType
-                - aggregateId
-                - aggregateVersion
-                - eventId
-                - eventType
-                - payload
-                - ownerEpoch
+              required: [tenantId, sourceService, externalId, consumerGroup, handlerId, aggregateType, aggregateId, aggregateVersion, eventId, eventType, payload, ownerEpoch]
               properties:
                 tenantId: { type: string }
                 sourceService: { type: string }
                 externalId: { type: string }
+                correlationId: { type: string }
                 consumerGroup: { type: string }
                 handlerId: { type: string }
                 aggregateType: { type: string }
@@ -480,20 +781,38 @@ paths:
                 aggregateVersion: { type: integer, minimum: 1 }
                 eventId: { type: string }
                 eventType: { type: string }
-                payload: { type: string }
-                headers: { type: object }
+                payload: {}
+                headers: {}
                 sourceOffset: { type: integer }
                 ownerEpoch: { type: integer, minimum: 0 }
       responses:
         "200":
-          description: Event sequence evaluated successfully
+          description: "Event sequence evaluated successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/events/held/drain:
     post:
       summary: Cascade Drain Held Sequence Events
       operationId: drainHeldEvents
+      description: "Body fields are camelCase."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -517,15 +836,32 @@ paths:
                 ownerEpoch: { type: integer, minimum: 0 }
       responses:
         "200":
-          description: Held events drained successfully
+          description: "Held events drained successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Invalid request or fenced epoch
+          description: "Invalid request or fenced epoch"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/events/held:
     get:
       summary: List Parked Aggregate Trackers
       operationId: listHeldTrackers
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: tenant_id
           in: query
           required: true
@@ -548,14 +884,32 @@ paths:
           schema: { type: integer, default: 0 }
       responses:
         "200":
-          description: List of parked aggregate sequence trackers
+          description: "List of parked aggregate sequence trackers"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error: a required query parameter or header is missing or invalid (for example tenant_id)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: Internal server error
+          description: "Internal server error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/retries/evaluate:
     post:
       summary: Evaluate Retry Strategy and Backoff
       operationId: evaluateRetryStrategy
+      description: "Body fields are camelCase."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -598,14 +952,37 @@ paths:
                   format: date-time
       responses:
         "200":
-          description: Retry evaluation decision returned
+          description: "Retry evaluation decision returned"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/retries/attempts:
     post:
       summary: Record Scheduled Retry Attempt in Ledger
       operationId: scheduleRetryAttempt
+      description: "Body fields are camelCase."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
+        - name: x-tenant-id
+          in: header
+          required: false
+          description: Used when tenantId is absent from the body
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -651,15 +1028,32 @@ paths:
                 validUntil: { type: string, format: date-time }
       responses:
         "201":
-          description: Retry attempt recorded
+          description: "Retry attempt recorded"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/retries/due:
     get:
       summary: Get Due Retry Attempts Ready for Execution
       operationId: getDueRetries
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: tenant_id
           in: query
           required: true
@@ -670,14 +1064,32 @@ paths:
           schema: { type: integer, default: 50 }
       responses:
         "200":
-          description: List of due retry attempts
+          description: "List of due retry attempts"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error: a required query parameter or header is missing or invalid (for example tenant_id)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: Internal error
+          description: "Internal error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consumer-groups/members:
     post:
       summary: Register Consumer Group Member
       operationId: registerConsumerGroupMember
+      description: "Body fields are camelCase."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -703,14 +1115,31 @@ paths:
                 assignmentStrategy: { type: string }
       responses:
         "201":
-          description: Member registered successfully
+          description: "Member registered successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation failed or banned eager assignor
+          description: "Validation failed or banned eager assignor"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
     get:
       summary: List Consumer Group Members
       operationId: listConsumerGroupMembers
+      description: "Query parameters are snake_case."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: tenant_id
           in: query
           required: true
@@ -721,14 +1150,32 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: List of active members in consumer group
+          description: "List of active members in consumer group"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "tenant_id query parameter missing"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: Internal error
+          description: "Internal error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consumer-groups/heartbeat:
     post:
       summary: Pulse Consumer Member Heartbeat
       operationId: pulseConsumerHeartbeat
+      description: "Body fields are camelCase."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -748,14 +1195,32 @@ paths:
                 correlationId: { type: string }
       responses:
         "200":
-          description: Heartbeat recorded and generation status returned
+          description: "Heartbeat recorded and generation status returned"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consumer-groups/rebalance:
     post:
       summary: Record Rebalance Partition Assignment Sync
       operationId: syncConsumerRebalance
+      description: "Body fields are camelCase."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -785,15 +1250,32 @@ paths:
                 durationMs: { type: integer, minimum: 0 }
       responses:
         "200":
-          description: Rebalance synced and partition assignment updated
+          description: "Rebalance synced and partition assignment updated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/offsets/commit:
     post:
       summary: Commit Topic Partition Offset
       operationId: commitOffset
+      description: "Body fields are camelCase. tenantId falls back to X-Tenant-ID and correlationId to X-Correlation-ID (which must then be a UUID)."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -830,15 +1312,32 @@ paths:
                 metadata: { type: string }
       responses:
         "200":
-          description: Offset committed successfully
+          description: "Offset committed successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error: ids must be non-empty after trimming, partition >= 0, 0 <= offset <= logEndOffset, correlationId must be a UUID, auto-commit banned, offset regression"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/offsets/rewind:
     post:
       summary: Rewind Partition Offset for Recovery
       operationId: rewindOffset
+      description: "Body fields are camelCase."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -849,38 +1348,51 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - tenantId
-                - sourceService
-                - externalId
-                - groupId
-                - topic
-                - partition
-                - targetOffset
-                - reason
+              required: [tenantId, sourceService, externalId, groupId, topic, partition, targetOffset, reason]
               properties:
                 tenantId: { type: string }
                 sourceService: { type: string }
                 externalId: { type: string }
-                correlationId: { type: string }
+                correlationId: { type: string, format: uuid }
                 groupId: { type: string }
                 topic: { type: string }
                 partition: { type: integer, minimum: 0 }
                 targetOffset: { type: integer, minimum: 0 }
                 reason: { type: string }
-                operatorId: { type: string }
       responses:
         "200":
-          description: Offset rewound successfully
+          description: "Offset rewound successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error: targetOffset must be <= stored offset (ErrRewindForwardJump) and <= logEnd (ErrRewindBeyondLogEnd); consumer group must be stopped"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "No stored offset for the partition (unknown group/topic/partition)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/offsets/fast-forward:
     post:
       summary: Fast Forward Partition Offset Skipping Poison Messages
       operationId: fastForwardOffset
+      description: "Body fields are camelCase. This route takes shiftBy (relative), not targetOffset."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -891,38 +1403,89 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - tenantId
-                - sourceService
-                - externalId
-                - groupId
-                - topic
-                - partition
-                - targetOffset
-                - reason
+              required: [tenantId, sourceService, externalId, groupId, topic, partition, shiftBy, reason]
               properties:
                 tenantId: { type: string }
                 sourceService: { type: string }
                 externalId: { type: string }
-                correlationId: { type: string }
+                correlationId: { type: string, format: uuid }
                 groupId: { type: string }
                 topic: { type: string }
                 partition: { type: integer, minimum: 0 }
-                targetOffset: { type: integer, minimum: 0 }
+                shiftBy: { type: integer, description: "Number of offsets to skip forward" }
                 reason: { type: string }
-                operatorId: { type: string }
       responses:
         "200":
-          description: Offset fast-forwarded successfully
+          description: "Offset fast-forwarded successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (invalid fast-forward)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "No stored offset for the partition"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+
+  /api/v1/offsets/lag:
+    get:
+      summary: Evaluate Consumer Group Partition Lag
+      operationId: evaluateOffsetLag
+      parameters:
+        - name: tenant_id
+          in: query
+          required: false
+          description: Tenant (alias tenantId). Falls back to the X-Tenant-ID header; one of the two is required.
+          schema: { type: string }
+        - name: group_id
+          in: query
+          required: true
+          description: Consumer group (alias groupId)
+          schema: { type: string }
+        - name: topic
+          in: query
+          required: true
+          schema: { type: string }
+        - name: partition
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+        - name: rate
+          in: query
+          required: false
+          description: Observed consumption rate used for severity classification
+          schema: { type: number, minimum: 0, default: 1 }
+      responses:
+        "200":
+          description: Lag evaluation
+        "400":
+          description: Missing tenant_id/group_id/topic, or partition/rate not a non-negative number
+        "404":
+          description: No stored offset for the partition
+        "500":
+          description: Unexpected server error
 
   /api/v1/backpressure/saturation:
     post:
       summary: Ingest Saturation Signal and Transition Backpressure State
       operationId: reportBackpressureSaturation
+      description: "Body fields are camelCase. tenantId falls back to X-Tenant-ID; correlationId falls back to X-Correlation-ID and must be a UUID."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -933,47 +1496,71 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - tenantId
-                - sourceService
-                - externalId
-                - pauseReason
-                - signal
+              required: [tenantId, sourceService, externalId, signal]
               properties:
                 tenantId: { type: string }
                 sourceService: { type: string }
                 externalId: { type: string }
-                correlationId: { type: string }
+                correlationId: { type: string, format: uuid, description: "Defaults to X-Correlation-ID; must be a UUID" }
+                
                 pauseReason:
                   type: string
-                  enum: [EXHAUSTED_CONCURRENCY, DOWNSTREAM_5XX, SLOW_DEPENDENCY, MEMORY_HIGH, OPERATOR_FORCE_PAUSE]
-                observedLag: { type: integer, minimum: 0 }
-                thresholdLag: { type: integer, minimum: 0 }
+                  enum: [DB_LATENCY, MEMORY_BUDGET, LANE_QUEUE_FULL, DEPENDENCY_REJECTIONS]
                 signal:
                   type: object
-                  additionalProperties: false
-                  required:
-                    - handlerId
-                    - dependencyId
+                  required: [handlerId, dependencyId]
                   properties:
                     handlerId: { type: string }
                     dependencyId: { type: string }
-                    currentConcurrency: { type: integer, minimum: 0 }
-                    errorRatePercent: { type: number, minimum: 0, maximum: 100 }
-                    latencyP99Ms: { type: integer, minimum: 0 }
-                    observedAt: { type: string, format: date-time }
+                    queueingDelayMs: { type: number }
+                    latencyP99Ms: { type: number }
+                    baselineLatencyMs: { type: number }
+                    inFlight: { type: integer }
+                    concurrencyLimit: { type: integer }
+                    liveHeapBytes: { type: integer }
+                    memoryLimitBytes: { type: integer }
+                    rejectionCount: { type: integer }
+                    measuredAt: { type: string, format: date-time }
       responses:
         "200":
-          description: Saturation signal recorded and state transitioned
+          description: "Saturation signal recorded and state transitioned"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (non-UUID correlationId, missing ids, or the signal does not indicate saturation)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Backpressure record not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Invalid state transition"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/backpressure/recovery:
     post:
       summary: Report Dependency Recovery and Initiate Ramp-Up
       operationId: reportBackpressureRecovery
+      description: "Body fields are camelCase."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -984,35 +1571,55 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - tenantId
-                - sourceService
-                - externalId
-                - handlerId
-                - dependencyId
+              required: [tenantId, sourceService, externalId, handlerId, dependencyId]
               properties:
                 tenantId: { type: string }
                 sourceService: { type: string }
                 externalId: { type: string }
-                correlationId: { type: string }
+                correlationId: { type: string, format: uuid, description: "Defaults to X-Correlation-ID; must be a UUID" }
+                
                 handlerId: { type: string }
                 dependencyId: { type: string }
-                currentConcurrency: { type: integer, minimum: 0 }
-                errorRatePercent: { type: number, minimum: 0, maximum: 100 }
-                latencyP99Ms: { type: integer, minimum: 0 }
-                observedAt: { type: string, format: date-time }
       responses:
         "200":
-          description: Recovery ramp initiated
+          description: "Recovery ramp initiated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (non-UUID correlationId, missing ids)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Backpressure record not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Invalid state transition"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/backpressure/recovery/confirm:
     post:
       summary: Confirm Stable Health and Transition Backpressure to Normal
       operationId: confirmBackpressureRecovery
+      description: "Body fields are camelCase."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -1023,35 +1630,55 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - tenantId
-                - sourceService
-                - externalId
-                - handlerId
-                - dependencyId
+              required: [tenantId, sourceService, externalId, handlerId, dependencyId]
               properties:
                 tenantId: { type: string }
                 sourceService: { type: string }
                 externalId: { type: string }
-                correlationId: { type: string }
+                correlationId: { type: string, format: uuid, description: "Defaults to X-Correlation-ID; must be a UUID" }
+                
                 handlerId: { type: string }
                 dependencyId: { type: string }
-                currentConcurrency: { type: integer, minimum: 0 }
-                errorRatePercent: { type: number, minimum: 0, maximum: 100 }
-                latencyP99Ms: { type: integer, minimum: 0 }
-                observedAt: { type: string, format: date-time }
       responses:
         "200":
-          description: Normal state confirmed and concurrency limits restored
+          description: "Normal state confirmed; concurrency limit restored to the baseline default of 10 (the pre-pause limit is not stored)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (non-UUID correlationId, missing ids)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Backpressure record not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Invalid state transition"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/backpressure/state:
     get:
       summary: Query Current Backpressure State for Handler and Dependency
       operationId: getBackpressureState
+      description: "Tenant is read from the X-Tenant-ID header; query parameters are snake_case."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: true
@@ -1066,17 +1693,38 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: Current backpressure tracking state
+          description: "Current backpressure tracking state"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "404":
-          description: State not found
+          description: "State not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/replay/runs:
     post:
       summary: Create New Replay Run with Side-Car Consumer Group
       operationId: createReplayRun
+      description: "Body fields are camelCase. correlationId defaults to X-Correlation-ID. correlationId (and the X-Correlation-ID fallback) must be a UUID; otherwise 400."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -1087,40 +1735,53 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - tenantId
-                - sourceService
-                - externalId
-                - reason
-                - targetProjection
-                - targetTopic
-                - startOffset
-                - stopOffset
+              required: [tenantId, sourceService, externalId, targetProjection, mode, scope]
               properties:
                 tenantId: { type: string }
                 sourceService: { type: string }
                 externalId: { type: string }
-                correlationId: { type: string }
-                reason:
-                  type: string
-                  enum: [REBUILD, HYDRATE, FORENSIC, RECOVER, REPAIR]
+                correlationId: { type: string, format: uuid }
                 targetProjection: { type: string }
-                targetTopic: { type: string }
+                mode:
+                  type: string
+                  enum: [REBUILD, HYDRATE, FORENSIC, RECOVER, REPAIR, LIVE]
+                scope:
+                  type: string
+                  enum: [GLOBAL_TOPIC, TIME_WINDOW, AGGREGATE_SET]
                 startOffset: { type: integer, minimum: 0 }
-                stopOffset: { type: integer, minimum: -1 }
-                createdBy: { type: string }
-                initialLag: { type: integer, minimum: 0 }
-                liveLagThreshold: { type: integer, minimum: 0 }
+                endOffset: { type: integer, minimum: 0, description: "Must be >= startOffset" }
       responses:
         "201":
-          description: Replay run created in INITIALIZING state
+          description: "Replay run created in INITIALIZING state"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (mode/scope enum, offset range, tenant/source/external ids)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Replay record already exists"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
     get:
       summary: Fetch Replay Run Details
       operationId: getReplayRun
+      description: "Tenant is read from the X-Tenant-ID header. run_id is the UUID id of the run, not the rpl_ public id."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: true
@@ -1131,15 +1792,38 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: Replay run details
+          description: "Replay run details"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error (runId must be a valid UUID)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "404":
-          description: Replay run not found
+          description: "Replay run not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/replay/runs/start:
     post:
       summary: Transition Replay Run from Initializing to Streaming
       operationId: startReplayStreaming
+      description: "Body fields are camelCase."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -1150,22 +1834,49 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - runId
+              required: [runId]
               properties:
-                runId: { type: string }
+                runId: { type: string, format: uuid, description: "The run id (UUID), not the rpl_ publicId" }
       responses:
         "200":
-          description: Streaming phase started
+          description: "Streaming phase started"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "runId must be a valid UUID"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Replay run not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Invalid state transition"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/replay/runs/advance:
     post:
       summary: Advance Replay Offsets and Increment Progress
       operationId: advanceReplay
+      description: "Body fields are camelCase. Use the UUID id, not the rpl_ publicId."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -1176,29 +1887,54 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - runId
-                - currentOffset
-                - partition
+              required: [runId, currentOffset]
               properties:
                 tenantId: { type: string }
-                runId: { type: string }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string, format: uuid }
+                runId: { type: string, format: uuid, description: "The run id (UUID), not the rpl_ publicId" }
                 currentOffset: { type: integer, minimum: 0 }
-                partition: { type: integer, minimum: 0 }
-                eventsReplayed: { type: integer, minimum: 0 }
-                lag: { type: integer, minimum: 0 }
       responses:
         "200":
-          description: Replay run progress updated
+          description: "Replay run progress updated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (runId must be a valid UUID; currentOffset negative)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Replay run not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Run is not advanceable: only STREAMING, FOLLOWING and CAUGHT_UP runs can advance (ErrReplayNotAdvanceable), or invalid transition"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/replay/runs/promote:
     post:
       summary: Promote Replay Run to Caught Up when Lag Below Threshold
       operationId: promoteReplay
+      description: "Body fields are camelCase."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -1209,25 +1945,54 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - runId
-                - currentLag
+              required: [runId]
               properties:
                 tenantId: { type: string }
-                runId: { type: string }
-                currentLag: { type: integer, minimum: 0 }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string, format: uuid }
+                runId: { type: string, format: uuid }
+                reason: { type: string }
       responses:
         "200":
-          description: Replay run promoted to CAUGHT_UP
+          description: "Replay run promoted to CAUGHT_UP"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (runId must be a valid UUID)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Replay run not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Invalid state transition"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/replay/runs/cutover:
     post:
       summary: Complete Atomic Cutover of Shadow Projection
       operationId: completeReplayCutover
+      description: "Body fields are camelCase."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -1238,25 +2003,54 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - runId
-                - cutoverConfirmed
+              required: [runId]
               properties:
                 tenantId: { type: string }
-                runId: { type: string }
-                cutoverConfirmed: { type: boolean }
+                sourceService: { type: string }
+                externalId: { type: string }
+                correlationId: { type: string, format: uuid }
+                runId: { type: string, format: uuid }
+                reason: { type: string }
       responses:
         "200":
-          description: Cutover completed and run transitioned to COMPLETED
+          description: "Cutover completed and run transitioned to COMPLETED"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (runId must be a valid UUID)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Replay run not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Invalid state transition"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/replay/effects/evaluate:
     post:
       summary: Evaluate Side-Effect Routing Gateway for Replay Run
       operationId: evaluateReplayEffect
+      description: "Body fields are camelCase. Response data: decision, effectMode, reason."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-tenant-id
           in: header
           required: false
@@ -1267,34 +2061,52 @@ paths:
           application/json:
             schema:
               type: object
-              additionalProperties: false
-              required:
-                - tenantId
-                - sourceService
-                - externalId
-                - runId
-                - effectType
-                - destination
-                - payload
+              required: [tenantId, runId, effectType, idempotencyKey]
               properties:
                 tenantId: { type: string }
                 sourceService: { type: string }
                 externalId: { type: string }
-                correlationId: { type: string }
-                runId: { type: string }
-                effectType: { type: string }
-                destination: { type: string }
-                payload: { type: string }
+                correlationId: { type: string, format: uuid }
+                runId: { type: string, format: uuid }
+                effectType:
+                  type: string
+                  enum: [EXTERNAL_PAYMENT, EXTERNAL_NOTIFICATION, OUTBOX_EVENT, SEARCH_INDEX, CACHE_WRITE]
+                idempotencyKey: { type: string }
+                payloadDigest: { type: string }
       responses:
         "200":
-          description: Effect evaluation result returned (DISPATCH, MOCK, SUPPRESS, RECORD_SHADOW)
+          description: "Effect evaluation recorded in replay_effect_log and decision returned (SUPPRESSED, EXECUTED or RECONCILED). sourceService, externalId and correlationId are defaulted when omitted."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (runId not a UUID, idempotencyKey missing, correlationId not a UUID)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Replay run not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/tenants:
     post:
       summary: Register Tenant
       operationId: registerTenant
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1323,11 +2135,29 @@ paths:
                 max_concurrency_lanes: { type: integer }
       responses:
         "201":
-          description: Tenant registered successfully
+          description: "Tenant registered successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (including unknown tier)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
-          description: Tenant already exists
+          description: "Tenant already exists"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/tenants/{tenant_id}:
     get:
@@ -1340,15 +2170,32 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: Tenant record found
+          description: "Tenant record found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "404":
-          description: Tenant not found
+          description: "Tenant not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/tenants/{tenant_id}/lifecycle:
     put:
       summary: Transition Tenant Lifecycle State
       operationId: transitionTenantLifecycle
+      description: "Body fields are snake_case."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: tenant_id
           in: path
           required: true
@@ -1366,14 +2213,44 @@ paths:
                 reason: { type: string }
       responses:
         "200":
-          description: Lifecycle state transitioned
+          description: "Lifecycle state transitioned"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error, including an unknown target_state (rejected before the transition check)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Tenant not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
-          description: Invalid transition or tombstoned tenant
+          description: "Invalid transition or tombstoned tenant"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/tenants/verify-envelope:
     post:
       summary: Verify Event Ingress Tenant Scope and Residency
       operationId: verifyTenantEnvelope
+      description: "Body fields are snake_case. A SUSPENDED tenant is rejected at ingress with 403; an OFFBOARDED tenant returns 409."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1392,14 +2269,38 @@ paths:
                 current_region: { type: string }
       responses:
         "200":
-          description: Ingress envelope verified
+          description: "Ingress envelope verified (data.verified true)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Malformed request"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "403":
-          description: Verification failed (mismatch or residency disallowed)
+          description: "Verification failed (mismatch or residency disallowed)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/cdc/connectors:
     post:
       summary: Register and Provision CDC Logical Replication Connector
       operationId: registerCDCConnector
+      description: "Body fields are snake_case. The platform still uses a mock Kafka Connect adapter; Debezium is not integrated."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1425,11 +2326,29 @@ paths:
                 mode: { type: string, enum: ["M_OUTBOX", "M_RAWTABLE"] }
       responses:
         "201":
-          description: CDC connector registered and provisioned
+          description: "CDC connector registered and provisioned"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
-          description: Connector already exists
+          description: "Connector name or slot_name already exists"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/cdc/connectors/{name}:
     get:
@@ -1442,14 +2361,32 @@ paths:
           schema: { type: string }
       responses:
         "200":
-          description: Connector details found
+          description: "Connector details found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "404":
-          description: Connector not found
+          description: "Connector not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/cdc/signals:
     post:
       summary: Dispatch Debezium Incremental Snapshot or Control Signal
       operationId: dispatchCDCSignal
+      description: "Body fields are snake_case. correlation_id defaults to a generated UUIDv7."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1470,14 +2407,44 @@ paths:
                 payload: { type: object }
       responses:
         "202":
-          description: Signal recorded in signal log
+          description: "Signal recorded in signal log"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error (e.g. snapshot signal on outbox mode)
+          description: "Validation error (e.g. snapshot signal on outbox mode)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Connector not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Conflict"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/cdc/heartbeat:
     post:
       summary: Emit LSN Heartbeat to Keep Slot Advancing on Idle Database
       operationId: emitCDCHeartbeat
+      description: "Body fields are snake_case. correlation_id defaults to a generated UUIDv7."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1497,14 +2464,44 @@ paths:
                 lsn_position: { type: string }
       responses:
         "200":
-          description: Heartbeat recorded
+          description: "Heartbeat recorded"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Connector not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Conflict"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/partitioning/topologies:
     post:
       summary: Register and Provision Topic Partition Topology
       operationId: registerTopicTopology
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1529,16 +2526,38 @@ paths:
                 allow_in_place_expansion: { type: boolean, default: false }
       responses:
         "201":
-          description: Topic topology registered successfully
+          description: "Topic topology registered successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
-          description: Conflict (e.g. ordered topic expansion attempt)
+          description: "Conflict: topic_name already registered (topic_name is globally unique until migration 0028 is applied, then unique per tenant), or ordered topic expansion attempt"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/partitioning/keys/calculate:
     post:
       summary: Deterministically Calculate Partition Index for Aggregate Key
       operationId: calculatePartitionKey
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1558,14 +2577,32 @@ paths:
                 raw_key_bytes: { type: string, format: byte }
       responses:
         "200":
-          description: Partition calculation output
+          description: "Partition calculation output"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/partitioning/skew/evaluate:
     post:
       summary: Evaluate Partition Throughput Skew and Flag Hot Keys
       operationId: evaluatePartitionSkew
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1595,14 +2632,32 @@ paths:
                       lag_records: { type: integer }
       responses:
         "200":
-          description: Skew evaluation results and remediation actions
+          description: "Skew evaluation results and remediation actions"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/partitioning/migrations:
     post:
       summary: Initiate Blue-Green Topic Stream Migration Runbook
       operationId: initiateStreamMigration
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1628,14 +2683,38 @@ paths:
                 target_partitions: { type: integer }
       responses:
         "201":
-          description: Migration runbook initiated in PLANNED state
+          description: "Migration runbook initiated in PLANNED state"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Conflict: migration_id already exists (globally unique until migration 0028 is applied, then per tenant)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/partitioning/migrations/phase:
     put:
       summary: Advance Stream Migration Runbook Phase
       operationId: advanceMigrationPhase
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1655,16 +2734,38 @@ paths:
                 correlation_id: { type: string }
       responses:
         "200":
-          description: Migration phase advanced successfully
+          description: "Migration phase advanced successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Invalid transition error
+          description: "Invalid transition error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
-          description: Concurrency or terminal state conflict
+          description: "Concurrency or terminal state conflict"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/materialized-views:
     post:
       summary: Register Materialized View
       operationId: registerMaterializedView
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1696,17 +2797,38 @@ paths:
                   enum: [EVENTUAL, TOKEN_BOUNDED, STRICT_SERIAL]
       responses:
         "201":
-          description: Materialized view registered successfully
+          description: "Materialized view registered successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
-          description: Name or external ID conflict
+          description: "Conflict: view_name already registered for the tenant, or duplicate external_id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/materialized-views/{id}:
     get:
       summary: Get Materialized View by Public ID
       operationId: getMaterializedViewById
+      description: "id is the view public id."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: id
           in: path
           required: true
@@ -1714,28 +2836,39 @@ paths:
             type: string
       responses:
         "200":
-          description: View registry record retrieved
+          description: "View registry record retrieved"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "404":
-          description: View not found
+          description: "View not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/materialized-views/apply:
     post:
       summary: Apply Projection Event with Monotonicity Guard
       operationId: applyViewProjection
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - view_name
-                - aggregate_type
-                - aggregate_id
-                - aggregate_seq
-                - event_id
-                - payload_raw
+              required: [tenant_id, view_name, aggregate_type, aggregate_id, aggregate_seq, event_id, payload_raw]
               properties:
                 tenant_id: { type: string }
                 source_service: { type: string }
@@ -1747,16 +2880,35 @@ paths:
                 aggregate_seq: { type: integer }
                 event_id: { type: string }
                 payload_raw: { type: string }
+                occurred_at: { type: string, format: date-time }
       responses:
         "200":
-          description: Projection evaluated and applied or held
+          description: "Projection evaluated and applied or held"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/materialized-views/rebuild:
     post:
       summary: Initiate Zero-Downtime View Rebuild
       operationId: initiateViewRebuild
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1783,14 +2935,38 @@ paths:
                 target_lsn: { type: string }
       responses:
         "202":
-          description: View rebuild initiated
+          description: "View rebuild initiated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Conflict: rebuild_id already exists (globally unique until migration 0028 is applied, then per tenant)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/materialized-views/rebuild/phase:
     put:
       summary: Advance View Rebuild State Machine Phase
       operationId: advanceViewRebuildPhase
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1814,15 +2990,37 @@ paths:
                 correlation_id: { type: string }
       responses:
         "200":
-          description: Rebuild phase advanced successfully
+          description: "Rebuild phase advanced successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Invalid phase transition
+          description: "Invalid phase transition"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
-          description: Concurrency mismatch or terminal state
+          description: "Concurrency mismatch or terminal state"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
   /api/v1/materialized-views/contributions:
     post:
       summary: Apply Aggregate Delta Contribution (V-AGG)
       operationId: applyViewAggContribution
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1851,16 +3049,38 @@ paths:
                 is_reversal: { type: boolean }
       responses:
         "201":
-          description: Aggregate contribution recorded
+          description: "Aggregate contribution recorded"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
-          description: Duplicate contribution event conflict
+          description: "Duplicate contribution event conflict"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/materialized-views/periods:
     post:
       summary: Record Financial Reporting Period Event (V-REPORT)
       operationId: recordViewPeriodEvent
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1883,15 +3103,32 @@ paths:
                 event_time: { type: string }
       responses:
         "200":
-          description: Period event recorded (base or late adjustment)
+          description: "Period event recorded (base or late adjustment)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/materialized-views/query:
     post:
       summary: Query Materialized View with Consistency Token (Read-Your-Own-Writes)
       operationId: queryViewWithConsistencyToken
+      description: "Body fields are snake_case. An unknown view is now 404 (it previously returned 200 with version 0)."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-consistency-token
           in: header
           required: false
@@ -1917,16 +3154,38 @@ paths:
                 timeout_budget_ms: { type: integer }
       responses:
         "200":
-          description: Projection state returned with satisfaction and pending indicators
+          description: "Projection state returned with satisfaction and pending indicators"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (missing tenant_id or view_name)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "404":
-          description: Aggregate not found
+          description: "Unknown view or aggregate not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consistency/watermarks:
     post:
       summary: Observe and Update Stream Watermark & Freshness Lag
       operationId: observeWatermark
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -1953,15 +3212,32 @@ paths:
                 freshness_lag_ms: { type: integer }
       responses:
         "201":
-          description: Watermark ledger record upserted
+          description: "Watermark ledger record upserted"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consistency/views/{view_name}/watermark:
     get:
       summary: Retrieve Partition Watermarks for View
       operationId: getViewWatermarks
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400 (no implicit default tenant)."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: view_name
           in: path
           required: true
@@ -1969,19 +3245,37 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
       responses:
         "200":
-          description: List of partition watermark records
+          description: "List of partition watermark records"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error: a required query parameter or header is missing or invalid (for example tenant_id)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: Internal error
+          description: "Internal error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consistency/evaluate:
     post:
       summary: Evaluate Three-Valued Consistency for Record
       operationId: evaluateRecordConsistency
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2011,15 +3305,32 @@ paths:
                 query_error_occurred: { type: boolean }
       responses:
         "200":
-          description: Evaluation result (MATCH, MISMATCH, or UNKNOWN)
+          description: "Evaluation result (MATCH, MISMATCH, or UNKNOWN)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consistency/views/{view_name}/incidents:
     get:
       summary: Retrieve Active Drift Incidents for View
       operationId: getActiveDriftIncidents
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400 (no implicit default tenant)."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: view_name
           in: path
           required: true
@@ -2027,20 +3338,37 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
       responses:
         "200":
-          description: Active drift incidents
+          description: "Active drift incidents"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error: a required query parameter or header is missing or invalid (for example tenant_id)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: Internal error
+          description: "Internal error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consistency/incidents/{id}/heal:
     post:
       summary: Attempt Idempotent Version-Guarded Heal
       operationId: attemptHealing
+      description: "id is the incident UUID."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: id
           in: path
           required: true
@@ -2053,14 +3381,38 @@ paths:
             type: string
       responses:
         "200":
-          description: Healing outcome
+          description: "Healing outcome. heal_attempts is incremented per call and the max-attempts path escalates to MANUAL_INTERVENTION."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "404":
+          description: "Drift incident not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consistency/sweeps/run:
     post:
       summary: Record Verification Sweep Check Run
       operationId: recordCheckSweep
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2084,15 +3436,32 @@ paths:
                 duration_ms: { type: integer }
       responses:
         "201":
-          description: Check sweep recorded
+          description: "Check sweep recorded"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consistency/views/{view_name}/sweeps:
     get:
       summary: List Audit Sweep History
       operationId: listCheckRuns
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400 (no implicit default tenant)."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: view_name
           in: path
           required: true
@@ -2100,19 +3469,37 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
       responses:
         "200":
-          description: Check sweep history
+          description: "Check sweep history"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
+        "400":
+          description: "Validation error: a required query parameter or header is missing or invalid (for example tenant_id)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "500":
-          description: Internal error
+          description: "Internal error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consistency/silences:
     post:
       summary: Register Alert Silence with Enforced Expiry
       operationId: registerSilence
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2136,14 +3523,32 @@ paths:
                 expires_at: { type: string, format: date-time }
       responses:
         "201":
-          description: Silence registered
+          description: "Silence registered"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/consistency/probes/canary:
     post:
       summary: Dispatch Synthetic Canary Probe Across Partitions
       operationId: dispatchCanaryProbe
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2165,15 +3570,42 @@ paths:
                 payload: { type: string }
       responses:
         "200":
-          description: Canary probe dispatched and verified
+          description: "Canary probe recorded as a CANARY_PROBE row in consistency_check_run_history. data.outcome is UNKNOWN (never MATCH without evidence)."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          probe_id: { type: string }
+                          partition_id: { type: integer }
+                          transit_duration_ms: { type: integer }
+                          outcome: { type: string, enum: [MATCH, MISMATCH, UNKNOWN] }
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/commands/dispatch:
     post:
       summary: Dispatch Idempotent Command with Optimistic Concurrency Guard
       operationId: dispatchCommand
+      description: "Body fields are snake_case. The idempotency key is taken from the x-idempotency-key header, falling back to Idempotency-Key; it is mandatory. This route belongs to CQRS; the async outbox command route is /api/v1/communication/commands/dispatch."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: Idempotency-Key
           in: header
           required: true
@@ -2208,21 +3640,42 @@ paths:
                 payload_raw: { type: string }
       responses:
         "200":
-          description: Command successfully executed or idempotently replayed
+          description: "Command successfully executed or idempotently replayed"
           headers:
             x-consistency-token:
               schema:
                 type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error, including a missing Idempotency-Key header"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
-          description: Version concurrency conflict
+          description: "Version concurrency conflict"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/queries/resolve:
     get:
       summary: Resolve Query View with Signed Consistency Token
       operationId: resolveQueryWithToken
+      description: "Query parameters are snake_case. tenant_id is required (400). x-consistency-token is optional; a malformed, expired or badly signed token returns 400, and a token that must be verified for a tenant with no active signing key returns 409. No token means no key is needed."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-consistency-token
           in: header
           required: false
@@ -2230,7 +3683,7 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
         - name: view_name
@@ -2250,14 +3703,38 @@ paths:
             type: string
       responses:
         "200":
-          description: View record returned with consistency resolution indicator
+          description: "View record returned with consistency resolution indicator"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error, including a malformed, expired or badly signed x-consistency-token (the cases are indistinguishable, ErrInvalidConsistencyToken)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "A consistency token was supplied but the tenant has no active signing key (ErrNoActiveSigningKey)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/commands/keys:
     post:
       summary: Register HMAC Consistency Token Signing Key
       operationId: registerTokenSigningKey
+      description: "Body fields are snake_case. The response never contains raw_secret_value."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2278,15 +3755,49 @@ paths:
                 expires_at: { type: string, format: date-time }
       responses:
         "201":
-          description: Token signing key registered
+          description: "Token signing key registered. Neither raw_secret_value nor secret_key_hash is returned."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          id: { type: string, format: uuid }
+                          public_id: { type: string }
+                          tenant_id: { type: string }
+                          source_service: { type: string }
+                          external_id: { type: string }
+                          correlation_id: { type: string, format: uuid }
+                          key_version: { type: integer }
+                          status: { type: string }
+                          expires_at: { type: string, format: date-time }
+                          created_at: { type: string, format: date-time }
+                          updated_at: { type: string, format: date-time }
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/queries/authoritative-own:
     get:
       summary: Authoritative Strongly-Consistent Read for Aggregate Owner
       operationId: authoritativeOwnRead
+      description: "Query parameters are snake_case. tenant_id is required; a missing tenant_id returns 400 (no implicit default tenant)."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: x-consistency-token
           in: header
           required: false
@@ -2294,7 +3805,7 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
         - name: aggregate_type
@@ -2309,49 +3820,91 @@ paths:
             type: string
       responses:
         "200":
-          description: Authoritative aggregate state from primary write model
+          description: "Authoritative aggregate state from primary write model"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "404":
-          description: Aggregate not found
+          description: "Aggregate not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/schemas/register:
     post:
       summary: Register Schema Version with Transitive Compatibility Check
-      operationId: registerSchemaVersion
+      operationId: registerSubjectSchemaVersion
+      description: "Body fields are snake_case. Compatibility is enforced for Avro (a field is required iff it has no default) and JSON Schema (properties/required). BACKWARD breaks on a new required field without default or a type change; FORWARD on a removed required field or a type change; FULL both; *_TRANSITIVE check the whole lineage."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - subject_name
-                - schema_type
-                - schema_def
-                - compatibility_mode
+              required: [tenant_id, subject_name, schema_version, schema_definition]
               properties:
                 tenant_id: { type: string }
                 source_service: { type: string }
+                external_id: { type: string }
                 correlation_id: { type: string }
                 subject_name: { type: string }
-                schema_type: { type: string, enum: [AVRO, JSON_SCHEMA, PROTOBUF] }
-                schema_def: { type: string }
-                compatibility_mode: { type: string, enum: [BACKWARD, FORWARD, FULL, BACKWARD_TRANSITIVE, FORWARD_TRANSITIVE, FULL_TRANSITIVE, NONE] }
-                change_class: { type: string, enum: [MINOR, EXPAND_CONTRACT, SEMANTIC, BREAKING] }
-                semantic_summary: { type: string }
+                schema_version: { type: integer, minimum: 1, description: "Must be monotonic for the subject" }
+                compatibility_mode:
+                  type: string
+                  enum: [BACKWARD, FORWARD, FULL, BACKWARD_TRANSITIVE, FORWARD_TRANSITIVE, FULL_TRANSITIVE]
+                  description: Defaults to FULL_TRANSITIVE. NONE is not accepted at the API.
+                schema_definition: { type: string, description: "Avro schema or JSON Schema document as a string" }
       responses:
         "201":
-          description: Schema version registered successfully
+          description: "Schema version registered after the compatibility check passed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error or compatibility conflict
+          description: "Validation error, including an unknown compatibility_mode"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Conflict: the candidate is incompatible with the lineage for the mode (message lists the violations), duplicate fingerprint, or non-monotonic version"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/schemas/{subject}/readiness:
     get:
       summary: Check Consumer Readiness for Subject Version (C-CRG)
       operationId: checkConsumerReadiness
+      description: "Query parameters are snake_case."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: subject
           in: path
           required: true
@@ -2369,72 +3922,117 @@ paths:
             type: integer
       responses:
         "200":
-          description: Consumer readiness status evaluation result
+          description: "Consumer readiness status evaluation result"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/schemas/dual-publish:
     post:
       summary: Initiate Dual-Publish Lifecycle
       operationId: initiateDualPublish
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - subject_name
-                - v_old_version
-                - v_new_version
+              required: [tenant_id, subject_name, legacy_topic, modern_topic, sunset_deadline]
               properties:
                 tenant_id: { type: string }
                 source_service: { type: string }
                 correlation_id: { type: string }
                 subject_name: { type: string }
-                v_old_version: { type: integer }
-                v_new_version: { type: integer }
-                cutover_strategy: { type: string }
+                legacy_topic: { type: string }
+                modern_topic: { type: string }
+                sunset_deadline: { type: string, format: date-time }
       responses:
         "201":
-          description: Dual publish lifecycle initiated
+          description: "Dual publish lifecycle initiated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/schemas/decommission/check:
     post:
       summary: Evaluate Schema Version Decommissioning Eligibility
       operationId: evaluateDecommissionEligibility
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - subject_name
-                - target_version
+              required: [tenant_id, subject_name]
               properties:
                 tenant_id: { type: string }
-                source_service: { type: string }
-                correlation_id: { type: string }
                 subject_name: { type: string }
-                target_version: { type: integer }
-                broker_active_consumer_count: { type: integer }
-                reads_in_window_count: { type: integer }
-                all_owners_attested: { type: boolean }
+                active_consumer_count: { type: integer, minimum: 0 }
+                zero_lag_days: { type: integer, minimum: 0 }
+                telemetry_read_count: { type: integer, minimum: 0 }
+                decommission_attested: { type: boolean }
       responses:
         "200":
-          description: Decommission eligibility evaluation
+          description: "Decommission eligibility evaluation"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/audits/ingest:
     post:
       summary: Ingest Cryptographically Chained Audit Record
       operationId: ingestAuditRecord
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2466,14 +4064,32 @@ paths:
                 occurred_at: { type: string, format: date-time }
       responses:
         "201":
-          description: Audit record cryptographically chained and persisted
+          description: "Audit record cryptographically chained and persisted"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error or secret detected
+          description: "Validation error or secret detected"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/audits/checkpoints:
     post:
       summary: Create Signed Checkpoint for Shard Interval
       operationId: createAuditCheckpoint
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2492,14 +4108,32 @@ paths:
                 signing_secret: { type: string }
       responses:
         "201":
-          description: Shard interval checkpoint sealed and signed
+          description: "Shard interval checkpoint sealed and signed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/audits/verify:
     post:
       summary: Verify Shard Cryptographic Integrity Against Anchored Checkpoints
       operationId: verifyAuditShardIntegrity
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2516,15 +4150,32 @@ paths:
                 signing_secret: { type: string }
       responses:
         "200":
-          description: Shard cryptographic verification report
+          description: "Shard cryptographic verification report"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/audits/query:
     get:
       summary: Query Audit Records with Mandatory Access Logging (AU-11)
       operationId: queryAuditRecords
+      description: "Query parameters are snake_case. tenant_id and shard_id are required (400 when missing; no implicit default tenant); the X-Auditor-Id and X-Audit-Case-Id headers are also required (400)."
       parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
         - name: X-Auditor-Id
           in: header
           required: true
@@ -2537,7 +4188,7 @@ paths:
             type: string
         - name: tenant_id
           in: query
-          required: false
+          required: true
           schema:
             type: string
         - name: shard_id
@@ -2567,14 +4218,32 @@ paths:
             type: integer
       responses:
         "200":
-          description: Audit records returned and access logged
+          description: "Audit records returned and access logged"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/encryption/encrypt:
     post:
       summary: Encrypt Field with Contextual AAD Binding
       operationId: encryptField
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2596,14 +4265,37 @@ paths:
                 plaintext: { type: string }
       responses:
         "200":
-          description: EncryptedValue object returned with AEAD auth tag
+          description: "EncryptedValue object returned with AEAD auth tag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/encryption/decrypt:
     post:
       summary: Decrypt Field with Strict 6-Outcome Evaluation
       operationId: decryptField
+      description: "Body fields are snake_case. consumer_role defaults to the X-Consumer-Role header. Any response with status >= 400 has success false."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
+        - name: X-Consumer-Role
+          in: header
+          required: false
+          description: Used when consumer_role is absent from the body
+          schema: { type: string }
       requestBody:
         required: true
         content:
@@ -2639,16 +4331,38 @@ paths:
                     tag: { type: string }
       responses:
         "200":
-          description: Decryption evaluation outcome (DECRYPTED, ERASED)
+          description: "Decryption evaluation outcome (DECRYPTED, ERASED)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error, TAMPERED or MALFORMED tag
+          description: "TAMPERED or MALFORMED outcome, or validation error (envelope success is false)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "403":
-          description: UNAUTHORIZED consumer entitlement
+          description: "UNAUTHORIZED consumer entitlement (envelope success is false)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/encryption/erasure:
     post:
       summary: Execute Subject Crypto-Shredding (GDPR / CCPA)
       operationId: executeCryptoShredding
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2669,14 +4383,32 @@ paths:
                 requested_by: { type: string }
       responses:
         "200":
-          description: Subject keys zeroized and shredding logged
+          description: "Subject keys zeroized and shredding logged"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/encryption/blind-index:
     post:
       summary: Compute Keyed Blind Index for Equality Query
       operationId: computeBlindIndex
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2693,88 +4425,131 @@ paths:
                 raw_value: { type: string }
       responses:
         "200":
-          description: Keyed blind index hash returned
+          description: "Keyed blind index hash returned"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/auth/policies:
     post:
       summary: Register Access Control Policy
       operationId: createAuthorizationPolicy
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - principal_type
-                - principal_id
-                - resource_type
-                - resource_pattern
-                - resource_name
-                - operation
-                - permission
+              required: [tenant_id, principal_type, principal_id, resource_type, resource_pattern, operation, effect]
               properties:
                 tenant_id: { type: string }
-                principal_type: { type: string, enum: [USER, WORKLOAD, SERVICE] }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string, format: uuid }
+                policy_name: { type: string }
+                principal_type: { type: string, enum: [SERVICE, USER, ROLE, GROUP] }
                 principal_id: { type: string }
-                resource_type: { type: string, enum: [TOPIC, CONSUMER_GROUP] }
-                resource_pattern: { type: string, enum: [LITERAL, PREFIX] }
-                resource_name: { type: string }
-                operation: { type: string, enum: [READ, WRITE, ADMIN] }
-                permission: { type: string, enum: [ALLOW, DENY] }
+                resource_type: { type: string, enum: [TOPIC, CONSUMER_GROUP, FIELD, SCHEMA] }
+                resource_pattern: { type: string }
+                operation: { type: string, enum: [PUBLISH, SUBSCRIBE, VIEW_PII, MANAGE, "*"] }
+                effect: { type: string, enum: [ALLOW, DENY] }
       responses:
         "201":
-          description: Policy registered successfully
+          description: "Policy registered successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/auth/evaluate:
     post:
       summary: Evaluate Principal Access Control
       operationId: evaluateAuthorizationAccess
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - principal_id
-                - resource_type
-                - resource_name
-                - operation
+              required: [tenant_id, principal_id, resource_type, resource_name, operation]
               properties:
                 tenant_id: { type: string }
+                source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string, format: uuid }
                 principal_id: { type: string }
-                resource_type: { type: string, enum: [TOPIC, CONSUMER_GROUP] }
+                principal_type: { type: string, enum: [SERVICE, USER, ROLE, GROUP] }
+                resource_type: { type: string, enum: [TOPIC, CONSUMER_GROUP, FIELD, SCHEMA] }
                 resource_name: { type: string }
-                operation: { type: string, enum: [READ, WRITE, ADMIN] }
+                operation: { type: string, enum: [PUBLISH, SUBSCRIBE, VIEW_PII, MANAGE, "*"] }
       responses:
         "200":
-          description: Access allowed
+          description: "Access allowed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "403":
-          description: Access denied
+          description: "Access denied"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/domain-events/envelope/build:
     post:
       summary: Build and Commit Canonical Domain Event Envelope
       operationId: buildCanonicalEnvelope
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - source_service
-                - event_type
-                - aggregate_type
-                - aggregate_id
+              required: [tenant_id, source_service, event_type, aggregate_type, aggregate_id]
               properties:
                 tenant_id: { type: string }
                 source_service: { type: string }
@@ -2788,39 +4563,64 @@ paths:
                 correlation_id: { type: string }
                 causation_depth: { type: integer }
                 transaction_group_id: { type: string }
-                group_size: { type: integer }
-                payload: { type: object }
+                group_size:
+                  type: integer
+                  minimum: 1
+                  description: Required (> 0) whenever transaction_group_id is supplied; the transaction group ledger row is created.
+                trace_context: { type: object }
+                payload: {}
       responses:
         "200":
-          description: Canonical envelope built and aggregate version reserved
+          description: "Canonical envelope built and aggregate version reserved"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Invalid event type syntax, CRUD verb, or causal depth
+          description: "Invalid event type syntax, CRUD verb, causal depth, or group_size missing/<= 0 when transaction_group_id is given"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "409":
-          description: OCC version conflict on aggregate root
+          description: "OCC version conflict on aggregate root"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "422":
-          description: Aggregate root is in terminal closed state
+          description: "Aggregate root is in terminal closed state"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Group or causal-chain persistence failed (generic message)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/domain-events/catalog:
     post:
       summary: Register Approved Domain Event in Catalog
       operationId: registerCatalogEvent
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - source_service
-                - event_type
-                - owning_aggregate
-                - semantics_class
-                - visibility
-                - pii_classification
+              required: [tenant_id, source_service, event_type, owning_aggregate, semantics_class, visibility, pii_classification]
               properties:
                 tenant_id: { type: string }
                 source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
                 event_type: { type: string }
                 owning_aggregate: { type: string }
                 semantics_class: { type: string, enum: [STATE, DELTA, NOTIFICATION] }
@@ -2829,29 +4629,44 @@ paths:
                 schema_fingerprint: { type: string }
       responses:
         "201":
-          description: Domain event registered in catalog
+          description: "Domain event registered in catalog"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/domain-events/aggregates/reserve-version:
     post:
       summary: Atomically Reserve Monotonic Aggregate Version
       operationId: reserveAggregateVersion
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - source_service
-                - aggregate_type
-                - aggregate_id
-                - expected_version
+              required: [tenant_id, source_service, aggregate_type, aggregate_id, expected_version]
               properties:
                 tenant_id: { type: string }
                 source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
                 aggregate_type: { type: string }
                 aggregate_id: { type: string }
                 expected_version: { type: integer }
@@ -2859,31 +4674,50 @@ paths:
                 mark_terminal: { type: boolean }
       responses:
         "200":
-          description: Aggregate version reserved successfully
+          description: "Aggregate version reserved successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "409":
-          description: OCC conflict
+          description: "OCC conflict"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "422":
-          description: Aggregate root is terminal
+          description: "Aggregate root is terminal"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/domain-events/causality/verify:
     post:
       summary: Verify Causal Lineage and Prevent Causal Loops
       operationId: verifyCausalChain
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - source_service
-                - event_id
-                - causation_id
-                - causation_depth
+              required: [tenant_id, source_service, event_id, causation_id, causation_depth]
               properties:
                 tenant_id: { type: string }
                 source_service: { type: string }
+                external_id: { type: string }
+                correlation_id: { type: string }
                 event_id: { type: string }
                 causation_id: { type: string }
                 causation_depth: { type: integer }
@@ -2891,25 +4725,39 @@ paths:
                 aggregate_id: { type: string }
       responses:
         "200":
-          description: Causal chain is valid without cycles
+          description: "Causal chain is valid without cycles"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "422":
-          description: Causal loop or depth limit exceeded
+          description: "Causal loop or depth limit exceeded"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/communication/sagas/definitions:
     post:
       summary: Register Distributed Saga Definition and Step Topologies
       operationId: registerSagaDefinition
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - source_service
-                - saga_name
-                - steps
+              required: [tenant_id, source_service, saga_name, steps]
               properties:
                 tenant_id: { type: string }
                 source_service: { type: string }
@@ -2920,25 +4768,42 @@ paths:
                   type: array
                   items:
                     type: object
-                    required:
-                      - step_name
-                      - action_topic
-                      - compensation_topic
+                    required: [step_name, step_type, target_topic]
                     properties:
+                      step_index: { type: integer, minimum: 0 }
                       step_name: { type: string }
-                      action_topic: { type: string }
-                      compensation_topic: { type: string }
+                      step_type: { type: string, enum: [COMPENSABLE, PIVOT, RETRIABLE] }
+                      target_topic: { type: string }
                       timeout_seconds: { type: integer }
+                      compensation_name: { type: string }
       responses:
         "200":
-          description: Saga definition registered successfully
+          description: "Saga definition registered successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/communication/sagas/start:
     post:
       summary: Initiate Orchestrated Distributed Saga Instance
       operationId: startSagaInstance
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2961,14 +4826,32 @@ paths:
                 timeout_seconds: { type: integer }
       responses:
         "202":
-          description: Saga initiated in progress
+          description: "Saga initiated in progress"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/communication/sagas/reply:
     post:
       summary: Process Correlated Step Outcome Reply
       operationId: processSagaStepReply
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -2992,14 +4875,32 @@ paths:
                 reply_payload: { type: string }
       responses:
         "200":
-          description: Reply processed and step advanced
+          description: "Reply processed and step advanced"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation or step out of bounds error
+          description: "Validation or step out of bounds error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/communication/sagas/compensate:
     post:
       summary: Force Explicit Saga Rollback and Reverse Compensation
       operationId: triggerSagaCompensation
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -3018,14 +4919,32 @@ paths:
                 reason: { type: string }
       responses:
         "200":
-          description: Reverse compensations executed successfully
+          description: "Reverse compensations executed successfully"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "422":
-          description: Saga is already concluded or terminal
+          description: "Saga is already concluded or terminal"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/communication/commands/dispatch:
     post:
       summary: Dispatch Async Command to Handler Topic via Outbox
       operationId: dispatchAsyncCommand
+      description: "Body fields are snake_case. command_payload is a JSON string. This is not the CQRS route /api/v1/commands/dispatch."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -3051,14 +4970,46 @@ paths:
                 timeout_seconds: { type: integer }
       responses:
         "202":
-          description: Command dispatched to outbox
+          description: "Command accepted and queued: an outbox row is inserted (aggregate_type = target_topic, aggregate_id = command id, version 1, status PENDING, JSON envelope payload). data.status is QUEUED_IN_OUTBOX; the outbox relay delivers it asynchronously."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          command_id: { type: string }
+                          status: { type: string, enum: [QUEUED_IN_OUTBOX] }
         "400":
-          description: Validation error
+          description: "Validation error (command_payload must be a JSON string)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: "Duplicate external_id"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/ops/hops/report:
     post:
       summary: Report Telemetry and Lag for Pipeline Hop
       operationId: reportHopTelemetry
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -3091,41 +5042,97 @@ paths:
                 runbook_url: { type: string }
       responses:
         "200":
-          description: Hop telemetry recorded
+          description: "Hop telemetry recorded"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/ops/triage/localize:
     post:
       summary: Localize Incident Bottleneck across Flow Hops
       operationId: triageFlow
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - source_service
-                - external_id
-                - flow_name
+              required: [tenant_id, source_service, external_id, flow_name]
               properties:
                 tenant_id: { type: string }
                 source_service: { type: string }
                 external_id: { type: string }
-                correlation_id: { type: string }
+                correlation_id: { type: string, format: uuid }
+                incident_id: { type: string }
                 flow_name: { type: string }
+                triaged_by: { type: string }
       responses:
         "200":
-          description: Triage localization outcome
+          description: "Triage localization outcome. A healthy or unknown flow returns 200 with localized_hop NONE and the default c_ctl_action_link /control-plane/consumers/status."
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/SuccessEnvelope"
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          incident_id: { type: string }
+                          flow_name: { type: string }
+                          localized_hop: { type: string, enum: [NONE, H1_OUTBOX, H2_RELAY, H3_KAFKA, H4_CONSUMER, H5_AUTH_VIEW, H6_DERIVED_STORE] }
+                          hop_status: { type: string }
+                          pause_reason: { type: string }
+                          severity: { type: string, enum: [SEV0, SEV1, SEV2, INFO] }
+                          triage_action: { type: string }
+                          runbook_url: { type: string }
+                          c_ctl_action_link: { type: string }
+                          triaged_at: { type: string }
+        "400":
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
         "404":
-          description: Flow not found
+          description: "Flow not found"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/tracing/context/inject:
     post:
       summary: Inject W3C Trace Context into Carrier
       operationId: injectTraceContext
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -3145,14 +5152,32 @@ paths:
                   additionalProperties: { type: string }
       responses:
         "200":
-          description: W3C Trace Context injected into carrier
+          description: "W3C Trace Context injected into carrier"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/tracing/context/extract:
     post:
       summary: Extract W3C Trace Context and Determine Linking Mode
       operationId: extractTraceContext
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -3169,14 +5194,32 @@ paths:
                 queue_wait_millis: { type: integer }
       responses:
         "200":
-          description: Extracted W3C trace context and link mode
+          description: "Extracted W3C trace context and link mode"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/tracing/sampling/evaluate:
     post:
       summary: Evaluate Head/Tail Sampling Policy for Event Flow
       operationId: evaluateTraceSampling
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
@@ -3196,29 +5239,39 @@ paths:
                 has_error: { type: boolean }
       responses:
         "200":
-          description: Sampling policy evaluation decision
+          description: "Sampling policy evaluation decision"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
 
   /api/v1/tracing/coverage/report:
     post:
       summary: Report and Verify Propagation Coverage across Hops
       operationId: reportTracePropagationCoverage
+      description: "Body fields are snake_case."
+      parameters:
+        - $ref: "#/components/parameters/XRequestID"
+        - $ref: "#/components/parameters/XCorrelationID"
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required:
-                - tenant_id
-                - source_service
-                - external_id
-                - hop_source
-                - hop_target
-                - hop_type
-                - total_spans
-                - propagated_spans
+              required: [tenant_id, source_service, external_id, hop_source, hop_target, hop_type, total_spans, propagated_spans]
               properties:
                 tenant_id: { type: string }
                 source_service: { type: string }
@@ -3227,10 +5280,86 @@ paths:
                 hop_source: { type: string }
                 hop_target: { type: string }
                 hop_type: { type: string, enum: [OUTBOX_TO_RELAY, RELAY_TO_BROKER, BROKER_TO_CONSUMER, CONSUMER_TO_DB, PROJECTION] }
-                total_spans: { type: integer }
-                propagated_spans: { type: integer }
+                total_spans: { type: integer, minimum: 0 }
+                propagated_spans: { type: integer, minimum: 0, description: "Must be <= total_spans" }
       responses:
         "200":
-          description: Propagation coverage evaluated and recorded
+          description: "Propagation coverage evaluated and recorded"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessEnvelope"
         "400":
-          description: Validation error
+          description: "Validation error (ErrInvalidCoverageReport): required fields, hop_type enum, counts >= 0, propagated_spans <= total_spans"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "500":
+          description: "Unexpected server error; generic message, no internal detail is exposed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+components:
+  parameters:
+    XRequestID:
+      name: X-Request-ID
+      in: header
+      required: false
+      description: Request id, echoed in the response and meta.requestId; generated (UUIDv7) when absent
+      schema: { type: string }
+    XCorrelationID:
+      name: X-Correlation-ID
+      in: header
+      required: false
+      description: Correlation id (UUID where the route persists it); defaults to a generated UUIDv7
+      schema: { type: string }
+  schemas:
+    ResponseMeta:
+      type: object
+      required: [requestId, correlationId, causationId, timestamp, executionTimeMs, apiVersion]
+      properties:
+        requestId: { type: string }
+        correlationId: { type: string }
+        causationId: { type: string }
+        timestamp: { type: string, format: date-time }
+        executionTimeMs: { type: integer }
+        apiVersion: { type: string }
+    ErrorDetail:
+      type: object
+      properties:
+        field: { type: string }
+        issue: { type: string }
+        rule: { type: string }
+        rejectedValue: {}
+    ErrorBody:
+      type: object
+      required: [code, message, retryable]
+      properties:
+        code:
+          type: string
+          description: Canonical code such as VALIDATION_FAILED, RESOURCE_NOT_FOUND, CONFLICT, PRECONDITION_FAILED, VERSION_GAP_DETECTED, DATABASE_CONSTRAINT_VIOLATION or INTERNAL_SERVER_ERROR
+        message: { type: string }
+        retryable: { type: boolean }
+        details:
+          type: array
+          items: { $ref: "#/components/schemas/ErrorDetail" }
+    SuccessEnvelope:
+      type: object
+      required: [success, statusCode, data, meta]
+      properties:
+        success: { type: boolean, enum: [true] }
+        statusCode: { type: integer }
+        data: {}
+        error: { type: "null" }
+        meta: { $ref: "#/components/schemas/ResponseMeta" }
+    ErrorEnvelope:
+      type: object
+      required: [success, statusCode, error, meta]
+      properties:
+        success: { type: boolean, enum: [false] }
+        statusCode: { type: integer, minimum: 400 }
+        data: { type: "null" }
+        error: { $ref: "#/components/schemas/ErrorBody" }
+        meta: { $ref: "#/components/schemas/ResponseMeta" }

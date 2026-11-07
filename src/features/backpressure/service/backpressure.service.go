@@ -46,7 +46,7 @@ func (s *BackpressureService) ReportSaturation(ctx context.Context, input contra
 
 	eval := rules.EvaluateSaturation(input.Signal)
 	if !eval.IsSaturated {
-		err := fmt.Errorf("signal does not indicate saturation: %s", eval.Recommendation)
+		err := fmt.Errorf("%w: %s", contracts.ErrSignalNotSaturated, eval.Recommendation)
 		observability.RecordError(span, err, attribute.String("error.type", "SIGNAL_NOT_SATURATED"))
 		observability.LogWarn(ctx, "backpressure", "signal does not indicate saturation", input.TenantID, map[string]any{
 			"recommendation": eval.Recommendation,
@@ -57,7 +57,7 @@ func (s *BackpressureService) ReportSaturation(ctx context.Context, input contra
 	existing, getErr := s.repo.GetBackpressureRecord(ctx, input.TenantID, input.Signal.HandlerID, input.Signal.DependencyID)
 
 	fromState := contracts.StateNormal
-	currentLimit := int64(10)
+	currentLimit := rules.DefaultConcurrencyLimit
 	if getErr == nil && existing != nil {
 		fromState = existing.State
 		currentLimit = existing.ConcurrencyLimit
@@ -265,6 +265,7 @@ func (s *BackpressureService) ConfirmRecovery(ctx context.Context, input contrac
 	rec := *existing
 	rec.State = nextState
 	rec.PauseReason = ""
+	rec.ConcurrencyLimit = rules.ComputeConfirmedConcurrency(existing.ConcurrencyLimit)
 
 	saved, saveErr := s.repo.UpsertBackpressureRecord(ctx, rec)
 	if saveErr != nil {

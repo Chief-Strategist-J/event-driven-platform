@@ -152,7 +152,7 @@ func (h *EncryptionHandler) HandleGenerateBlindIndex(w http.ResponseWriter, r *h
 func (h *EncryptionHandler) writeResponse(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {
 	w.WriteHeader(status)
 	resp := types.ApiResponse{
-		Success:    true,
+		Success:    status < http.StatusBadRequest,
 		StatusCode: status,
 		Data:       data,
 		Meta: types.ResponseMeta{

@@ -25,6 +25,7 @@ const (
 	EscalationPageSeconds        = 600
 	ResumeRampFraction           = 0.25
 	ConcurrencyFloor             = int64(1)
+	DefaultConcurrencyLimit      = int64(10)
 	ConcurrencyMultiplicativeDecrement = 0.5
 )
 
@@ -76,6 +77,15 @@ func ComputeDecreasedConcurrency(current int64) int64 {
 		return ConcurrencyFloor
 	}
 	return next
+}
+
+// ComputeConfirmedConcurrency restores the baseline limit once recovery is confirmed NORMAL;
+// the ramp value (a fraction of the already-decreased limit) must not stick after recovery.
+func ComputeConfirmedConcurrency(current int64) int64 {
+	if current < DefaultConcurrencyLimit {
+		return DefaultConcurrencyLimit
+	}
+	return current
 }
 
 func ComputeRampConcurrency(prePause int64) int64 {

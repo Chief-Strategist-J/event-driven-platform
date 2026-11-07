@@ -122,3 +122,10 @@ sequenceDiagram
     Worker->>Kafka: Resume Partition Ingestion
 ```
 
+
+
+## Amendment 2026-11-07 (second pass): tenant scope required
+
+`GET /retries/due` returns 400 when `tenant_id` is missing (previously 200 with `data:null`).
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

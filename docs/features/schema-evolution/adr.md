@@ -121,3 +121,47 @@ The database schema introduces four dedicated tables supporting the schema evolu
   - *Mitigation*: Cached golden samples and parallelized compatibility linters.
 - **Extended Migration Windows**: Dual-publishing and consumer attestations require disciplined 30-day tracking.
   - *Mitigation*: Automated telemetry tracking (`C-TEL`) alerts teams with lagging migrations.
+
+## Amendment 2026-11-07: Compatibility enforcement at registration, and migration 0028 context
+
+### Problem observed
+`POST /api/v1/schemas/register` never checked compatibility. A new version that added a required field (breaking under BACKWARD) was accepted with `201`, which defeats invariant SE-04.
+
+### Root cause
+`SchemaEvolutionService.RegisterSchema` validated fingerprint uniqueness and version monotonicity only; the stored `compatibility_mode` was recorded but never evaluated against the lineage (scaffold left the check unimplemented, RC4).
+
+### Decision / fix
+New pure function `rules.CheckSchemaCompatibility(mode, candidateDefinition, lineage)` in `domain/rules/schema-compatibility.rules.go`, called from `RegisterSchema` after lineage load. A violation returns `ErrIncompatibleSchema` (409) with human-readable reasons per past version.
+
+Field model (`parseSchemaFields`): Avro record (`fields[]`; a field is required iff it has no `default`) or JSON Schema (`properties` + `required[]`; required iff listed in `required` and no `default`). Types are compared by canonical JSON. A definition that is not parseable JSON, or lineage entries that are not, are skipped (no semantic comparison possible, so they pass).
+
+Compatibility matrix per mode (what is rejected):
+
+| Mode | Compared against | BACKWARD check (new schema reads old data) | FORWARD check (old schema reads new data) |
+|---|---|---|---|
+| BACKWARD | latest version only | new required field without default; changed type | not checked |
+| BACKWARD_TRANSITIVE | every past version | same as above | not checked |
+| FORWARD | latest version only | not checked | removed required field; changed type |
+| FORWARD_TRANSITIVE | every past version | not checked | same as above |
+| FULL | latest version only | yes | yes |
+| FULL_TRANSITIVE (default when mode is empty, strictest fallback) | every past version | yes | yes |
+| NONE | n/a | no check | no check |
+
+Notes: adding an optional (defaulted) field passes BACKWARD and FULL; removing an optional field passes FORWARD; removing a required field fails FORWARD/FULL. `NONE` is not accepted at the API: the DB check `ck_schema_evolution_version_compatibility` and `ErrInvalidCompatibilityMode` list only the six real modes (the rule function still short-circuits for NONE). Duplicate fingerprint, non-monotonic version and incompatible schema all return `409`; an unknown mode returns `400`.
+
+We implemented structural checks in-service rather than delegating to Apicurio so the rule is deterministic, unit-testable and runs even when the registry is unavailable. Apicurio remains a separate store written only by `POST /api/v1/schemas` (unverified relationship to this route beyond that).
+
+### Migration 0028 (context; also relevant to materialized-views and partitioning)
+`database/migrations/sql/0028_scope_partitioning_and_rebuild_uniqueness_per_tenant.sql` (+ `.rollback.sql`) is not about schema registry tables. It replaces three global uniqueness constraints with per-tenant ones: `partition_topic_topology` `UNIQUE(topic_name)` -> `UNIQUE(tenant_id, topic_name)`; `partition_migration_runbook_log` `UNIQUE(migration_id)` -> `UNIQUE(tenant_id, migration_id)`; `materialized_view_rebuild_log` `UNIQUE(rebuild_id)` -> `UNIQUE(tenant_id, rebuild_id)`. Why: one tenant could block another from using the same topic/migration/rebuild id. Reversible, lock risk LOW, schema only. **Not applied to the live database**: `serve` does not run migrations and the live DB has no `schema_migrations` table; apply via the migration tooling. Rollback restores global uniqueness and fails if tenants now share values.
+
+### API-visible behavior change
+- Incompatible schema registration: `201` -> `409` (**breaking** for producers that relied on unchecked registration).
+- Unknown mode: `400`.
+
+### Verification
+Live: v2 adding a required field -> 409; v2 adding a defaulted field -> 201. Unit tests in `src/features/schema-evolution/tests/schema_evolution_unit_test.go`.
+
+### Remaining gaps
+- Only structural field required/type checks: no enum-symbol, nested record, union-widening or logical-type analysis.
+- Non-JSON schema formats (e.g. Protobuf) pass unchecked.
+- Type comparison is strict string equality of canonical JSON (a widening such as int to long is flagged as a change).

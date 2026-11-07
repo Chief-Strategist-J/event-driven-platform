@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +13,7 @@ import (
 
 	eventualconsistencymonitoring "event-driven-platform/src/features/eventual-consistency-monitoring"
 	"event-driven-platform/src/features/eventual-consistency-monitoring/contracts"
+	"event-driven-platform/src/features/eventual-consistency-monitoring/infrastructure/ports"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
 	"event-driven-platform/src/shared/types"
@@ -61,7 +64,8 @@ func (h *ConsistencyMonitoringHandler) HandleObserveWatermark(w http.ResponseWri
 
 	record, err := h.svc.ObserveWatermark(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusBadRequest, constants.ErrCodeValidationFailed)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -80,13 +84,15 @@ func (h *ConsistencyMonitoringHandler) HandleGetViewWatermarks(w http.ResponseWr
 
 	viewName := r.PathValue("view_name")
 	tenantID := r.URL.Query().Get("tenant_id")
-	if tenantID == "" {
-		tenantID = "default"
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 
 	records, err := h.svc.GetViewWatermarks(ctx, tenantID, viewName)
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusInternalServerError, constants.ErrCodeInternalError)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -117,7 +123,8 @@ func (h *ConsistencyMonitoringHandler) HandleEvaluateRecord(w http.ResponseWrite
 	sourceService := "consistency-evaluator"
 	result, err := h.svc.EvaluateAndRecordDrift(ctx, input, sourceService, corrID)
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusInternalServerError, constants.ErrCodeInternalError)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -136,13 +143,15 @@ func (h *ConsistencyMonitoringHandler) HandleGetActiveIncidents(w http.ResponseW
 
 	viewName := r.PathValue("view_name")
 	tenantID := r.URL.Query().Get("tenant_id")
-	if tenantID == "" {
-		tenantID = "default"
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 
 	incidents, err := h.svc.GetActiveIncidents(ctx, tenantID, viewName)
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusInternalServerError, constants.ErrCodeInternalError)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -172,8 +181,13 @@ func (h *ConsistencyMonitoringHandler) HandleAttemptHealing(w http.ResponseWrite
 	}
 
 	healed, err := h.svc.AttemptHealing(ctx, incidentUUID, tenantID, 2)
+	if errors.Is(err, ports.ErrIncidentNotFound) {
+		h.writeError(w, http.StatusNotFound, constants.ErrCodeNotFound, "drift incident not found", start, reqID, corrID, causationID)
+		return
+	}
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusInternalServerError, constants.ErrCodeInternalError)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -206,7 +220,8 @@ func (h *ConsistencyMonitoringHandler) HandleRecordCheckSweep(w http.ResponseWri
 
 	record, err := h.svc.RecordCheckSweep(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusBadRequest, constants.ErrCodeValidationFailed)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -225,13 +240,15 @@ func (h *ConsistencyMonitoringHandler) HandleListCheckRuns(w http.ResponseWriter
 
 	viewName := r.PathValue("view_name")
 	tenantID := r.URL.Query().Get("tenant_id")
-	if tenantID == "" {
-		tenantID = "default"
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 
 	records, err := h.svc.ListCheckRuns(ctx, tenantID, viewName, 50)
 	if err != nil {
-		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusInternalServerError, constants.ErrCodeInternalError)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -260,7 +277,8 @@ func (h *ConsistencyMonitoringHandler) HandleRegisterSilence(w http.ResponseWrit
 
 	record, err := h.svc.RegisterSilence(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusBadRequest, constants.ErrCodeValidationFailed)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -289,7 +307,8 @@ func (h *ConsistencyMonitoringHandler) HandleDispatchCanaryProbe(w http.Response
 
 	output, err := h.svc.DispatchCanaryProbe(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusBadRequest, constants.ErrCodeValidationFailed)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 

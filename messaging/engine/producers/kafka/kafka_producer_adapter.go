@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"sort"
 	"strconv"
 	"time"
 
@@ -56,11 +57,16 @@ func NewKafkaProducerAdapter(cfg KafkaProducerConfig) producers.ProducerPort {
 }
 
 func (k *KafkaProducerAdapter) Publish(ctx context.Context, topic string, key []byte, payload []byte) error {
+	return k.PublishWithHeaders(ctx, topic, key, payload, nil)
+}
+
+func (k *KafkaProducerAdapter) PublishWithHeaders(ctx context.Context, topic string, key []byte, payload []byte, headers map[string]string) error {
 	msg := kafka.Message{
-		Topic: topic,
-		Key:   key,
-		Value: payload,
-		Time:  time.Now().UTC(),
+		Topic:   topic,
+		Key:     key,
+		Value:   payload,
+		Time:    time.Now().UTC(),
+		Headers: toKafkaHeaders(headers),
 	}
 
 	if err := k.writer.WriteMessages(ctx, msg); err != nil {
@@ -68,6 +74,24 @@ func (k *KafkaProducerAdapter) Publish(ctx context.Context, topic string, key []
 	}
 
 	return nil
+}
+
+// toKafkaHeaders converts headers to Kafka record headers in sorted key order
+// so output is deterministic.
+func toKafkaHeaders(headers map[string]string) []kafka.Header {
+	if len(headers) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]kafka.Header, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, kafka.Header{Key: k, Value: []byte(headers[k])})
+	}
+	return out
 }
 
 func (k *KafkaProducerAdapter) Close() error {

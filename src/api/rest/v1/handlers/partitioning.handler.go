@@ -3,7 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
+	"errors"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -12,7 +12,9 @@ import (
 	partitioning "event-driven-platform/src/features/partitioning-strategy"
 	"event-driven-platform/src/features/partitioning-strategy/contracts"
 	"event-driven-platform/src/infra/observability"
+	"event-driven-platform/src/features/partitioning-strategy/domain/rules"
 	"event-driven-platform/src/shared/constants"
+	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
 )
@@ -64,13 +66,7 @@ func (h *PartitioningHandler) HandleRegisterTopology(w http.ResponseWriter, r *h
 
 	topology, err := h.svc.RegisterTopicTopology(ctx, input)
 	if err != nil {
-		statusCode := http.StatusBadRequest
-		errCode := constants.ErrCodeValidationFailed
-		if strings.Contains(err.Error(), "forbidden") {
-			statusCode = http.StatusConflict
-			errCode = constants.ErrCodeConflict
-		}
-		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -106,7 +102,7 @@ func (h *PartitioningHandler) HandleCalculatePartition(w http.ResponseWriter, r 
 
 	out, err := h.svc.CalculatePartition(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -152,7 +148,7 @@ func (h *PartitioningHandler) HandleEvaluateSkew(w http.ResponseWriter, r *http.
 
 	out, err := h.svc.EvaluateSkew(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -198,7 +194,7 @@ func (h *PartitioningHandler) HandleInitiateMigration(w http.ResponseWriter, r *
 
 	record, err := h.svc.InitiateMigration(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -238,17 +234,26 @@ func (h *PartitioningHandler) HandleAdvanceMigration(w http.ResponseWriter, r *h
 
 	record, err := h.svc.AdvanceMigration(ctx, input)
 	if err != nil {
-		statusCode := http.StatusBadRequest
-		errCode := constants.ErrCodeValidationFailed
-		if strings.Contains(err.Error(), "conflict") || strings.Contains(err.Error(), "terminal") {
-			statusCode = http.StatusConflict
-			errCode = constants.ErrCodeConflict
-		}
-		h.writeError(w, statusCode, errCode, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
 	h.writeResponse(w, http.StatusOK, record, start, reqID, corrID, causationID)
+}
+
+// writeServiceError maps typed ApplicationErrors to their own status. A
+// forbidden in-place expansion is a state conflict (409); untyped errors are 500.
+func (h *PartitioningHandler) writeServiceError(w http.ResponseWriter, err error, start time.Time, reqID, corrID, causationID string) {
+	if errors.Is(err, rules.ErrInPlaceExpansionForbidden) {
+		h.writeError(w, http.StatusConflict, constants.ErrCodeConflict, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+	var appErr *appErrors.ApplicationError
+	if errors.As(err, &appErr) {
+		h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, err.Error(), start, reqID, corrID, causationID)
+		return
+	}
+	h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "internal server error", start, reqID, corrID, causationID)
 }
 
 func (h *PartitioningHandler) writeResponse(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {

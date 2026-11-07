@@ -48,6 +48,14 @@ FROM consistency_drift_incident_log
 WHERE tenant_id = $1 AND view_name = $2 AND status <> 'RESOLVED'
 ORDER BY detected_at DESC;`
 
+	FlowSelectDriftIncidentByID = `
+SELECT id, public_id, tenant_id, source_service, external_id, correlation_id,
+       view_name, aggregate_type, aggregate_id, drift_class, source_version,
+       view_version, difference_payload, status, heal_attempts,
+       quarantined_until, detected_at, resolved_at, version, created_at, updated_at
+FROM consistency_drift_incident_log
+WHERE id = $1 AND tenant_id = $2;`
+
 	FlowUpdateDriftIncidentStatus = `
 UPDATE consistency_drift_incident_log
 SET status = $3,

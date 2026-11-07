@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"database/sql"
+	stderrors "errors"
 
 	"event-driven-platform/src/features/materialized-views/contracts"
 	"event-driven-platform/src/features/materialized-views/infrastructure/ports"
@@ -10,6 +11,7 @@ import (
 	"event-driven-platform/src/infra/database"
 	"event-driven-platform/src/shared/errors"
 	"github.com/google/uuid"
+	"github.com/lib/pq"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -25,6 +27,16 @@ func NewPostgresViewRepositoryAdapter(db *sql.DB) ports.ViewRepositoryPort {
 		db:     db,
 		tracer: otel.Tracer("PostgresViewRepositoryAdapter"),
 	}
+}
+
+// mapUniqueViolation turns a unique-constraint violation into a 409 with a
+// domain message (no raw constraint name); other errors use the shared mapper.
+func mapUniqueViolation(err error, message string) error {
+	var pqErr *pq.Error
+	if stderrors.As(err, &pqErr) && pqErr.Code == "23505" {
+		return errors.NewConflictError(message)
+	}
+	return database.MapDatabaseError(err)
 }
 
 func (a *PostgresViewRepositoryAdapter) RegisterView(ctx context.Context, reg contracts.ViewRegistryRecord) error {
@@ -52,7 +64,7 @@ func (a *PostgresViewRepositoryAdapter) RegisterView(ctx context.Context, reg co
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return database.MapDatabaseError(err)
+		return mapUniqueViolation(err, "a materialized view with this view_name is already registered for the tenant")
 	}
 
 	return nil
@@ -366,7 +378,7 @@ func (a *PostgresViewRepositoryAdapter) InitiateRebuild(ctx context.Context, log
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
-		return database.MapDatabaseError(err)
+		return mapUniqueViolation(err, "a rebuild with this rebuild_id already exists")
 	}
 
 	return nil

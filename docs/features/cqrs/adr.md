@@ -144,3 +144,38 @@ The database schema introduces three relational tables supporting CQRS infrastru
 - **Eventual Consistency Latency**: Non-tokened queries may reflect slight staleness ($< 200\text{ms}$).
   - *Mitigation*: Freshness SLOs are continuously monitored and alerted via WP-14.
 
+
+## Amendment 2026-11-07: Consistency-token error semantics and signing-key response
+
+### Problem observed
+- `GET /api/v1/queries/resolve` with a garbage `x-consistency-token` returned 200 with `consistency_status: IMMEDIATE`, silently ignoring the token and giving the caller no read-your-writes guarantee.
+- `POST /api/v1/commands/keys` echoed `raw_secret_value` in the 201 response.
+
+### Root cause
+- RC4-style silent fallback: `CQRSService.ResolveQuery` returned a synthetic IMMEDIATE result whenever `rules.VerifyConsistencyToken` returned `valid == false`, so an invalid token was indistinguishable from "no token".
+- `HandleRegisterSigningKey` serialised the stored record struct directly, including the write-only secret.
+
+### Decision / fix
+- `ResolveQuery` returns the new sentinel `contracts.ErrInvalidConsistencyToken`; the handler maps it to 400 (the resolve handler maps service errors to 400 `VALIDATION_FAILED` with the error text). A request with no token still returns IMMEDIATE.
+- Token error semantics: `VerifyConsistencyToken` returns only `(nil, false)` for a missing `c_tok_` prefix, bad base64, bad JSON, expiry, and signature mismatch. The API therefore cannot, and deliberately does not, say which of these occurred; the message is "malformed, expired, or has an invalid signature". This avoids giving an attacker an oracle for forging tokens and for probing expiry, at the cost of making client debugging harder (a client must re-mint a fresh token).
+- Signing-key registration returns a dedicated `signingKeyResponse` that omits `raw_secret_value`.
+
+### API-visible behavior change
+- Invalid token: 200 IMMEDIATE becomes 400. **Breaking** for clients that sent stale/invalid tokens and relied on the silent fallback; they must refresh the token or omit it.
+- `POST /commands/keys`: `raw_secret_value` no longer in the response. **Breaking** for any client that read the secret back; the caller already supplied it.
+- `secret_key_hash` is still returned (see gaps).
+
+### Verification
+Re-tested live: garbage token returns 400; key registration response has no `raw_secret_value`. Existing token unit tests (`cqrs_unit_test.go`: mint/verify, tampered signature, expired) cover the verifier; no new unit test was added for the service-level 400 or the response shape.
+
+### Remaining gaps
+- `secret_key_hash` is still echoed in the response.
+- If no active signing key exists for the tenant, `ResolveQuery` falls back to a hard-coded default secret (`default_system_cqrs_secret_key_32` in `cqrs.service.go`); this was not changed and is a security concern worth a separate decision.
+- The handler maps all service errors from resolve to 400, including non-validation failures.
+
+
+## Amendment 2026-11-07 (second pass): no fallback signing secret
+
+The hard-coded fallback secret in `ResolveQuery` is removed. A consistency token that must be verified with no active signing key returns 409 (`ErrNoActiveSigningKey`); no token needs no key; a key-lookup storage failure is a generic 500. `DispatchCommand` mints a token only when the tenant has an active key (otherwise the command succeeds with an empty token). `POST /commands/keys` returns neither the raw secret nor `secret_key_hash`. `GET /queries/resolve` and `/queries/authoritative-own` now require `tenant_id` (400), with no silent `default`.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

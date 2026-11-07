@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -144,6 +145,10 @@ func (h *EventOrderingHandler) ListHeld(w http.ResponseWriter, r *http.Request) 
 	}
 
 	tenantID := r.URL.Query().Get("tenant_id")
+	if strings.TrimSpace(tenantID) == "" {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
+	}
 	group := r.URL.Query().Get("consumer_group")
 	handler := r.URL.Query().Get("handler_id")
 	limitStr := r.URL.Query().Get("limit")

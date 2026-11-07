@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	schemaevolution "event-driven-platform/src/features/schema-evolution"
 	"event-driven-platform/src/features/schema-evolution/contracts"
+	schemaservice "event-driven-platform/src/features/schema-evolution/service"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
 	"event-driven-platform/src/shared/types"
@@ -61,6 +63,10 @@ func (h *SchemaEvolutionHandler) HandleRegisterSchema(w http.ResponseWriter, r *
 
 	record, err := h.svc.RegisterSchema(ctx, input)
 	if err != nil {
+		if errors.Is(err, schemaservice.ErrIncompatibleSchema) || errors.Is(err, schemaservice.ErrDuplicateSchemaFingerprint) || errors.Is(err, schemaservice.ErrNonMonotonicVersion) {
+			h.writeError(w, http.StatusConflict, constants.ErrCodeConflict, err.Error(), start, reqID, corrID, causationID)
+			return
+		}
 		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 		return
 	}

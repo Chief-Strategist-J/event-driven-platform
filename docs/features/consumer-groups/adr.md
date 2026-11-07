@@ -208,3 +208,34 @@ sequenceDiagram
 ### Negative & Mitigations
 * **Partition Idle Period on Pod Crash**: Static members that crash hard (OOM/Kernel panic) leave partitions unconsumed until `session.timeout.ms` (45–120s) expires. *Mitigation*: Monitored via Prometheus alerts triggering manual rebalance CLI or container restarts.
 * **Storage Overhead of Stored Offsets**: Maintaining offsets in the application database incurs write load. *Mitigation*: Offsets are piggybacked onto the existing business transaction, eliminating extra round-trips.
+
+## Amendment 2026-11-07: Tenant scoping on list and typed error mapping
+
+### Problem observed
+`GET` list members without `tenant_id` returned 200 with `data: null`, hiding a client error. Register, heartbeat and rebalance-sync mapped every service failure to 400 with raw error text, and list failures to 500 with raw error text.
+
+### Root cause
+- RC1: handlers hard-coded the status per route instead of reading the service error type.
+- RC2: tenant scoping was not validated at the edge; an empty tenant simply matched no rows.
+
+### Decision / fix
+- `ListMembers` returns 400 `tenant_id query parameter is required` when `tenant_id` is blank.
+- New `ConsumerGroupsHandler.writeServiceError` uses `errors.As`: an `ApplicationError` keeps its status/code/message; any other error stays 400 `VALIDATION_FAILED` with the error text (preserving the previous behavior on write routes). `ListMembers` now uses the same helper, so its non-application failures change from 500 to 400 (see gaps).
+
+### API-visible behavior change
+- List without `tenant_id`: 200 `data:null` becomes 400. **Breaking** for callers relying on the empty result.
+- Application errors (e.g. 404/409) on register/heartbeat/rebalance now surface with their own status instead of 400.
+
+### Verification
+Re-tested live: list without `tenant_id` returns 400. No new unit test; no HTTP-level test.
+
+### Remaining gaps
+- Non-application errors on write routes are still reported as 400 with raw text (open: should be a generic 500 for storage faults). `ListMembers` storage faults return a generic 500 `internal list error` (initially mapped to 400 by the shared helper; corrected the same day).
+- `X-Tenant-Id` header is not accepted as an alternative for list (query parameter only).
+
+
+## Amendment 2026-11-07 (second pass): write-route error classification
+
+`writeServiceError` keeps `ApplicationError` status/message, maps known domain sentinels (matched with `errors.Is`) to 400 with their message, and returns a generic 500 for anything else. This closes failure case FL-CG-A3.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

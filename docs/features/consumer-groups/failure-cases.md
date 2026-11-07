@@ -15,3 +15,13 @@ This catalog categorizes all failure scenarios for **Consumer Groups (WP-6)** un
 | **FL-CG-04** | Zombie consumer thread post-revocation | Concurrent writes from two pods to same database projection | Stale generation ID in database update query | Reject write via generation epoch check; abort transaction | Rebalance epoch fencing prevents split-brain writes |
 | **FL-CG-05** | Heartbeat thread starvation (>45s) | Pod evicted from consumer group by broker | `now - heartbeat_at > 45000ms` | Transition member to `DEAD` in ledger; trigger watchdog exit | Separate heartbeat thread from processing thread |
 
+
+---
+
+## 3. Amendment 2026-11-07: API Failure Handling
+
+| Code | Failure Scenario | System Impact | Detection Mechanism | Immediate Handling | Long-term Recovery |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **FL-CG-A1** | List members without `tenant_id` | Client mistake hidden as empty 200 `data:null` | Missing/blank query parameter | 400 `tenant_id query parameter is required` | Add HTTP-level test |
+| **FL-CG-A2** | Typed application error from service on register/heartbeat/rebalance | Real 404/409 reported as 400 | `errors.As` on `ApplicationError` | Status, code and message of the application error returned | Keep services returning typed errors |
+| **FL-CG-A3** | Untyped service/storage error on write routes | Raw error text returned as 400 | Falls through `errors.As` | 400 `VALIDATION_FAILED` (unchanged); **open**: should be 500 generic for storage faults | Introduce sentinel validation errors and default to 500 |

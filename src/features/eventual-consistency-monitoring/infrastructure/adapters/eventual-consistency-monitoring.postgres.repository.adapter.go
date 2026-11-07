@@ -3,6 +3,7 @@ package adapters
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
@@ -189,13 +190,41 @@ func (a *PostgresConsistencyRepositoryAdapter) UpdateDriftIncidentStatus(ctx con
 	ctx, span := a.tracer.Start(ctx, "PostgresConsistencyRepositoryAdapter.UpdateDriftIncidentStatus")
 	defer span.End()
 
-	_, err := a.db.ExecContext(ctx, queries.FlowUpdateDriftIncidentStatus, id, tenantID, string(status), healAttempts)
+	res, err := a.db.ExecContext(ctx, queries.FlowUpdateDriftIncidentStatus, id, tenantID, string(status), healAttempts)
 	if err != nil {
 		span.RecordError(err)
 		span.SetStatus(codes.Error, err.Error())
 		return database.MapDatabaseError(err)
 	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ports.ErrIncidentNotFound
+	}
 	return nil
+}
+
+func (a *PostgresConsistencyRepositoryAdapter) GetDriftIncident(ctx context.Context, id uuid.UUID, tenantID string) (*contracts.DriftIncidentRecord, error) {
+	ctx, span := a.tracer.Start(ctx, "PostgresConsistencyRepositoryAdapter.GetDriftIncident")
+	defer span.End()
+
+	var r contracts.DriftIncidentRecord
+	var driftClass, status string
+	err := a.db.QueryRowContext(ctx, queries.FlowSelectDriftIncidentByID, id, tenantID).Scan(
+		&r.ID, &r.PublicID, &r.TenantID, &r.SourceService, &r.ExternalID, &r.CorrelationID,
+		&r.ViewName, &r.AggregateType, &r.AggregateID, &driftClass, &r.SourceVersion,
+		&r.ViewVersion, &r.DifferencePayload, &status, &r.HealAttempts,
+		&r.QuarantinedUntil, &r.DetectedAt, &r.ResolvedAt, &r.Version, &r.CreatedAt, &r.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ports.ErrIncidentNotFound
+		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return nil, database.MapDatabaseError(err)
+	}
+	r.DriftClass = contracts.DriftClass(driftClass)
+	r.Status = contracts.IncidentStatus(status)
+	return &r, nil
 }
 
 func (a *PostgresConsistencyRepositoryAdapter) RecordCheckRun(ctx context.Context, record contracts.CheckRunRecord) error {

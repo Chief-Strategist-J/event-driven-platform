@@ -94,3 +94,25 @@ We selected **Option 3: Hexagonal Event Envelope (`EventEnvelope[T any]`) with S
 ### Negative / Tradeoffs
 * Wire overhead of metadata attributes (~200-250 bytes per event).
 * Strict deserialization rejects events from non-compliant external producers (requires an anti-corruption layer).
+
+## Amendment 2026-11-07: Transaction-group persistence in envelope build
+
+### Problem observed
+`POST /api/v1/domain-events/envelope/build` with a `transaction_group_id` returned `200` but no row appeared in `transaction_group_ledger`.
+
+### Root cause
+`UpsertTransactionGroup` used parameter `$9` both as a bare value and inside `CASE WHEN ... THEN $9`, so Postgres failed with "inconsistent types deduced for parameter $9". `BuildCanonicalEnvelope` discarded that error (`_, _ =`, RC3), and also discarded the causal-chain write error, hence a 200 with nothing persisted. Unit tests on the in-memory adapter could not hit the SQL typing problem (RC5).
+
+### Decision / fix
+- Explicit `$9::timestamptz` casts in `UpsertTransactionGroup` (insert value, CASE branches, and the `ON CONFLICT` update), with `'1970-01-01 00:00:00+00'::timestamptz` as the placeholder.
+- `BuildCanonicalEnvelope` now returns `ErrPersistence` (wrapped, mapped to a generic 500) if either the causal-chain entry or the transaction-group upsert fails. We fail the request rather than return an envelope whose group bookkeeping was lost, because group completion tracking depends on those rows.
+- A group requires `group_size > 0` (stated in the verified fixes; the enforcement site was not re-read for this amendment).
+
+### API-visible behavior change
+Persistence failures now surface as `500` instead of a false `200`. Requests with a `transaction_group_id` now create/update the ledger row.
+
+### Verification
+Live: envelope build with a `transaction_group_id` created a `transaction_group_ledger` row. Unit tests updated in `src/features/domain-event-design/tests/domain_event_design_unit_test.go`.
+
+### Remaining gaps
+No Postgres-backed test in CI covers the upsert SQL; the cast fix is verified only by the live run.

@@ -22,6 +22,12 @@ var (
 	ErrInvalidKeyVersion    = errors.New("key_version must be positive")
 	ErrInvalidKeyExpiry     = errors.New("signing key expires_at must be in the future")
 	ErrInvalidViewName      = errors.New("view_name must not be empty or whitespace")
+	ErrInvalidConsistencyToken = errors.New("x-consistency-token is malformed, expired, or has an invalid signature")
+	// ErrNoActiveSigningKey is returned when a consistency token must be verified but the
+	// tenant has no active signing key registered. There is no system-wide fallback secret.
+	ErrNoActiveSigningKey = errors.New("no active signing key is registered for this tenant; register one via POST /api/v1/commands/keys before presenting a consistency token")
+	// ErrSigningKeyLookup wraps a storage failure while loading the tenant signing key.
+	ErrSigningKeyLookup = errors.New("failed to load tenant signing key")
 )
 
 func NormalizeDispatchCommandInput(in DispatchCommandInput) (DispatchCommandInput, error) {

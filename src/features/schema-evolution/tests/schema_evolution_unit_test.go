@@ -134,3 +134,42 @@ func TestNormalizeCheckConsumerReadinessInput_Validation(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, norm.TargetVersion)
 }
+
+func compatRec(v int, def string) contracts.SchemaVersionRecord {
+	return contracts.SchemaVersionRecord{SchemaVersion: v, SchemaDefinition: def}
+}
+
+func TestCheckSchemaCompatibility(t *testing.T) {
+	v1 := `{"type":"record","name":"E","fields":[{"name":"id","type":"string"},{"name":"amt","type":"int"}]}`
+	addRequired := `{"type":"record","name":"E","fields":[{"name":"id","type":"string"},{"name":"amt","type":"int"},{"name":"cur","type":"string"}]}`
+	addDefault := `{"type":"record","name":"E","fields":[{"name":"id","type":"string"},{"name":"amt","type":"int"},{"name":"cur","type":"string","default":"USD"}]}`
+	removeRequired := `{"type":"record","name":"E","fields":[{"name":"id","type":"string"}]}`
+	retype := `{"type":"record","name":"E","fields":[{"name":"id","type":"string"},{"name":"amt","type":"string"}]}`
+	lineage := []contracts.SchemaVersionRecord{compatRec(1, v1)}
+
+	assert.NotEmpty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityBackward, addRequired, lineage))
+	assert.Empty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityForward, addRequired, lineage))
+	assert.Empty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityFull, addDefault, lineage))
+	assert.Empty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityBackward, removeRequired, lineage))
+	assert.NotEmpty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityForward, removeRequired, lineage))
+	assert.NotEmpty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityFull, removeRequired, lineage))
+	assert.NotEmpty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityBackward, retype, lineage))
+	assert.Empty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityNone, addRequired, lineage))
+	assert.Empty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityFullTransitive, addRequired, nil))
+	assert.Empty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityFull, "syntax = \"proto3\";", lineage))
+
+	// Transitive checks every version; non-transitive only the latest.
+	chain := []contracts.SchemaVersionRecord{compatRec(1, v1), compatRec(2, addDefault)}
+	assert.Empty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityBackward, addDefault, chain))
+	chain = []contracts.SchemaVersionRecord{compatRec(1, v1), compatRec(2, removeRequired)}
+	assert.Empty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityBackward, removeRequired, chain))
+	assert.NotEmpty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityForwardTransitive, removeRequired, []contracts.SchemaVersionRecord{compatRec(1, v1), compatRec(2, removeRequired)}))
+	assert.Empty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityForward, removeRequired, []contracts.SchemaVersionRecord{compatRec(1, v1), compatRec(2, removeRequired)}))
+}
+
+func TestCheckSchemaCompatibility_JSONSchema(t *testing.T) {
+	old := `{"type":"object","properties":{"a":{"type":"string"}},"required":["a"]}`
+	added := `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a","b"]}`
+	lineage := []contracts.SchemaVersionRecord{compatRec(1, old)}
+	assert.NotEmpty(t, rules.CheckSchemaCompatibility(contracts.CompatibilityBackward, added, lineage))
+}

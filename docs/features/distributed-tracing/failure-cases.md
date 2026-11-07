@@ -73,3 +73,21 @@ This document details failure modes, impact ratings, automated mitigations, and 
   1. Invariant TR-07 mandates trace-id-aware routing. Host agents use the `loadbalancingexporter` configured with `routing_key: trace_id` to guarantee all spans of a trace land on the same gateway replica.
 * **Detection:** Monitor `otelcol_tail_sampling_early_drops` and orphan span metrics in Tempo.
 
+
+## 5. Amendment 2026-11-07: Failure Modes Added
+
+### FC-TR-A1: Malformed propagation coverage report
+* **Scenario:** A reporter sends blank identifiers, a `hop_type` outside `CONNECT_RPC|OUTBOX_RELAY|KAFKA_CONSUMER|ASYNC_REACTION`, negative span counts, or `propagated_spans > total_spans` (which would yield a ratio above 100%).
+* **Severity:** CORRUPT (false coverage metrics)
+* **Handling:** `validateCoverageCommand` rejects with `400` (`ErrInvalidCoverageReport`); nothing is persisted.
+* **Operator action:** Fix the reporting agent; do not trust coverage dashboards fed by agents that receive 400s.
+
+### FC-TR-A2: Coverage upsert failure hidden
+* **Scenario:** Database error while upserting coverage.
+* **Handling:** Error is returned to the caller (previously discarded, HTTP 200 with nothing stored).
+* **Detection:** non-2xx on the coverage endpoint.
+
+### FC-TR-A3: Span-audit write failure
+* **Scenario:** `RecordSpanAudit` fails during `InjectTraceContext`.
+* **Handling:** Injection still succeeds (best effort) and the error is logged as `failed to record span audit for trace <id>`.
+* **Operator action:** Search logs for that message; missing audit rows mean the audit trail has gaps for those traces.

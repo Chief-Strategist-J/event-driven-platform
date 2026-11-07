@@ -98,3 +98,25 @@ We selected **Option 3: Unified OpenTelemetry Architecture (OTel Collector + Tem
 
 ### Negative / Trade-offs
 * **Workstation Memory Overhead**: The full suite consumes ~1.2 GB additional memory. Developers needing minimal footprints can set `COMPOSE_PROFILES="" ./scripts/run/run.sh`.
+
+## Amendment 2026-11-07: Coverage report validation and no silent error drops
+
+### Problem observed
+`POST /api/v1/tracing/coverage/report` accepted any payload (blank fields, unknown `hop_type`, negative counts, `propagated_spans` greater than `total_spans`) and returned success even when the upsert failed.
+
+### Root cause
+RC3: `ReportCoverage` did `_ = s.repo.UpsertPropagationCoverage(...)`, and had no input validation (RC2). `InjectTraceContext` likewise discarded the `RecordSpanAudit` error.
+
+### Decision / fix
+- `validateCoverageCommand` (service layer) trims and requires `tenant_id`, `source_service`, `external_id`, `hop_source`, `hop_target`; `hop_type` must be one of `CONNECT_RPC`, `OUTBOX_RELAY`, `KAFKA_CONSUMER`, `ASYNC_REACTION`; counts must be >= 0; `propagated_spans` <= `total_spans`. Violations return `ErrInvalidCoverageReport` (400).
+- The upsert error is now returned. The span-audit write in `InjectTraceContext` is intentionally best-effort (the carrier injection already succeeded) but the failure is now logged with the trace id rather than dropped.
+- Validation lives in the service (not only the handler) so every caller gets it, and we avoid relying on DB constraints for client mistakes.
+
+### API-visible behavior change
+Invalid coverage reports: `200` -> `400`. Upsert failures: `200` -> server error.
+
+### Verification
+Live: an invalid report returned 400. Unit tests added/updated in `src/features/distributed-tracing/tests/distributed_tracing_unit_test.go`.
+
+### Remaining gaps
+Span-audit failure is only logged (no metric/alert). No HTTP-level test for the handler mapping.

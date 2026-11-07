@@ -10,6 +10,7 @@ import (
 	"event-driven-platform/src/features/transactional-outbox/contracts"
 	"event-driven-platform/src/features/transactional-outbox/infrastructure/ports"
 	"event-driven-platform/src/shared/constants"
+	appErrors "event-driven-platform/src/shared/errors"
 )
 
 var ErrRecordNotFound = errors.New("outbox record not found")
@@ -43,6 +44,11 @@ func (m *MemoryOutboxRepositoryAdapter) ClaimIdempotency(_ context.Context, tena
 func (m *MemoryOutboxRepositoryAdapter) Save(_ context.Context, record contracts.OutboxRecord) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	for _, existing := range m.records {
+		if existing.TenantID == record.TenantID && existing.SourceService == record.SourceService && existing.ExternalID == record.ExternalID {
+			return appErrors.NewConflictError("an outbox event with the same externalId already exists for this tenant and source service")
+		}
+	}
 	key := record.TenantID + ":" + record.ID
 	m.records[key] = record
 	return nil

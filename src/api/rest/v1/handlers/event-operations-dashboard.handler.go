@@ -41,7 +41,8 @@ func (h *EventOperationsDashboardHandler) HandleReportHopTelemetry(w http.Respon
 
 	record, err := h.svc.ReportHopTelemetry(ctx, &input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusBadRequest, constants.ErrCodeValidationFailed)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -67,7 +68,8 @@ func (h *EventOperationsDashboardHandler) HandleTriageFlow(w http.ResponseWriter
 
 	out, err := h.svc.TriageFlow(ctx, &input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		st, cd, msg := classifyServiceError(err, http.StatusBadRequest, constants.ErrCodeValidationFailed)
+		h.writeError(w, st, cd, msg, start, reqID, corrID, causationID)
 		return
 	}
 

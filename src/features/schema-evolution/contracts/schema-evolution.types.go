@@ -12,6 +12,10 @@ const (
 	CompatibilityFullTransitive     CompatibilityMode = "FULL_TRANSITIVE"
 	CompatibilityBackwardTransitive CompatibilityMode = "BACKWARD_TRANSITIVE"
 	CompatibilityForwardTransitive  CompatibilityMode = "FORWARD_TRANSITIVE"
+	CompatibilityFull               CompatibilityMode = "FULL"
+	CompatibilityBackward           CompatibilityMode = "BACKWARD"
+	CompatibilityForward            CompatibilityMode = "FORWARD"
+	CompatibilityNone               CompatibilityMode = "NONE"
 )
 
 type EvolutionStatus string

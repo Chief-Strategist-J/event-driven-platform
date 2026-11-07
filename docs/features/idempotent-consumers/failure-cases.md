@@ -34,3 +34,13 @@ As mandated by Category 1.4 and 1.6:
 - The business state change, inbox ledger insertion, and projection version update must execute in **the exact same database transaction**.
 - Never perform non-transactional network I/O inside the database transaction boundary.
 
+
+---
+
+## 2. Matrix of Failure Cases (Amendment 2026-11-07: API validation)
+
+| Case ID | Failure Scenario | Trigger Condition | Consequence if Unhandled | Defensive Mechanism & Invariant |
+|---------|------------------|-------------------|--------------------------|----------------------------------|
+| **FC-IC-07** | Non-UUID `eventId` on inbox ingest | Client sends free-text event id. | Postgres UUID cast failure surfaced as HTTP 500; operator cannot distinguish from outage. | `ValidateInboundConsumerEvent` returns 400 `event_id must be a valid UUID`. Operator: fix producer id generation. |
+| **FC-IC-08** | Unknown `semanticClass` | Caller sends a value other than `STATE`/`DELTA`. | Silently processed as `DELTA`; wrong version rule applied (gap hold vs last-write-wins). | 400 `semantic_class must be STATE or DELTA`. Empty value still defaults to `DELTA`. Operator: set the class explicitly. |
+| **FC-IC-09** | Wrapped application error from service | Service wraps `ApplicationError` with `%w`. | Bare type assertion missed it and returned wrong status. | Handler uses `errors.As`, keeping the intended status. |

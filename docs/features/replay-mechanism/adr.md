@@ -184,3 +184,51 @@ Automated test suite located at `src/features/replay-mechanism/tests/`:
 * `TestServiceCreateReplayRun`: Verifies run record initialization and audit trail creation.
 * `TestServiceEvaluateEffect_SuppressExternalInRebuild`: Verifies end-to-end effect gateway ledger logging.
 
+
+## Amendment 2026-11-07: Advance state gate, run-id validation, effect-log persistence
+
+### Problem observed
+1. `POST /replay/runs/advance` was accepted for a run still in `INITIALIZING`.
+2. A non-UUID `runId` (for example the public id `rpl_...`) reached Postgres and returned raw `pq:` text.
+3. `POST /replay/effects/evaluate` returned `200 SUPPRESSED` but nothing appeared in `replay_effect_log`.
+
+### Root cause
+1. `AdvanceReplay` validated only offset monotonicity/bounds, not the run state.
+2. No run-id validation before the UUID-typed query (RC2).
+3. `EvaluateEffect` discarded the `RecordEffectLog` error (`_ =`, RC3). The insert always failed because `source_service`, `external_id` and `correlation_id` are required by DB CHECKs and a minimal request left them empty.
+
+### Decision / fix
+- `rules.CanAdvanceOffset(state)` gates `AdvanceReplay`; violations return `ErrReplayNotAdvanceable` (409). Advance state table:
+
+| Run state | Advance offset allowed |
+|---|---|
+| INITIALIZING | No (409) |
+| STREAMING | Yes |
+| FOLLOWING | Yes |
+| CAUGHT_UP | Yes |
+| PROMOTED | No (409) |
+| COMPLETED | No (409) |
+| ABORTED | No (409) |
+
+  Offset rules still apply when allowed: not below the current offset, and not above `end_offset` when `end_offset > 0` (`ValidateOffsetAdvance`, 400).
+- `contracts.ValidateRunID` (required, must parse as UUID) runs in `StartStreaming`, `AbortReplay`, `GetReplayRun`, and the advance path: `ErrMissingRunID` / `ErrInvalidRunID` ("runId must be a valid UUID") -> 400. Use the `id` field, not the `rpl_*` public id.
+- Handler mapping (`ReplayHandler.writeServiceError`): `ErrReplayRunNotFound` 404; `ErrInvalidReplayTransition`, `ErrReplayNotAdvanceable`, `ErrReplayConflict` 409; `ErrReplayStorageFailure` generic 500 ("internal server error", detail not leaked); everything else 400.
+- `EvaluateEffect` defaults `source_service` to `replay-effects-api`, `external_id` to `eff_<uuidv7>`, `correlation_id` to a generated UUIDv7, validates a supplied `correlation_id` as UUID, and returns the `RecordEffectLog` error instead of ignoring it. Defaulting was chosen so a minimal call is recorded and auditable, while the error return guarantees no "suppressed but unlogged" state.
+
+### API-visible behavior change
+- Advance in non-advanceable state: `200` -> `409` (**breaking**).
+- Non-UUID runId: raw pq `400/500` -> clean `400`; unknown run `404`.
+- Effects evaluate: now persists a row; storage failure -> 500 instead of false 200.
+
+### Verification
+Live: advance in INITIALIZING -> 409, non-UUID -> 400, unknown -> 404, effects/evaluate wrote a `replay_effect_log` row. Unit tests in `src/features/replay-mechanism/tests/replay_test.go`.
+
+### Remaining gaps
+Create-run still accepts a non-UUID `correlation_id` (not fixed). The Postgres replay adapter paths are not covered by CI integration tests.
+
+
+## Amendment 2026-11-07 (second pass): correlationId validation
+
+`POST /replay/runs` rejects a non-UUID `correlationId` (and a non-UUID `X-Correlation-ID` fallback) with 400 `ErrInvalidCorrelationID`; `replay_run.correlation_id` is a UUID column.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

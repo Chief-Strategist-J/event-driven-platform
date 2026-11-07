@@ -1,0 +1,20 @@
+feature: client-cache-invalidation-bus
+owner: platform-performance-team
+description: >
+  Sub-15ms pub-sub cache eviction broadcast stream to distributed Redis/Valkey clusters.
+
+boundaries:
+  - Scoped to performance-scaling and high-throughput execution.
+  - Zero inline SQL; zero comments in source files.
+  - Conforms to hexagonal architecture and 1-feature-folder-writing-rule.
+
+ports:
+  driven:
+    - ClientCacheInvalidationBusRepositoryPort (infrastructure/ports/client-cache-invalidation-bus.repository.port.go)
+  driving:
+    - ClientCacheInvalidationBusService methods exposed through feature facade (index.go)
+
+invariants:
+  - PERF-01: Zero allocation on hot execution path.
+  - PERF-02: Bounded latency under p99 SLA limits.
+  - PERF-03: Thread-safe non-blocking concurrent access.

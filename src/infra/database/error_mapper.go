@@ -136,7 +136,7 @@ func MapDatabaseError(err error) error {
 
 		switch pqErr.Code.Class() {
 		case "23":
-			return appErrors.NewConflictError("database integrity constraint violation: " + pqErr.Constraint)
+			return appErrors.NewConflictError("request conflicts with existing data or violates a data integrity rule")
 		case "08", "53":
 			return appErrors.NewTimeoutError("database connection unavailable")
 		case "40":

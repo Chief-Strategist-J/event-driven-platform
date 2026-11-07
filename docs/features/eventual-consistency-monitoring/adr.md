@@ -240,3 +240,37 @@ Before deployment, the implementation must pass 100% of the following verificati
 7. **Repeat Healing Prevention**: Injected persistent failure aborts after 2 heal attempts and opens P1 incident.
 8. **Negative Latency Invariance**: Host clock backwards skew produces `UNKNOWN` freshness status rather than negative lag.
 
+
+## Amendment 2026-11-07: Heal on unknown incident returns 404; canary probe no longer fakes MATCH
+
+### Problem observed
+1. `POST .../incidents/{id}/heal` for a nonexistent incident returned `200` with `healed:true`.
+2. `POST .../probes/canary` always returned outcome `MATCH` and wrote nothing.
+
+### Root cause
+1. `ConsistencyService.AttemptHealing` called `EvaluateRepeatHeal(0, maxAttempts)` with a hard-coded 0, never loaded the incident, discarded the status-update error (`_ =`, RC3), and the Postgres `UpdateDriftIncidentStatus` ignored zero affected rows. Because the attempt count was always 0 and written back as the constant 1, the max-attempts / `MANUAL_INTERVENTION` branch (invariant on repeat-heal loop prevention, F21.1) was unreachable.
+2. `DispatchCanaryProbe` was a stub (RC4): it measured a zero duration and returned `OutcomeMatch` with no evidence.
+
+### Decision / fix
+- New repository method `GetDriftIncident` (query `FlowSelectDriftIncidentByID`, scoped by tenant) returns `ports.ErrIncidentNotFound` when absent. `AttemptHealing` loads the incident, evaluates the policy with the persisted `heal_attempts`, writes `heal_attempts + 1` (or moves to `MANUAL_INTERVENTION` keeping the current count when the limit is reached), and returns update errors. `UpdateDriftIncidentStatus` now returns `ErrIncidentNotFound` on 0 rows affected, which also closes the race where the incident disappears between read and write.
+- `DispatchCanaryProbe` now records a `CANARY_PROBE` row in `consistency_check_run_history` (`status` COMPLETED, 1 evaluated key, 1 unknown, coverage computed with 0 matched) and returns outcome `UNKNOWN`. Rationale (three-valued logic, section 5.1): without delivery evidence the honest answer is UNKNOWN, never MATCH. `cdc_canary_reconciliation_log` is deliberately not used because it has an FK to `cdc_connector_inventory.connector_name`, which a generic probe cannot satisfy.
+
+### API-visible behavior change
+- Heal unknown incident: `200 healed:true` -> `404`.
+- Heal now actually advances `heal_attempts`; once the limit is hit the response is not-healed and the incident becomes `MANUAL_INTERVENTION`.
+- Canary probe outcome: `MATCH` -> `UNKNOWN` (**breaking** for clients that gated on MATCH). A history row is written.
+
+### Verification
+- Live: heal on a random incident id returned 404; canary returned `UNKNOWN` and the history row was created.
+- Unit tests in `src/features/eventual-consistency-monitoring/tests/eventual_consistency_monitoring_service_test.go`: `TestAttemptHealing_NotFound`, `TestAttemptHealing_UsesPersistedAttempts`, `TestDispatchCanaryProbe_RecordedAndNotClaimedMatch`.
+
+### Remaining gaps
+- The canary does not publish an event or observe it downstream; no reconciliation step turns UNKNOWN into MATCH/MISMATCH yet. The service comment says a later step must confirm arrival.
+- Watermark/incidents/sweeps GET routes still return `200 data:null` without a tenant parameter (out of scope, not fixed).
+
+
+## Amendment 2026-11-07 (second pass): tenant scope required on reads
+
+`GET /consistency/views/{view}/watermark|incidents|sweeps` require `tenant_id` (400 otherwise); the silent `default` tenant fallback was removed. Open: `POST /consistency/incidents/{id}/heal` still defaults `tenant_id` to `default`.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

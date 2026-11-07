@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -183,3 +184,26 @@ func TestTracingServiceLifecycle(t *testing.T) {
 	}
 }
 
+func TestReportCoverageValidation(t *testing.T) {
+	svc := service.NewDistributedTracingService(newMemoryTracingRepo())
+	valid := contracts.ReportCoverageCommand{
+		TenantID: "t1", SourceService: "svc", ExternalID: "e1", HopSource: "a", HopTarget: "b",
+		HopType: contracts.HopTypeKafkaConsumer, TotalSpans: 10, PropagatedSpans: 5,
+	}
+	bad := map[string]func(c *contracts.ReportCoverageCommand){
+		"empty body":       func(c *contracts.ReportCoverageCommand) { *c = contracts.ReportCoverageCommand{} },
+		"bad hop type":     func(c *contracts.ReportCoverageCommand) { c.HopType = "NOPE" },
+		"propagated>total": func(c *contracts.ReportCoverageCommand) { c.PropagatedSpans = 11 },
+		"negative":         func(c *contracts.ReportCoverageCommand) { c.TotalSpans = -1; c.PropagatedSpans = -1 },
+	}
+	for name, mutate := range bad {
+		c := valid
+		mutate(&c)
+		if _, err := svc.ReportCoverage(context.Background(), c); !errors.Is(err, service.ErrInvalidCoverageReport) {
+			t.Errorf("%s: expected ErrInvalidCoverageReport, got %v", name, err)
+		}
+	}
+	if _, err := svc.ReportCoverage(context.Background(), valid); err != nil {
+		t.Fatalf("valid report failed: %v", err)
+	}
+}

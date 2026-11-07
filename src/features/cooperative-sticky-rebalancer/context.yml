@@ -1,0 +1,20 @@
+feature: cooperative-sticky-rebalancer
+owner: platform-performance-team
+description: >
+  Incremental cooperative sticky rebalance assignor eliminating stop-the-world pauses.
+
+boundaries:
+  - Scoped to performance-scaling and high-throughput execution.
+  - Zero inline SQL; zero comments in source files.
+  - Conforms to hexagonal architecture and 1-feature-folder-writing-rule.
+
+ports:
+  driven:
+    - CooperativeStickyRebalancerRepositoryPort (infrastructure/ports/cooperative-sticky-rebalancer.repository.port.go)
+  driving:
+    - CooperativeStickyRebalancerService methods exposed through feature facade (index.go)
+
+invariants:
+  - PERF-01: Zero allocation on hot execution path.
+  - PERF-02: Bounded latency under p99 SLA limits.
+  - PERF-03: Thread-safe non-blocking concurrent access.

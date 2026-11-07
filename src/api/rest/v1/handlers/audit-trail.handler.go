@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"errors"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"strconv"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"event-driven-platform/src/features/audit-trail/contracts"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
+	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
 )
@@ -61,7 +64,7 @@ func (h *AuditTrailHandler) HandleIngestAuditRecord(w http.ResponseWriter, r *ht
 
 	record, err := h.svc.IngestAuditRecord(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -93,7 +96,7 @@ func (h *AuditTrailHandler) HandleCreateCheckpoint(w http.ResponseWriter, r *htt
 
 	cp, err := h.svc.CreateCheckpoint(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -118,7 +121,7 @@ func (h *AuditTrailHandler) HandleVerifyShardIntegrity(w http.ResponseWriter, r 
 
 	report, err := h.svc.VerifyShardIntegrity(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -135,9 +138,10 @@ func (h *AuditTrailHandler) HandleQueryAudits(w http.ResponseWriter, r *http.Req
 	corrID := r.Header.Get(constants.HeaderXCorrelationID)
 	causationID := r.Header.Get(constants.HeaderXCausationID)
 
-	tenantID := r.URL.Query().Get("tenant_id")
+	tenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
 	if tenantID == "" {
-		tenantID = "default"
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "tenant_id query parameter is required", start, reqID, corrID, causationID)
+		return
 	}
 	shardID := r.URL.Query().Get("shard_id")
 	if shardID == "" {
@@ -172,7 +176,7 @@ func (h *AuditTrailHandler) HandleQueryAudits(w http.ResponseWriter, r *http.Req
 
 	records, err := h.svc.QueryAudits(ctx, input)
 	if err != nil {
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -195,6 +199,15 @@ func (h *AuditTrailHandler) writeResponse(w http.ResponseWriter, status int, dat
 		},
 	}
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+func (h *AuditTrailHandler) writeServiceError(w http.ResponseWriter, err error, start time.Time, reqID, corrID, causationID string) {
+	var appErr *appErrors.ApplicationError
+	if errors.As(err, &appErr) {
+		h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
+		return
+	}
+	h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
 }
 
 func (h *AuditTrailHandler) writeError(w http.ResponseWriter, code int, canonical, msg string, start time.Time, reqID, corrID, causationID string) {

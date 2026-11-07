@@ -113,6 +113,11 @@ func (s *ReplayService) StartStreaming(ctx context.Context, tenantID, runID stri
 		attribute.String("run_id", runID),
 	)
 
+	if err := contracts.ValidateRunID(runID); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		return nil, err
+	}
+
 	existing, err := s.repo.GetReplayRun(ctx, tenantID, runID)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "NOT_FOUND"))
@@ -173,6 +178,12 @@ func (s *ReplayService) AdvanceReplay(ctx context.Context, input contracts.Advan
 	existing, err := s.repo.GetReplayRun(ctx, input.TenantID, input.RunID)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "NOT_FOUND"))
+		return nil, err
+	}
+
+	if !rules.CanAdvanceOffset(existing.State) {
+		err := fmt.Errorf("%w: run is %s", rules.ErrReplayNotAdvanceable, existing.State)
+		observability.RecordError(span, err, attribute.String("error.type", "INVALID_STATE"))
 		return nil, err
 	}
 
@@ -330,6 +341,11 @@ func (s *ReplayService) AbortReplay(ctx context.Context, input contracts.AbortRe
 		attribute.String("run_id", input.RunID),
 	)
 
+	if err := contracts.ValidateRunID(input.RunID); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		return nil, err
+	}
+
 	existing, err := s.repo.GetReplayRun(ctx, input.TenantID, input.RunID)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "NOT_FOUND"))
@@ -391,6 +407,29 @@ func (s *ReplayService) EvaluateEffect(ctx context.Context, input contracts.Eval
 	}
 	input = validInput
 
+	// replay_effect_log requires non-empty source_service/external_id and a UUID
+	// correlation_id; default them so a minimal request is persisted rather than
+	// rejected by the database constraints.
+	if input.SourceService == "" {
+		input.SourceService = "replay-effects-api"
+	}
+	if input.ExternalID == "" {
+		generated, genErr := utils.GenerateUUIDv7()
+		if genErr != nil {
+			observability.RecordError(span, genErr)
+			return nil, genErr
+		}
+		input.ExternalID = "eff_" + generated
+	}
+	if input.CorrelationID == "" {
+		generated, genErr := utils.GenerateUUIDv7()
+		if genErr != nil {
+			observability.RecordError(span, genErr)
+			return nil, genErr
+		}
+		input.CorrelationID = generated
+	}
+
 	run, err := s.repo.GetReplayRun(ctx, input.TenantID, input.RunID)
 	if err != nil {
 		observability.RecordError(span, err, attribute.String("error.type", "NOT_FOUND"))
@@ -420,7 +459,10 @@ func (s *ReplayService) EvaluateEffect(ctx context.Context, input contracts.Eval
 		IdempotencyKey: input.IdempotencyKey,
 		PayloadDigest:  input.PayloadDigest,
 	}
-	_ = s.repo.RecordEffectLog(ctx, effRecord)
+	if err := s.repo.RecordEffectLog(ctx, effRecord); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "STORAGE_ERROR"))
+		return nil, err
+	}
 
 	reason := fmt.Sprintf("effect %s resolved for run mode %s", decision, run.Mode)
 	return &contracts.EffectEvaluationResult{
@@ -439,6 +481,9 @@ func (s *ReplayService) GetReplayRun(ctx context.Context, input contracts.GetRep
 		attribute.String("run_id", input.RunID),
 	)
 
+	if err := contracts.ValidateRunID(input.RunID); err != nil {
+		return nil, err
+	}
 	return s.repo.GetReplayRun(ctx, input.TenantID, input.RunID)
 }
 

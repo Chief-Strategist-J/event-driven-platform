@@ -3,14 +3,18 @@ package service
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 
 	"event-driven-platform/src/features/offset-management/contracts"
 	"event-driven-platform/src/features/offset-management/domain/rules"
 	"event-driven-platform/src/features/offset-management/infrastructure/ports"
 	"event-driven-platform/src/infra/observability"
+	appErrors "event-driven-platform/src/shared/errors"
+	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
 )
 
@@ -20,6 +24,35 @@ type OffsetManagementService struct {
 
 func NewOffsetManagementService(repo ports.OffsetManagementRepositoryPort) *OffsetManagementService {
 	return &OffsetManagementService{repo: repo}
+}
+
+func offsetValidationError(field, issue string) error {
+	return appErrors.NewValidationError(field+" "+issue, types.ResponseErrorDetail{Field: field, Issue: issue, Rule: "invalid"})
+}
+
+func validatePartitionKey(tenantID, groupID, topic string, partition int32) error {
+	for _, f := range []struct{ name, val string }{{"tenantId", tenantID}, {"groupId", groupID}, {"topic", topic}} {
+		if strings.TrimSpace(f.val) == "" || f.val != strings.TrimSpace(f.val) {
+			return offsetValidationError(f.name, "must be non-empty and must not have leading or trailing whitespace")
+		}
+	}
+	if partition < 0 {
+		return offsetValidationError("partition", "must be >= 0")
+	}
+	return nil
+}
+
+func validateOffsetEnvelope(sourceService, externalID, correlationID string) error {
+	if strings.TrimSpace(sourceService) == "" || sourceService != strings.TrimSpace(sourceService) {
+		return offsetValidationError("sourceService", "must be non-empty and must not have leading or trailing whitespace")
+	}
+	if strings.TrimSpace(externalID) == "" || externalID != strings.TrimSpace(externalID) {
+		return offsetValidationError("externalId", "must be non-empty and must not have leading or trailing whitespace")
+	}
+	if _, err := uuid.Parse(correlationID); err != nil {
+		return offsetValidationError("correlationId", "must be a valid UUID")
+	}
+	return nil
 }
 
 func (s *OffsetManagementService) CommitOffset(ctx context.Context, input contracts.CommitOffsetInput) (*contracts.ConsumerStoredOffsetRecord, error) {
@@ -34,6 +67,24 @@ func (s *OffsetManagementService) CommitOffset(ctx context.Context, input contra
 		attribute.Int64("offset", input.Offset),
 		attribute.Int64("log_end_offset", input.LogEndOffset),
 	)
+
+	if err := validatePartitionKey(input.TenantID, input.GroupID, input.Topic, input.Partition); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		return nil, err
+	}
+	if err := validateOffsetEnvelope(input.SourceService, input.ExternalID, input.CorrelationID); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		return nil, err
+	}
+	if input.Offset < 0 {
+		return nil, offsetValidationError("offset", "must be >= 0")
+	}
+	if input.LogEndOffset < 0 {
+		return nil, offsetValidationError("logEndOffset", "must be >= 0")
+	}
+	if input.Offset > input.LogEndOffset {
+		return nil, offsetValidationError("offset", fmt.Sprintf("must not exceed logEndOffset (%d)", input.LogEndOffset))
+	}
 
 	existing, err := s.repo.GetStoredOffset(ctx, input.TenantID, input.GroupID, input.Topic, input.Partition)
 	var currentOffset int64 = 0
@@ -134,12 +185,31 @@ func (s *OffsetManagementService) RewindOffset(ctx context.Context, input contra
 		return nil, err
 	}
 
+	if err := validatePartitionKey(input.TenantID, input.GroupID, input.Topic, input.Partition); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		return nil, err
+	}
+	if err := validateOffsetEnvelope(input.SourceService, input.ExternalID, input.CorrelationID); err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		return nil, err
+	}
+
 	existing, err := s.repo.GetStoredOffset(ctx, input.TenantID, input.GroupID, input.Topic, input.Partition)
-	var prevOffset int64 = 0
-	var logEndOffset int64 = 0
-	if err == nil && existing != nil {
-		prevOffset = existing.StoredOffset
-		logEndOffset = existing.LogEndOffset
+	if err != nil {
+		observability.RecordError(span, err, attribute.String("error.type", "NOT_FOUND"))
+		return nil, err
+	}
+	prevOffset := existing.StoredOffset
+	logEndOffset := existing.LogEndOffset
+
+	if input.TargetOffset > prevOffset {
+		err := rules.ErrRewindForwardJump
+		observability.RecordError(span, err, attribute.String("error.type", "VALIDATION_FAILED"))
+		return nil, offsetValidationError("targetOffset", fmt.Sprintf("must not exceed current stored offset (%d); use fast-forward to move forward", prevOffset))
+	}
+	if input.TargetOffset > logEndOffset {
+		observability.RecordError(span, rules.ErrRewindBeyondLogEnd, attribute.String("error.type", "VALIDATION_FAILED"))
+		return nil, offsetValidationError("targetOffset", fmt.Sprintf("must not exceed log end offset (%d)", logEndOffset))
 	}
 
 	lag := logEndOffset - input.TargetOffset

@@ -15,5 +15,6 @@ func RegisterOffsetManagementRoutes(mux *http.ServeMux, repo ports.OffsetManagem
 	mux.HandleFunc("POST /api/v1/offsets/commit", h.HandleCommitOffset)
 	mux.HandleFunc("POST /api/v1/offsets/rewind", h.HandleRewindOffset)
 	mux.HandleFunc("POST /api/v1/offsets/fast-forward", h.HandleFastForwardOffset)
+	mux.HandleFunc("GET /api/v1/offsets/lag", h.HandleEvaluateLag)
 }
 

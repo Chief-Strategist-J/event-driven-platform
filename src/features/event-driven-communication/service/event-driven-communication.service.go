@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -12,9 +14,12 @@ import (
 	"event-driven-platform/src/features/event-driven-communication/domain/machines"
 	"event-driven-platform/src/features/event-driven-communication/domain/rules"
 	"event-driven-platform/src/features/event-driven-communication/infrastructure/ports"
+	"event-driven-platform/src/shared/constants"
+	"event-driven-platform/src/shared/utils"
 )
 
 var (
+	ErrInvalidCommand     = errors.New("invalid command")
 	ErrSagaInstanceClosed = errors.New("saga instance is closed or already compensated")
 )
 
@@ -269,22 +274,86 @@ func (s *EventCommunicationService) TriggerCompensation(
 	}, nil
 }
 
+// DispatchAsyncCommand persists the command to the transactional outbox
+// (aggregate_type = target topic, which the relay uses as the Kafka topic).
+// The command is only QUEUED_IN_OUTBOX: delivery happens asynchronously.
 func (s *EventCommunicationService) DispatchAsyncCommand(
 	ctx context.Context,
 	req contracts.DispatchAsyncCommandRequest,
 ) (contracts.DispatchAsyncCommandResult, error) {
-	if strings.TrimSpace(req.TargetTopic) == "" {
-		return contracts.DispatchAsyncCommandResult{}, errors.New("target_topic cannot be empty")
+	req.TargetTopic = strings.TrimSpace(req.TargetTopic)
+	req.ReplyToTopic = strings.TrimSpace(req.ReplyToTopic)
+	req.CommandName = strings.TrimSpace(req.CommandName)
+	req.TenantID = strings.TrimSpace(req.TenantID)
+	req.SourceService = strings.TrimSpace(req.SourceService)
+	req.ExternalID = strings.TrimSpace(req.ExternalID)
+
+	switch {
+	case req.TargetTopic == "":
+		return contracts.DispatchAsyncCommandResult{}, fmt.Errorf("%w: target_topic cannot be empty", ErrInvalidCommand)
+	case req.ReplyToTopic == "":
+		return contracts.DispatchAsyncCommandResult{}, fmt.Errorf("%w: reply_to_topic cannot be empty", ErrInvalidCommand)
+	case req.TenantID == "":
+		return contracts.DispatchAsyncCommandResult{}, fmt.Errorf("%w: tenant_id cannot be empty", ErrInvalidCommand)
+	case req.SourceService == "":
+		return contracts.DispatchAsyncCommandResult{}, fmt.Errorf("%w: source_service cannot be empty", ErrInvalidCommand)
+	case req.CommandName == "":
+		return contracts.DispatchAsyncCommandResult{}, fmt.Errorf("%w: command_name cannot be empty", ErrInvalidCommand)
 	}
-	if strings.TrimSpace(req.ReplyToTopic) == "" {
-		return contracts.DispatchAsyncCommandResult{}, errors.New("reply_to_topic cannot be empty")
+
+	var cmdPayload json.RawMessage = json.RawMessage("{}")
+	if strings.TrimSpace(req.CommandPayload) != "" {
+		if !json.Valid([]byte(req.CommandPayload)) {
+			return contracts.DispatchAsyncCommandResult{}, fmt.Errorf("%w: command_payload must be valid JSON", ErrInvalidCommand)
+		}
+		cmdPayload = json.RawMessage(req.CommandPayload)
 	}
 
 	cmdID := "cmd_" + uuid.New().String()[:18]
+	externalID := req.ExternalID
+	if externalID == "" {
+		externalID = cmdID
+	}
+	corrUUID, err := uuid.Parse(req.CorrelationID)
+	if err != nil {
+		corrUUID = uuid.New()
+	}
+	publicID, err := utils.GeneratePublicID(constants.PrefixOutbox)
+	if err != nil {
+		return contracts.DispatchAsyncCommandResult{}, err
+	}
+	envelope, err := json.Marshal(map[string]any{
+		"command_id":      cmdID,
+		"command_name":    req.CommandName,
+		"reply_to_topic":  req.ReplyToTopic,
+		"timeout_seconds": req.TimeoutSeconds,
+		"payload":         cmdPayload,
+	})
+	if err != nil {
+		return contracts.DispatchAsyncCommandResult{}, err
+	}
+
+	if err := s.repo.SaveOutboundCommand(ctx, ports.OutboundCommand{
+		ID:            uuid.New(),
+		PublicID:      publicID,
+		TenantID:      req.TenantID,
+		SourceService: req.SourceService,
+		ExternalID:    externalID,
+		CorrelationID: corrUUID,
+		CausationID:   cmdID,
+		AggregateType: req.TargetTopic,
+		AggregateID:   cmdID,
+		EventType:     req.CommandName,
+		SchemaVersion: constants.APIVersionV1,
+		Payload:       string(envelope),
+		Headers:       map[string]string{"reply_to_topic": req.ReplyToTopic},
+	}); err != nil {
+		return contracts.DispatchAsyncCommandResult{}, err
+	}
+
 	return contracts.DispatchAsyncCommandResult{
 		CommandID:    cmdID,
-		Status:       "DISPATCHED_TO_OUTBOX",
+		Status:       "QUEUED_IN_OUTBOX",
 		ReplyToTopic: req.ReplyToTopic,
 	}, nil
 }
-

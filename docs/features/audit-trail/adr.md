@@ -38,3 +38,34 @@ Enterprise distributed systems require immutable, non-repudiable audit logging a
 - **Positive**: Cryptographic non-repudiation, tamper detection, compliance with SOC2/PCI-DSS/GDPR, independent sharded throughput, zero JSON re-serialization verification bugs.
 - **Negative**: Increased storage requirements for verbatim raw bytes, strict ingest-time secret linting, operational overhead of periodic checkpoint signing.
 
+
+## Amendment 2026-11-07: Database error mapping and typed handler errors
+
+### Problem observed
+Audit ingest, checkpoint, integrity-verification and query failures returned 400 with the raw error text, which for Postgres failures included `pq:` driver messages and constraint names.
+
+### Root cause
+- RC2: `audit-trail.postgres.repository.adapter.go` returned raw driver errors at nine call sites.
+- RC1: every handler error was reported as 400 `VALIDATION_FAILED` with `err.Error()`, whatever the cause.
+
+### Decision / fix
+- All nine adapter error returns now go through `database.MapDatabaseError`, which yields typed `ApplicationError`s (class 23 becomes 409 with the generic message "request conflicts with existing data or violates a data integrity rule", without the constraint name).
+- New `AuditTrailHandler.writeServiceError` uses `errors.As` so those typed statuses reach the client; untyped errors remain 400 with the error text.
+- The shared mapper fallback in `src/infra/database/error_mapper.go` no longer includes the constraint name.
+
+### API-visible behavior change
+Integrity violations on audit routes change from 400 (raw text) to 409 (generic message). Other typed database errors surface with their mapped status. Not breaking for valid requests.
+
+### Verification
+Mapping sites verified by code inspection and the shared mapper change re-tested live (generic class-23 message). No audit-trail-specific unit or HTTP test was added.
+
+### Remaining gaps
+- Unverified: a previously claimed "list without tenant_id returns 400" does not hold for `GET /api/v1/audits/query` in the current code; the handler defaults a missing `tenant_id` to `default` and requires `shard_id` instead.
+- Untyped (non-database) errors on audit routes still map to 400 with raw text.
+
+
+## Amendment 2026-11-07 (second pass): tenant scope required on query
+
+`GET /audits/query` requires `tenant_id` (400) in addition to `shard_id`; the silent `default` tenant fallback was removed. This closes the gap recorded in the first amendment.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

@@ -197,88 +197,70 @@ design_principles:
 
 function_structure: |
   Legend
-    name(inputs) → output
+    action(inputs) → output
     ⚠  can fail      ↺  registers cleanup      ▶  service-owned code
     ✚  required at 100+ services, missing from the single-service tree
 
   Tree 1: main wiring (chassis serviceSpec)
 
-  main(args, env)
-  └── exit( chassis.Run(describeService(), args, env) )
+  bootPlatform(args, env)
+  └── exit( runChassisLifecycle(describePlatformSpec(), args, env) )
 
-  describeService() → serviceSpec
-  ├── buildServices(deps) → services                                        ▶
-  │   ├── config.LoadConfig("") → cfg                                   ⚠
-  │   ├── sql.Open("postgres", cfg.Database.URL) → db                  ↺ ⚠
-  │   ├── consumerAdapters.NewPostgresConsumerRepositoryAdapter(db) → consumerRepo
-  │   ├── consumerService.NewConsumerService(consumerRepo) → consumerSvc
-  │   └── chassis.Services{ Registry: {"consumerService": consumerSvc} }
+  describePlatformSpec() → serviceSpec
+  ├── buildCoreServices(dependencies) → instantiatedServices                ▶
+  │   ├── loadConfigurationFile() → databaseAndBrokerConfig             ⚠
+  │   ├── openDatabaseConnectionPool(postgresURL) → dbConnectionPool   ↺ ⚠
+  │   ├── bindPostgresStorageAdapter(dbConnectionPool) → consumerStorageAdapter
+  │   ├── instantiateConsumerDomainService(consumerStorageAdapter) → consumerService
+  │   └── registerServiceInChassisRegistry("consumerService", consumerService)
   │
-  └── registerApiRoutes(router, services)                                   ▶
-      ├── services.Registry["consumerService"] → consumerSvc
-      ├── handlers.NewConsumerHandler(consumerSvc) → consumerHandler
-      └── router.HandleFunc("POST /v1/events/consume", consumerHandler.HandleConsume)
+  └── registerHttpEndpoints(router, instantiatedServices)                   ▶
+      ├── extractFromRegistry("consumerService") → consumerService
+      ├── injectServiceIntoHttpHandler(consumerService) → consumerHttpHandler
+      ├── bindHandlerToRouter(consumerHttpHandler) → consumerRouter
+      └── attachRoute(router, "POST /api/v1/consumers/inbox", consumerHttpHandler)
 
-  Tree 2: end-to-end runtime execution function stack
+  Tree 2: end-to-end runtime execution stack (what happens on request)
 
-  handleConsume(w, r) → httpResponse                                    ▶ ⚠
-  ├── json.NewDecoder(r.Body).Decode(&event) → inboundEvent             ⚠ EXIT_BAD_REQUEST
-  ├── validateInboundConsumerEvent(event) → error                       ⚠ EXIT_VALIDATION
-  └── consumerSvc.ConsumeEvent(ctx, event) → consumeResult              ▶ ⚠
-      ├── computePayloadHash(event.Payload) → payloadHash
-      ├── utils.GenerateUUIDv7() → inboxID                              ⚠
-      ├── repo.RecordInbox(ctx, inboxRecord) → inserted                 ↺ ⚠
-      │   └── inserted == false → return {ActionSkip, "transport duplicate"}
-      ├── repo.GetProjection(ctx, tenant, handler, type, id) → proj    ↺ ⚠
-      ├── proj.IsParked == true → return {ActionParkPoison}
-      ├── isContentHashConsistent(proj.LastPayloadHash, payloadHash)    ▶
-      │   └── inconsistent → repo.ParkAggregate(...) + return {ActionParkPoison}
-      ├── evaluateVersionRule(currentVersion, incomingVersion, class)   ▶
-      │   ├── incoming <= current → return {ActionSkip, "stale version"}
-      │   ├── delta & incoming > current + 1 → return {ActionHoldGap}
-      │   └── incoming == current + 1 (or state > current) → ActionApply
-      └── repo.UpsertProjection(ctx, updatedProjection)                 ↺ ⚠
-          └── return {ActionApply, appliedVersion}
-
-  Tree 3: chassis consumer worker & background pipeline
-
-  wireWorker(app, lifecycle) → LONG_RUNNING
-  ├── wireAdmin(app, lifecycle)
-  ├── buildConsumerGroup(app, schemaRegistry) → group
-  │   ├── standardConsumerWrapping()
-  │   │   ├── withTracing(tracer)                                       ↺
-  │   │   ├── withIdempotencyStore(app.infra.db)
-  │   │   ├── withRetryPolicy(spec.retryPolicy)                         ⚠
-  │   │   └── withDeadLetterSink(spec.dlqSink)                          ⚠
-  │   ├── exportLagMetric() → autoscalerSignal                          ✚
-  │   └── spec.registerConsumers(group, app.services)                  ▶
-  │       └── group.RegisterHandler("platform.events.ingest", consumerSvc.ConsumeEvent)
-  ├── lifecycle.addComponent("consumers", group.start, group.drainAndCommit)
-  └── wireJobs(app, lifecycle)
-      └── addComponent("inbox-compaction-job", withLeaderElection(job), job.stop)
-          └── repo.PurgeExpiredInbox(ctx, retentionWindow)              ↺ ⚠
-
-  Tree 4: storage & transactional persistence mechanics
-
-  repo.RecordInbox(ctx, record) → inserted                              ↺ ⚠
-  ├── db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted}) → tx ↺ ⚠
-  ├── tx.ExecContext(ctx, queryInsertInbox, params...) → result         ⚠
-  │   └── ON CONFLICT (tenant_id, handler_id, event_id) DO NOTHING
-  ├── result.RowsAffected() → rows
-  │   ├── rows == 0 → tx.Rollback() + return false                      ↺
-  │   └── rows == 1 → tx.Commit() + return true                         ↺
-  └── release connection to pool                                        ↺
-
-  repo.UpsertProjection(ctx, proj) → error                              ↺ ⚠
-  ├── db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted}) → tx ↺ ⚠
-  ├── tx.ExecContext(ctx, queryUpsertProjection, params...) → result    ⚠
-  │   └── ON CONFLICT (tenant_id, handler_id, aggregate_type, aggregate_id)
-  │       DO UPDATE SET last_version = excluded.last_version,
-  │                     last_event_id = excluded.last_event_id,
-  │                     last_payload_hash = excluded.last_payload_hash,
-  │                     updated_at = now()
-  │       WHERE consumer_projections.last_version < excluded.last_version
-  ├── result.RowsAffected() → rows
-  │   ├── rows == 0 → tx.Rollback() + return ErrStaleVersion            ↺ ⚠
-  │   └── rows == 1 → tx.Commit() + return nil                          ↺
-  └── release connection to pool                                        ↺
+  receiveInboundHttpEvent(httpWriter, httpRequest)                          ▶ ⚠
+  ├── startDistributedTraceSpan("POST /api/v1/consumers/events") → traceSpan ↺
+  ├── parseAndSanitizeJsonBody(requestBody) → parsedEventPayload        ⚠ EXIT_BAD_REQUEST
+  │   └── unmarshalError → returnHttpBadRequestResponse()
+  ├── serializePayloadToBytes(payloadField) → rawPayloadBytes           ⚠ EXIT_BAD_REQUEST
+  │   └── serializationError → returnHttpBadRequestResponse()
+  ├── mapRequestToDomainEvent(parsedEventPayload, rawPayloadBytes) → inboundConsumerEvent
+  │
+  └── executeIdempotentEventProcessing(inboundConsumerEvent) → processResult ▶ ⚠
+      ├── validateMandatoryFields(tenantId, handlerId, eventId, aggId)   ⚠ EXIT_VALIDATION
+      │   └── missingRequiredField → returnValidationError()
+      ├── calculateSha256Checksum(rawPayloadBytes) → payloadContentHash
+      ├── generateMonotonicTimeUUID() → uniqueInboxEntryId              ⚠
+      │
+      ├── attemptAtomicInboxReservation(uniqueInboxEntryId, tenantId, handlerId, eventId) → wasReserved ↺ ⚠
+      │   ├── executeSqlInsertOnConflictDoNothing(consumerInboxTable)   ⚠
+      │   └── wasReserved == false → returnResult(ACTION_SKIP, "transport duplicate delivery detected")
+      │
+      ├── fetchCurrentAggregateVersion(tenantId, handlerId, aggregateType, aggregateId) → currentProjectionState ↺ ⚠
+      │   ├── queryProjectionsTable() → existingStateRecord
+      │   └── stateRecord.isParked == true → returnResult(ACTION_PARK_POISON, "aggregate is quarantined")
+      │
+      ├── detectPoisonPayloadCollision(existingStateRecord.lastHash, payloadContentHash)
+      │   └── sameVersionWithDivergentHash →
+      │       ├── quarantineAggregateInDatabase(tenantId, handlerId, aggregateId) ↺ ⚠
+      │       └── returnResult(ACTION_PARK_POISON, "split-brain payload hash collision detected")
+      │
+      ├── evaluateVersionProgressionRules(currentVersion, incomingVersion, semanticClass) → decidedAction
+      │   ├── incomingVersion <= currentVersion → returnResult(ACTION_SKIP, "stale or already applied version")
+      │   ├── semanticClass == DELTA && incomingVersion > currentVersion + 1 → returnResult(ACTION_HOLD_GAP, "out of order event missing predecessor")
+      │   └── incomingVersion == currentVersion + 1 (or STATE > currentVersion) → ACTION_APPLY
+      │
+      ├── executeStateMutationAtomically(tenantId, handlerId, aggregateId, newVersion, eventId, payloadHash) ↺ ⚠
+      │   ├── executeSqlUpsertAggregateProjection(consumerProjectionsTable) ⚠
+      │   └── returnResult(ACTION_APPLY, "version advanced and state updated atomically")
+      │
+      ├── mapResultToHttpStatus(decidedAction)
+      │   ├── ACTION_HOLD_GAP → sendHttpResponseStatus(409_Conflict)
+      │   ├── ACTION_PARK_POISON → sendHttpResponseStatus(423_Locked)
+      │   └── ACTION_APPLY or ACTION_SKIP → sendHttpResponseStatus(200_OK)
+      │
+      └── writeJsonResponseBody(httpWriter, processResult)              ↺

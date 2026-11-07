@@ -163,3 +163,26 @@ func TestEventVersioningService_RegisterAndUpcast(t *testing.T) {
 		t.Fatalf("expected field price to be removed by upcaster")
 	}
 }
+
+func TestEventVersioningService_BuiltInIdentityUpcaster(t *testing.T) {
+	ctx := context.Background()
+	svc := service.NewEventVersioningService(adapters.NewMemoryEventVersioningAdapter(), nil)
+
+	if _, err := svc.RegisterUpcaster(ctx, contracts.RegisterUpcasterInput{
+		TenantID: "t1", SourceService: "svc", ExternalID: "e1", EventType: "order.placed",
+		FromVersion: 1, ToVersion: 2, TransformerName: "identity",
+	}); err != nil {
+		t.Fatalf("register upcaster: %v", err)
+	}
+
+	res, err := svc.UpcastEvent(ctx, contracts.UpcastStepInput{
+		TenantID: "t1", EventType: "order.placed", SourceVersion: 1, TargetVersion: 2,
+		Payload: json.RawMessage(`{"orderId":"o1"}`),
+	})
+	if err != nil {
+		t.Fatalf("upcast with registered identity upcaster: %v", err)
+	}
+	if res.FinalVersion != 2 || res.StepsApplied != 1 {
+		t.Fatalf("unexpected result: %+v", res)
+	}
+}

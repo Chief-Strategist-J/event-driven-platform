@@ -15,7 +15,7 @@ func TestIdempotentConsumer_HappyPathDeltaSequence(t *testing.T) {
 	svc := service.NewConsumerService(repo)
 
 	event1 := contracts.InboundConsumerEvent{
-		EventID:          "evt-101",
+		EventID:          "20522944-4173-5dbf-b545-2e9e46d3139d",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "order-projection-handler",
 		AggregateType:    "order",
@@ -36,7 +36,7 @@ func TestIdempotentConsumer_HappyPathDeltaSequence(t *testing.T) {
 	}
 
 	event2 := contracts.InboundConsumerEvent{
-		EventID:          "evt-102",
+		EventID:          "a70fff40-3770-517f-b9e3-1717d4184b73",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "order-projection-handler",
 		AggregateType:    "order",
@@ -63,7 +63,7 @@ func TestIdempotentConsumer_DuplicateEventIDSkipsWithoutMutation(t *testing.T) {
 	svc := service.NewConsumerService(repo)
 
 	event := contracts.InboundConsumerEvent{
-		EventID:          "evt-transport-dupe",
+		EventID:          "cb1de23d-b982-5764-8683-dfd9777d78e5",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "order-projection-handler",
 		AggregateType:    "order",
@@ -95,7 +95,7 @@ func TestIdempotentConsumer_VersionGapHeld(t *testing.T) {
 	svc := service.NewConsumerService(repo)
 
 	eventV1 := contracts.InboundConsumerEvent{
-		EventID:          "evt-v1",
+		EventID:          "ebe6bbf1-166f-5a33-b95a-b82a574ac638",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "order-projection-handler",
 		AggregateType:    "order",
@@ -109,7 +109,7 @@ func TestIdempotentConsumer_VersionGapHeld(t *testing.T) {
 	_, _ = svc.ConsumeEvent(ctx, eventV1)
 
 	eventV3 := contracts.InboundConsumerEvent{
-		EventID:          "evt-v3",
+		EventID:          "cbf0776f-dd80-5060-98e6-24e83816febf",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "order-projection-handler",
 		AggregateType:    "order",
@@ -136,7 +136,7 @@ func TestIdempotentConsumer_StateSemanticsAllowsVersionJump(t *testing.T) {
 	svc := service.NewConsumerService(repo)
 
 	eventV1 := contracts.InboundConsumerEvent{
-		EventID:          "evt-state-1",
+		EventID:          "684f4aef-df6b-5ae2-81b6-49100f32f1f6",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "inventory-snapshot-handler",
 		AggregateType:    "inventory",
@@ -150,7 +150,7 @@ func TestIdempotentConsumer_StateSemanticsAllowsVersionJump(t *testing.T) {
 	_, _ = svc.ConsumeEvent(ctx, eventV1)
 
 	eventV5 := contracts.InboundConsumerEvent{
-		EventID:          "evt-state-5",
+		EventID:          "97b7d658-755f-55fa-932d-cd4ed0218b9a",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "inventory-snapshot-handler",
 		AggregateType:    "inventory",
@@ -177,7 +177,7 @@ func TestIdempotentConsumer_SplitBrainSameVersionDivergentContentParks(t *testin
 	svc := service.NewConsumerService(repo)
 
 	eventA := contracts.InboundConsumerEvent{
-		EventID:          "evt-a",
+		EventID:          "a211502c-b53c-523c-abbf-c1b1d7fafedc",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "billing-handler",
 		AggregateType:    "account",
@@ -191,7 +191,7 @@ func TestIdempotentConsumer_SplitBrainSameVersionDivergentContentParks(t *testin
 	_, _ = svc.ConsumeEvent(ctx, eventA)
 
 	eventB := contracts.InboundConsumerEvent{
-		EventID:          "evt-b",
+		EventID:          "21ba5364-eed6-5195-a181-af317f72fdb2",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "billing-handler",
 		AggregateType:    "account",
@@ -218,7 +218,7 @@ func TestIdempotentConsumer_OutOfOrderInitialEventHeld(t *testing.T) {
 	svc := service.NewConsumerService(repo)
 
 	eventV2 := contracts.InboundConsumerEvent{
-		EventID:          "evt-unseen-v2",
+		EventID:          "d8503b71-4d5e-5e0d-ad74-cfa55957f818",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "order-projection-handler",
 		AggregateType:    "order",
@@ -245,7 +245,7 @@ func TestIdempotentConsumer_DifferentHandlersProcessSameEventID(t *testing.T) {
 	svc := service.NewConsumerService(repo)
 
 	eventForHandlerA := contracts.InboundConsumerEvent{
-		EventID:          "shared-evt-uuid-001",
+		EventID:          "8722dcc9-e954-57c0-9dd2-babdb0ee7edd",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "order-email-notification-handler",
 		AggregateType:    "order",
@@ -263,7 +263,7 @@ func TestIdempotentConsumer_DifferentHandlersProcessSameEventID(t *testing.T) {
 	}
 
 	eventForHandlerB := contracts.InboundConsumerEvent{
-		EventID:          "shared-evt-uuid-001",
+		EventID:          "8722dcc9-e954-57c0-9dd2-babdb0ee7edd",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "inventory-reservation-handler",
 		AggregateType:    "order",
@@ -290,7 +290,7 @@ func TestIdempotentConsumer_SubsequentEventsParkedOnPoisonedAggregate(t *testing
 	svc := service.NewConsumerService(repo)
 
 	eventInitial := contracts.InboundConsumerEvent{
-		EventID:          "poison-test-evt-1",
+		EventID:          "6f27f85d-604b-5f86-8f83-2a2f03a2a917",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "payment-handler",
 		AggregateType:    "payment",
@@ -304,7 +304,7 @@ func TestIdempotentConsumer_SubsequentEventsParkedOnPoisonedAggregate(t *testing
 	_, _ = svc.ConsumeEvent(ctx, eventInitial)
 
 	eventCollision := contracts.InboundConsumerEvent{
-		EventID:          "poison-test-evt-1-collision",
+		EventID:          "fb802493-7908-5d08-87ad-2b649d4d24b3",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "payment-handler",
 		AggregateType:    "payment",
@@ -321,7 +321,7 @@ func TestIdempotentConsumer_SubsequentEventsParkedOnPoisonedAggregate(t *testing
 	}
 
 	eventSubsequent := contracts.InboundConsumerEvent{
-		EventID:          "poison-test-evt-2",
+		EventID:          "2241f4a1-56af-5ebe-9917-b044561133a1",
 		TenantID:         "tenant-corp-01",
 		HandlerID:        "payment-handler",
 		AggregateType:    "payment",

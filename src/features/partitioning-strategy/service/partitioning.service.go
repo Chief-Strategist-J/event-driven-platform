@@ -12,6 +12,7 @@ import (
 	"event-driven-platform/src/features/partitioning-strategy/domain/rules"
 	"event-driven-platform/src/features/partitioning-strategy/infrastructure/ports"
 	"event-driven-platform/src/infra/observability"
+	platformErrors "event-driven-platform/src/shared/errors"
 	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
@@ -323,7 +324,7 @@ func (s *PartitioningService) AdvanceMigration(ctx context.Context, in contracts
 	}
 
 	if in.ExpectedPhase != "" && existing.Phase != in.ExpectedPhase {
-		err := fmt.Errorf("phase conflict: expected %s, current %s", in.ExpectedPhase, existing.Phase)
+		err := platformErrors.NewConflictError(fmt.Sprintf("phase conflict: expected %s, current %s", in.ExpectedPhase, existing.Phase))
 		observability.RecordError(span, err, attribute.String("error.type", "PHASE_CONFLICT"))
 		observability.LogWarn(ctx, "partitioning", "migration expected phase mismatch", norm.TenantID, map[string]any{
 			"expected_phase": string(in.ExpectedPhase),

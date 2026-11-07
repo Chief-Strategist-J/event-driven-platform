@@ -188,3 +188,35 @@ stateDiagram-v2
 | **F4.7** | Poison event | Partition outage | Retry count $\ge 5 \to \text{PARKED}$; queries block subsequent versions $k+1$ | Alert when `count(status='PARKED') > 0` |
 | **F4.11** | Retention purge deletes pending | Silent data loss | Purge query strictly filters `WHERE status = 'PUBLISHED'` | Purge count vs published count |
 | **F9.1** | Silent pipeline stoppage | Undetected loss | Synthetic canary emitted every ~30s (`EmitCanaryHeartbeat`) | Canary consumer latency SLO |
+
+## Amendment 2026-11-07: Duplicate-externalId conflict mapping and Kafka relay headers
+
+### Problem observed
+1. `POST /api/v1/outbox` with a second request that reuses the same `externalId` (same tenant and source service) but no idempotency key returned `500 INTERNAL_ERROR`. A duplicate is a client-side condition and should be a conflict.
+2. Messages published by the relay (`RelayBatch`) arrived on Kafka with no record headers. A console consumer showed `NO_HEADERS`, although the outbox row stores `event_type`, `schema_version` and `source_service` in its `headers` column. Consumers therefore could not route or version-check without parsing the payload.
+
+### Root cause
+1. `transactional-outbox.postgres.repository.adapter.go: Save / SaveAndImmediateDelete` returned the raw `*pq.Error` for unique violations (`outbox_external_uk`, `outbox_aggregate_version_uk`). The service wrapped it with `%w` and the handler never matched it to a 409 (RC1, RC2). The in-memory adapter did not enforce the idempotency key, so unit tests on it could not see the defect (RC5).
+2. `ProducerPort.Publish(ctx, topic, key, payload)` has no headers parameter, and `RelayBatch` called it directly, so the stored headers were dropped at the last hop (RC4-style gap: the stored contract was never exercised end to end).
+
+### Decision / fix
+- `mapInsertError` in the Postgres adapter converts SQLSTATE 23505 into an `ApplicationError` conflict: `outbox_external_uk` -> "an outbox event with the same externalId already exists for this tenant and source service"; `outbox_aggregate_version_uk` -> "an outbox event for this aggregate version already exists"; any other unique violation -> "duplicate outbox event". `OutboxService.StageEvent` now uses `errors.As` and returns the `ApplicationError` unwrapped, and the handler uses `errors.As`. The memory adapter now enforces the idempotency key so both adapters behave the same.
+- Headers: a new optional interface `producers.HeaderedProducerPort` (`PublishWithHeaders`) and helper `producers.PublishRecord`. The Kafka adapter sends headers in sorted key order; the memory producer records them. `ProducerPort` itself is unchanged, so producers that do not support headers keep working (the helper falls back to plain `Publish`). We chose an optional extension over changing `ProducerPort` to avoid breaking every implementation and mock.
+- Contract now enforced on relay (verified in `outbox.service.go`):
+  - Kafka topic == the row's `aggregate_type`; message key == `aggregate_id`; value == `payload`.
+  - Headers `event_type`, `schema_version`, `source_service` are always set at staging from the request, and any custom `headers` supplied in the request are carried too. They are sent as Kafka record headers.
+
+### API-visible behavior change
+- `POST /api/v1/outbox` duplicate `externalId` without idempotency key: `500` -> `409 CONFLICT` with a domain message. Clients that treated 500 as retryable will now see a non-retryable 409. Marked as a behavior change, arguably breaking for clients that special-cased 500.
+- Kafka consumers now see record headers; additive.
+
+### Verification
+- Live (image `chiefj/event-driven-platform:fixes`, compose stack): duplicate externalId returned 409; the relayed Kafka record showed `event_type:E,schema_version:1,source_service:s`.
+- Unit tests added in `src/features/transactional-outbox/tests/outbox_headers_conflict_test.go`: `TestOutboxDuplicateExternalIDIsConflict`, `TestOutboxRelayCarriesHeaders`.
+
+### Remaining gaps
+- The unique-violation mapping in the Postgres adapter has no Postgres-backed test in CI (only the live check above); Postgres-dependent integration tests skip silently (RC5).
+- Topic provisioning is an operational prerequisite, not enforced by code (see RC6 below).
+
+### Operational prerequisite (RC6): topic must exist before relay
+The relay publishes to the Kafka topic named by `aggregate_type`, and the broker has topic auto-creation disabled. If the topic does not exist, publishing fails with "Unknown Topic Or Partition", the row is marked failed on each attempt, and after 5 retries it is PARKED. This is not a code defect. Create topics (with the intended partition count) before staging events for a new `aggregate_type`; see `failure-cases.md` for the recovery procedure.

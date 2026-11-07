@@ -136,15 +136,26 @@ func (s *ConsistencyService) GetActiveIncidents(ctx context.Context, tenantID st
 	return s.repo.GetActiveDriftIncidents(ctx, tenantID, viewName)
 }
 
+// AttemptHealing loads the incident (returning ports.ErrIncidentNotFound when it
+// does not exist) and applies the repeat-heal policy using the persisted
+// heal_attempts counter.
 func (s *ConsistencyService) AttemptHealing(ctx context.Context, incidentID uuid.UUID, tenantID string, maxAttempts int) (bool, error) {
-	allowed := rules.EvaluateRepeatHeal(0, maxAttempts)
+	incident, err := s.repo.GetDriftIncident(ctx, incidentID, tenantID)
+	if err != nil {
+		return false, err
+	}
+
+	allowed := rules.EvaluateRepeatHeal(incident.HealAttempts, maxAttempts)
 	if !allowed {
-		_ = s.repo.UpdateDriftIncidentStatus(ctx, incidentID, tenantID, contracts.IncidentManualIntervention, maxAttempts)
+		if err := s.repo.UpdateDriftIncidentStatus(ctx, incidentID, tenantID, contracts.IncidentManualIntervention, incident.HealAttempts); err != nil {
+			return false, err
+		}
 		return false, nil
 	}
 
-	nextState := machines.EvaluateIncidentLifecycle(contracts.IncidentConfirmed, 5*time.Minute, 2*time.Minute, true, 1)
-	if err := s.repo.UpdateDriftIncidentStatus(ctx, incidentID, tenantID, nextState, 1); err != nil {
+	attempts := incident.HealAttempts + 1
+	nextState := machines.EvaluateIncidentLifecycle(contracts.IncidentConfirmed, 5*time.Minute, 2*time.Minute, true, attempts)
+	if err := s.repo.UpdateDriftIncidentStatus(ctx, incidentID, tenantID, nextState, attempts); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -231,6 +242,11 @@ func (s *ConsistencyService) RegisterSilence(ctx context.Context, in contracts.R
 	return &record, nil
 }
 
+// DispatchCanaryProbe records the probe in consistency_check_run_history
+// (check_type CANARY_PROBE). This service does not publish the canary event or
+// observe it downstream, so no end-to-end evidence of delivery exists at this
+// point: the outcome is UNKNOWN (recorded as one unknown key, coverage 0) rather
+// than MATCH. A later reconciliation step must confirm arrival.
 func (s *ConsistencyService) DispatchCanaryProbe(ctx context.Context, in contracts.CanaryProbeInput) (*contracts.CanaryProbeOutput, error) {
 	norm, err := contracts.NormalizeCanaryProbeInput(in)
 	if err != nil {
@@ -238,15 +254,38 @@ func (s *ConsistencyService) DispatchCanaryProbe(ctx context.Context, in contrac
 	}
 
 	start := time.Now()
-	probeID := fmt.Sprintf("probe_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:16])
+	probeUUID := uuid.New()
+	probeID := fmt.Sprintf("probe_%s", strings.ReplaceAll(probeUUID.String(), "-", "")[:16])
 
-	duration := time.Since(start).Milliseconds()
+	corrUUID, err := uuid.Parse(norm.CorrelationID)
+	if err != nil {
+		corrUUID = uuid.New()
+	}
+
+	record := contracts.CheckRunRecord{
+		ID:                  probeUUID,
+		PublicID:            fmt.Sprintf("ecc_%s", strings.ReplaceAll(uuid.New().String(), "-", "")[:20]),
+		TenantID:            norm.TenantID,
+		SourceService:       norm.SourceService,
+		ExternalID:          probeID,
+		CorrelationID:       corrUUID,
+		ViewName:            norm.StreamName,
+		CheckType:           contracts.CheckCanaryProbe,
+		EvaluatedKeys:       1,
+		UnknownCount:        1,
+		CoverageRatio:       rules.CalculateCoverageRatio(0, 0, 1),
+		ExecutionDurationMs: time.Since(start).Milliseconds(),
+		Status:              "COMPLETED",
+		CreatedAt:           time.Now().UTC(),
+	}
+	if err := s.repo.RecordCheckRun(ctx, record); err != nil {
+		return nil, err
+	}
 
 	return &contracts.CanaryProbeOutput{
 		ProbeID:           probeID,
 		PartitionID:       norm.PartitionID,
-		TransitDurationMs: duration,
-		Outcome:           contracts.OutcomeMatch,
+		TransitDurationMs: record.ExecutionDurationMs,
+		Outcome:           contracts.OutcomeUnknown,
 	}, nil
 }
-

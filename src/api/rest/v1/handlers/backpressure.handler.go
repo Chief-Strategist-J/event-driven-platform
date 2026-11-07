@@ -2,16 +2,21 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 
 	bpFeature "event-driven-platform/src/features/backpressure"
 	"event-driven-platform/src/features/backpressure/contracts"
+	"event-driven-platform/src/features/backpressure/domain/machines"
 	"event-driven-platform/src/infra/observability"
 	"event-driven-platform/src/shared/constants"
+	appErrors "event-driven-platform/src/shared/errors"
 	"event-driven-platform/src/shared/types"
 	"event-driven-platform/src/shared/utils"
 )
@@ -62,6 +67,10 @@ func (h *BackpressureHandler) HandleReportSaturation(w http.ResponseWriter, r *h
 	if input.CorrelationID == "" {
 		input.CorrelationID = corrID
 	}
+	if _, err := uuid.Parse(strings.TrimSpace(input.CorrelationID)); err != nil {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "correlationId must be a valid UUID", start, reqID, corrID, causationID)
+		return
+	}
 
 	span.SetAttributes(
 		attribute.String("tenant_id", input.TenantID),
@@ -76,7 +85,7 @@ func (h *BackpressureHandler) HandleReportSaturation(w http.ResponseWriter, r *h
 		observability.LogWarn(ctx, "backpressure-ingress", "report saturation rejected", input.TenantID, map[string]any{
 			"error": err.Error(),
 		})
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -133,6 +142,10 @@ func (h *BackpressureHandler) HandleReportRecovery(w http.ResponseWriter, r *htt
 	if input.CorrelationID == "" {
 		input.CorrelationID = corrID
 	}
+	if _, err := uuid.Parse(strings.TrimSpace(input.CorrelationID)); err != nil {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "correlationId must be a valid UUID", start, reqID, corrID, causationID)
+		return
+	}
 
 	span.SetAttributes(
 		attribute.String("tenant_id", input.TenantID),
@@ -146,7 +159,7 @@ func (h *BackpressureHandler) HandleReportRecovery(w http.ResponseWriter, r *htt
 		observability.LogWarn(ctx, "backpressure-ingress", "report recovery rejected", input.TenantID, map[string]any{
 			"error": err.Error(),
 		})
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -201,6 +214,10 @@ func (h *BackpressureHandler) HandleConfirmRecovery(w http.ResponseWriter, r *ht
 	if input.CorrelationID == "" {
 		input.CorrelationID = corrID
 	}
+	if _, err := uuid.Parse(strings.TrimSpace(input.CorrelationID)); err != nil {
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, "correlationId must be a valid UUID", start, reqID, corrID, causationID)
+		return
+	}
 
 	res, err := h.feat.Service.ConfirmRecovery(ctx, input)
 	if err != nil {
@@ -208,7 +225,7 @@ func (h *BackpressureHandler) HandleConfirmRecovery(w http.ResponseWriter, r *ht
 		observability.LogWarn(ctx, "backpressure-ingress", "confirm recovery rejected", input.TenantID, map[string]any{
 			"error": err.Error(),
 		})
-		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
@@ -258,11 +275,39 @@ func (h *BackpressureHandler) HandleGetState(w http.ResponseWriter, r *http.Requ
 			"dependency_id": input.DependencyID,
 			"error":         err.Error(),
 		})
-		h.writeError(w, http.StatusNotFound, constants.ErrCodeNotFound, err.Error(), start, reqID, corrID, causationID)
+		h.writeServiceError(w, err, start, reqID, corrID, causationID)
 		return
 	}
 
 	h.writeSuccess(w, http.StatusOK, res, start, reqID, corrID, causationID)
+}
+
+func (h *BackpressureHandler) writeServiceError(w http.ResponseWriter, err error, start time.Time, reqID, corrID, causationID string) {
+	var appErr *appErrors.ApplicationError
+	switch {
+	case errors.As(err, &appErr):
+		h.writeError(w, appErr.StatusCode, appErr.CanonicalCode, appErr.Message, start, reqID, corrID, causationID)
+	case errors.Is(err, contracts.ErrRecordNotFound):
+		h.writeError(w, http.StatusNotFound, constants.ErrCodeNotFound, "backpressure record not found", start, reqID, corrID, causationID)
+	case errors.Is(err, machines.ErrInvalidTransition):
+		h.writeError(w, http.StatusConflict, constants.ErrCodeConflict, err.Error(), start, reqID, corrID, causationID)
+	case errors.Is(err, contracts.ErrSignalNotSaturated), isBackpressureValidationError(err):
+		h.writeError(w, http.StatusBadRequest, constants.ErrCodeValidationFailed, err.Error(), start, reqID, corrID, causationID)
+	default:
+		h.writeError(w, http.StatusInternalServerError, constants.ErrCodeInternalError, "internal backpressure error", start, reqID, corrID, causationID)
+	}
+}
+
+func isBackpressureValidationError(err error) bool {
+	for _, e := range []error{
+		contracts.ErrMissingTenantID, contracts.ErrMissingSourceService, contracts.ErrMissingExternalID,
+		contracts.ErrMissingCorrelationID, contracts.ErrMissingHandlerID, contracts.ErrMissingDependencyID,
+	} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *BackpressureHandler) writeSuccess(w http.ResponseWriter, status int, data any, start time.Time, reqID, corrID, causationID string) {

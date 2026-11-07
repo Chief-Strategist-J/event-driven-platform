@@ -189,3 +189,26 @@ sequenceDiagram
 | `event_versioning_chain_length` | Avg $\le 2$ | $> 5$ steps | Schedule stream compaction or V-major stream migration (§11) |
 | `event_versioning_upcast_failures_total` | `0` | $> 0$ | Trigger immediate page; dispatch RB-02 hotfix for defective upcaster |
 | `event_versioning_trace_carrier_missing_total` | `0` | $> 0$ | Page producer on broken W3C traceparent injection |
+
+## Amendment 2026-11-07: Upcaster registration route and built-in identity transformer
+
+### Problem observed
+`POST /api/v1/schemas/upcast` could never succeed. Every call returned `400` "incomplete upcast chain", because there was no HTTP way to register an upcaster definition for a version step and nothing to run for steps that only add fields.
+
+### Root cause
+The service had `RegisterUpcaster` but no route exposed it (the feature was built independently, RC5), and the `UpcasterEngine` started with an empty transformer map, so even a registered additive step had no transformer to execute.
+
+### Decision / fix
+- New route `POST /api/v1/schemas/upcasters` -> `EventVersioningHandler.RegisterUpcaster`. Body (`RegisterUpcasterInput`): `tenantId`, `sourceService`, `externalId`, optional `correlationId`, `eventType`, `fromVersion`, `toVersion`, `transformerName`. Success is `201`. Errors go through `classifyServiceError` (`errors.As`), so validation -> 400 and a duplicate `externalId` -> 409.
+- `UpcasterEngine` now pre-registers a built-in transformer named `identity` (`IdentityTransformerName`) that returns the payload unchanged. Additive version bumps (new optional field with a default) are expressed as a registered upcaster using `identity`, with no code change needed. We chose a built-in no-op over auto-skipping missing steps because the chain-completeness check (no silent gaps in the version graph, EV invariants) stays strict: every step must still be explicitly registered.
+
+### API-visible behavior change
+- New endpoint `POST /api/v1/schemas/upcasters` (additive).
+- `POST /api/v1/schemas/upcast` can now succeed once the chain is registered with known transformers.
+
+### Verification
+Route verified live; the identity upcast path is unit tested in `src/features/event-versioning/tests/event_versioning_service_test.go`. (The end-to-end register-then-upcast sequence was not recorded as a live run in the verified facts.)
+
+### Remaining gaps
+- Custom (non-identity) transformers must be registered in code at startup; none are registered by the application bootstrap today.
+- An unknown `transformerName` is accepted at registration and only fails at upcast time with 400.

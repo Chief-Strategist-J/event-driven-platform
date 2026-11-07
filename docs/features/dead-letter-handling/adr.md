@@ -220,3 +220,42 @@ sequenceDiagram
    $$\text{Storage} \approx \text{Quarantine Rate} \times \text{Avg Envelope Size (10KB)} \times \text{Max Unresolved Age (90 days)}$$
 2. **Parked Buffer Storage**:
    - Bounded by hard cap: 10,000 events or 100MB per aggregate key. Exceeding cap pauses partition to prevent memory exhaustion (**F5.3**).
+
+## Amendment 2026-11-07: Quarantine ingest hardening (headers, UUIDs, wrapped errors)
+
+### Problem observed
+- `POST /api/v1/dlq/quarantine` without a `headers` field returned 500.
+- Non-UUID `eventId` / `correlationId` reached Postgres and produced a 500 / raw driver error.
+- A duplicate `externalId` returned 500 instead of 409.
+- `GET /api/v1/dlq/quarantined` without `tenantId` returned an empty 200.
+
+### Root cause
+- Nil headers map (RC2): `PostgresDeadLetterRepositoryAdapter.Quarantine` called `json.Marshal(record.Headers)` on a nil `map[string]string`, which encodes to JSON `null`. The column constraint `dlq_headers_is_object_ck` requires a JSON object, so the insert failed.
+- Wrapped-error type-assertion miss (RC1): handlers used `err.(*appErrors.ApplicationError)`. The service wraps repository errors (`fmt.Errorf("failed persisting dead letter record: %w", err)`), so the assertion never matched and a mapped 409 fell through to 500.
+- Validation delegated to Postgres UUID typing (RC2): `ValidateQuarantineInput` did not check UUID format.
+
+### Decision / fix
+- Handler defaults `req.Headers` to `{}`; the Postgres adapter also defaults a nil map to `{}` (defense in depth).
+- `ValidateQuarantineInput` now rejects a non-empty non-UUID `eventId` and any non-UUID `correlationId` with 400 (field-level details).
+- `Quarantine`, `Redrive` and `Discard` handlers use `errors.As`, so wrapped `ApplicationError`s (e.g. 409 duplicate externalId via `MapDatabaseError`) keep their status.
+- `List` requires `tenantId` and returns 400 `tenantId query parameter is required` otherwise.
+
+### API-visible behavior change
+- Quarantine without headers: 500 becomes 201 with `{}` headers.
+- Non-UUID ids: 500 or raw `pq` error becomes 400. **Potentially breaking** for clients that sent non-UUID `correlationId` (e.g. `corr-1`); existing tests were updated to use UUIDs.
+- Duplicate externalId: 500 becomes 409.
+- List without `tenantId`: 200 empty becomes 400. **Breaking** for callers relying on the empty result.
+
+### Verification
+Re-tested live: quarantine without headers succeeds, non-UUID ids return 400, duplicate externalId returns 409. Unit test `TestValidateQuarantineInput_UUIDs` added (`tests/dead_letter_handling_validation_test.go`); existing DLQ tests updated to UUID fixtures.
+
+### Remaining gaps
+- `redrive` and `discard` with a non-UUID `quarantineId` still return 500 (UUID not validated before the query).
+- No automated HTTP-level or Postgres-backed test covers the `dlq_headers_is_object_ck` path.
+
+
+## Amendment 2026-11-07 (second pass): quarantineId validation
+
+`POST /dlq/redrive` and `/dlq/discard` validate `quarantineId` as a UUID up front and return 400 `quarantineId must be a valid UUID` (previously 500 from the raw Postgres uuid error). This closes failure case F2.7.
+
+Verified live on the compose-deployed image (`chiefj/event-driven-platform:v2`) and by unit tests; see ADR-0002 "Closed in a second pass".

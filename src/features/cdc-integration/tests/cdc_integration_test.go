@@ -48,7 +48,7 @@ func TestCDCIntegration_PostgresLifecycle(t *testing.T) {
 	svc := service.NewCDCService(repo, connect, machine)
 
 	uID, _ := utils.GenerateUUIDv7()
-	suffix := strings.ReplaceAll(uID, "-", "")[:8]
+	suffix := strings.ReplaceAll(uID, "-", "")[24:]
 	connName := fmt.Sprintf("debezium_orders_%s", suffix)
 	slotName := fmt.Sprintf("cdc_slot_orders_%s", suffix)
 	pubName := fmt.Sprintf("cdc_pub_orders_%s", suffix)
