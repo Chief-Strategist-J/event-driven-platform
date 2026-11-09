@@ -202,21 +202,78 @@ Enterprise business models change constantly; database columns are added, calcul
 
 The platform enforces Semantic Versioning for event types. Non-breaking changes (adding optional fields with defaults) increment minor versions (OrderPlaced v1.1). Breaking changes (type shifts, semantic alterations) mint a new major version or new event type (OrderPlacedV2). Consumer pipelines implement in-flight Upcasters: when an event from 2024 (v1.0) is consumed, the upcaster deterministically transforms it into the current domain representation (v1.2) in memory before handing it to business logic.
 
-### 3. Core Architectural Principles
+### 3. Core Architectural Principles & Systems Philosophy
 
-* **Monotonic Version Progression**: Event schema versions must advance sequentially; retrospective alterations to historically registered versions are strictly prohibited.
-* **Rigid Compatibility Guarantees**: Evolution must declare Backward, Forward, or Full compatibility rules to support independent microservice deployment cadences.
-* **Boundary Upcasting Normalization**: Historical events are normalized to the current canonical domain model at the infrastructure adapter layer, keeping business services clean.
-* **Permanent Field Deprecation Cycle**: Fields cannot be removed in minor releases; they must be deprecated, made optional, and phased out across major version milestones.
-
-### 4. The Architect's Meta-Questions (Failure-First Evaluation)
-
-1. **Why is upcasting superior to maintaining separate consumer code paths for every historical version? (Maintaining v1, v2, and v3 handlers in business code creates massive cyclomatic complexity; upcasters normalize legacy events at the ingress boundary).**
-2. **Why must newly added fields always declare a default value? (If an older producer emits a payload without the field, a newer consumer reading the event will fail or inject null pointers unless a default is formally declared).**
-3. **When should we create a new event type instead of a new version? (When the business meaning changes fundamentally: e.g. CustomerAddressChanged vs CustomerRelocated; schema versioning handles data shapes, event types handle domain semantics).**
+#### Principle 1: Semantic Versioning of Contracts (Major.Minor.Patch)
+* **Design Philosophy & Epistemology**:
+  Software binaries have versions; event contracts must have versions too. Treating event schemas as fluid, unversioned JSON structures invites silent breaking changes. The philosophy is Explicit Contract Semantic Versioning: event contracts are formal software interfaces governed by SemVer (Major.Minor.Patch). Breaking changes increment Major; additive changes increment Minor.
+* **Threat Vector Defeated**: Silent data corruption where downstream consumers misinterpret field semantics after an unversioned contract change.
+* **Storage & State Invariant**:
+```text
+EventHeader.SchemaVersion == 'Major.Minor.Patch'
+Major version change ==> Breaking Contract / New Topic Route
+Minor version change ==> Additive Non-Breaking Extension
+```
+* **Implementation Mechanism**:
+  Every event carries a `schema_version` header. Platform linters verify that PRs modifying schema files adhere strictly to SemVer rules: adding optional fields increments Minor; removing or redefining fields forces a Major version increment.
+* **Non-Negotiable Trade-Off**: Overhead of maintaining explicit contract versioning and migration pathways for major version upgrades.
 
 ---
 
+#### Principle 2: In-Flight Consumer Upcasting Pipeline
+* **Design Philosophy & Epistemology**:
+  Maintaining multiple parallel branches of business logic to handle legacy v1, v2, and v3 event schemas pollutes domain code with brittle conditional statements (`if version == 1 ... else if version == 2`). The philosophy is Edge Upcasting: legacy events must be transformed into the latest domain model at the infrastructure consumption boundary before entering domain business logic.
+* **Threat Vector Defeated**: Codebase rot and regression bugs caused by domain entities being polluted with legacy schema compatibility branches.
+* **Storage & State Invariant**:
+```text
+DomainLogic processes ONLY CurrentVersion (v_latest)
+LegacyEvent(v_k) transformed to CurrentVersion(v_latest) via UpcasterPipeline at consumer ingress
+```
+* **Implementation Mechanism**:
+  Consumer infrastructure runs an Upcaster chain: `v1 -> v2 Upcaster -> v3 Upcaster`. Legacy v1 events are sequentially migrated in memory to v3 structures before being passed into the domain handler. The domain code only ever sees clean v3 models.
+* **Non-Negotiable Trade-Off**: CPU transformation latency at consumer ingress when processing historical events during log replays.
+
+---
+
+#### Principle 3: The Expand-and-Contract Migration Lifecycle
+* **Design Philosophy & Epistemology**:
+  Instantaneous 'flag-day' deployments across distributed producers and consumers are an operational myth that guarantees downtime. The philosophy is Two-Phase Evolution: first expand the schema to support both old and new representations concurrently; only contract (remove the old representation) after all consumers have migrated.
+* **Threat Vector Defeated**: Platform outages caused by deploying a producer that emits new fields before consumers are upgraded, or decommissioning old fields while legacy consumers still require them.
+* **Storage & State Invariant**:
+```text
+Phase 1 (Expand): Producer emits (OldField AND NewField)
+Phase 2 (Migrate): Consumers upgraded to read NewField
+Phase 3 (Contract): Producer stops emitting OldField after deprecation window
+```
+* **Implementation Mechanism**:
+  Contract changes require a multi-release rollout plan. Deprecated fields are marked `@deprecated` in schemas for at least two deployment cycles before physical removal, with telemetry tracking whether any active consumers still read the legacy field.
+* **Non-Negotiable Trade-Off**: Extended operational migration timelines requiring coordination across multiple engineering teams.
+
+---
+
+#### Principle 4: Mandatory Default Values for Additive Fields
+* **Design Philosophy & Epistemology**:
+  In an event stream, you cannot travel back in time to inject values into events published three years ago. When an additive field is introduced, historical events replayed today lack that field. The philosophy is Absolute Historical Completeness: every newly added field must specify a deterministic default value.
+* **Threat Vector Defeated**: Deserialization crashes during event replays or historical analytics when legacy events lack newly introduced required fields.
+* **Storage & State Invariant**:
+```text
+NewField.DefaultValue != NULL
+LegacyEvent without NewField deserializes to NewField.DefaultValue deterministically
+```
+* **Implementation Mechanism**:
+  Schema Registry policies mandate default values on all new fields. Deserializers inject the configured default when reading historical binary payloads that omit the field.
+* **Non-Negotiable Trade-Off**: Domain logic must treat default values meaningfully, distinguishing between an intentional zero/false and a missing historical field.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is an in-memory Upcaster superior to rewriting historical events in the Kafka topic?**
+   * *Answer*: Rewriting historical events in a Kafka topic violates the fundamental law of event-driven architecture: the event log is immutable history. Rewriting events alters offsets, invalidates consumer group watermarks, and breaks cryptographic audit ledgers. Upcasters adapt history dynamically without mutating the physical log.
+2. **When is it appropriate to create a new topic (e.g., `orders.v2`) instead of evolving an existing schema?**
+   * *Answer*: A new topic is required when the business domain undergoes a fundamental paradigm shift that cannot be expressed as an additive change (e.g., transitioning from single-item orders to multi-vendor marketplace baskets) where legacy consumers cannot meaningfully process the new concept.
+3. **How do you detect if legacy v1 events are still being produced in a production cluster?**
+   * *Answer*: Prometheus metrics scrape the `event_schema_version_total{version='1.0.0'}` counter emitted by consumer ingress middleware. When the rate of v1 events reaches zero over a sustained observation window, legacy v1 upcasting paths can be safely decommissioned.
+
+---
 ## Authoritative References & Production Citations
 
 * **[Greg Young: Versioning in an Event Sourced System](https://leanpub.com/esversioning)**

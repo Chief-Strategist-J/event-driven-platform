@@ -156,21 +156,76 @@ In complex enterprise domains, the data model required to enforce transactional 
 
 The system splits execution into Commands (state changes) and Queries (data retrieval). Commands mutate domain aggregates in transactional write tables, generating immutable domain events. Asynchronous projection workers consume these events and update read-optimized materialized tables (e.g. denormalized PostgreSQL, Elasticsearch). Queries read exclusively from projections with zero locks on write entities.
 
-### 3. Core Architectural Principles
+### 3. Core Architectural Principles & Systems Philosophy
 
-* **Strict Model Segregation**: Command and Query models must remain physically or logically segregated; query operations must never mutate domain aggregate state.
-* **Asynchronous Projection Materialization**: Read models are derived asynchronously from emitted domain events, decoupling query performance from write transaction latency.
-* **Idempotent Projection Rebuilds**: Projection workers must be completely idempotent, enabling complete historical rebuilds of read views by simply replaying past events.
-* **Independent Operational Scaling**: Read replicas and query databases scale independently based on query volume without contending for locks on core write engines.
-
-### 4. The Architect's Meta-Questions (Failure-First Evaluation)
-
-1. **How does the UI handle eventual consistency when a user submits a command and queries immediately? (The UI uses optimistic UI updates, or polls using the returned Command Transaction ID, or awaits SSE/WebSocket notification of projection completion).**
-2. **What happens if projection workers fail or lag? (Write operations continue at full speed; read models lag safely without data loss, catching up automatically upon worker restart).**
-3. **When is CQRS an architectural anti-pattern? (In standard CRUD applications where reads and writes match 1:1; CQRS is justified only when write contention, complex business validation, or asymmetric read/write ratios demand segregation).**
+#### Principle 1: Asymmetric Structural Segregation (Command vs Query)
+* **Design Philosophy & Epistemology**:
+  The data structures optimized for recording state mutations (normalized relational schemas, ACID row-locks) are structurally antithetical to data structures optimized for high-throughput reads (denormalized projections, document caches). The philosophy is Structural Asymmetry: write models enforce domain invariants; read models serve UI queries. Never force a single schema to serve both masters.
+* **Threat Vector Defeated**: Database deadlock contention, table lock degradation, and slow query latency caused by complex analytical queries executing against transactional write tables.
+* **Storage & State Invariant**:
+```text
+WriteModel strictly enforces Domain Invariants via ACID boundaries
+ReadModel strictly serves UI Queries via Denormalized Views
+WriteModel != ReadModel
+```
+* **Implementation Mechanism**:
+  Commands execute against a normalized relational database (PostgreSQL) optimized for low-latency row updates and transaction safety. Projections listen to committed domain events and build denormalized read-optimized views in PostgreSQL, Redis, or Elasticsearch.
+* **Non-Negotiable Trade-Off**: Data duplication and eventual consistency latency between write-model commits and read-model view updates.
 
 ---
 
+#### Principle 2: One-Way Causal Flow & Projection Monotonicity
+* **Design Philosophy & Epistemology**:
+  Bi-directional synchronization between write and read models creates circular dependencies and state drift. The philosophy is Unidirectional Causal Progression: information flows exclusively from Write Aggregate -> Domain Event -> Read Projection. The read model is an immutable slave to history; it cannot mutate state.
+* **Threat Vector Defeated**: State drift and split-brain corruption where read models update state independently of write aggregate domain rules.
+* **Storage & State Invariant**:
+```text
+Flow: Command -> Aggregate.Execute() -> DomainEvent -> Projection.Project()
+ReadModel.CanMutateWriteModel() == FALSE
+```
+* **Implementation Mechanism**:
+  Read models are updated exclusively through event subscriber handlers that process published domain events. Read models do not possess write APIs; API gateways route mutation commands strictly to aggregate command handlers.
+* **Non-Negotiable Trade-Off**: Read-after-write eventual consistency window (e.g., 50ms - 200ms) where immediate UI refreshes may display pre-update data unless client-side optimistic UI updates are used.
+
+---
+
+#### Principle 3: Complete Projector Idempotency & Version Fencing
+* **Design Philosophy & Epistemology**:
+  Event delivery over networks involves duplicates and out-of-order deliveries. If a read-model projection applies an older event over a newer event, user queries will display corrupt, backward-traveling state. The philosophy is Version-Fenced Monotonic Projections: read models reject stale events and guarantee idempotency.
+* **Threat Vector Defeated**: Corrupted read models displaying outdated customer balances or canceled order statuses caused by duplicate or out-of-order event consumption.
+* **Storage & State Invariant**:
+```text
+ReadModel.Version == Aggregate.Version
+Project(Event) is executed ONLY IF Event.Version == ReadModel.Version + 1
+```
+* **Implementation Mechanism**:
+  Every read model row tracks `last_applied_version` and `last_event_id`. The projection executes an atomic conditional update: `UPDATE read_model SET data = $1, last_applied_version = $2 WHERE id = $3 AND last_applied_version < $2`. Duplicate or stale events affect 0 rows and are safely discarded.
+* **Non-Negotiable Trade-Off**: Out-of-order gap handling. If event version 5 arrives before version 4, the projector must either buffer version 5 or route it to a delayed retry queue until version 4 arrives.
+
+---
+
+#### Principle 4: Deterministic Read-Model Rebuildability
+* **Design Philosophy & Epistemology**:
+  A read model is not a source of truth; it is a disposable projection of historical events. If a read database is corrupted, suffers index corruption, or requires a new schema layout, the system must not require data migration scripts. The philosophy is Disposable Views: any read model can be completely dropped and reconstructed from the beginning of the event log.
+* **Threat Vector Defeated**: Catastrophic data loss when read databases fail or schema redesigns require massive, risky SQL migration scripts across live tables.
+* **Storage & State Invariant**:
+```text
+Replay(AllDomainEvents) ==> Identical ReadModel State
+```
+* **Implementation Mechanism**:
+  The platform provides a replay tool that resets consumer group offsets to 0 on a shadow read table. The projector reprocesses the entire history of domain events, building the new read model concurrently. Once caught up, an atomic table swap (`ALTER TABLE ... RENAME`) cuts over live read traffic with zero downtime.
+* **Non-Negotiable Trade-Off**: Event log retention costs and CPU processing overhead during full historical replays of high-volume event streams.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **How does an application handle the 'Read-Your-Own-Writes' consistency problem in a CQRS architecture?**
+   * *Answer*: When a client mutates state, immediate read queries might hit a read model that has not yet processed the event. Solutions include: returning the updated aggregate directly in the command response, client-side optimistic UI updates, or passing the transaction version in the read query so the read model waits or reads from the write replica.
+2. **Why is it an architectural disaster to let read models publish domain events?**
+   * *Answer*: Read models are eventual projections, not sources of truth. Allowing read models to emit domain events creates cascading feedback loops, duplicate event storms, and destroys the single-writer principle of domain aggregate roots.
+3. **What happens if the read database crashes while the write database continues processing transactions?**
+   * *Answer*: The write plane continues accepting commands and committing transactions to PostgreSQL and Kafka. Read operations will fail or return cached data. Once the read database recovers, projectors resume consumption from their last committed offset, catching up seamlessly.
+
+---
 ## Authoritative References & Production Citations
 
 * **[Greg Young: CQRS Documents & Architectural Description](https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf)**

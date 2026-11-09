@@ -175,21 +175,75 @@ Writing to a database and publishing to a message broker in the same application
 
 The application writes exclusively to its local PostgreSQL tables inside a standard ACID transaction. PostgreSQL's internal Write-Ahead Log (WAL) records the committed rows. A CDC daemon (Debezium via pgoutput logical decoding) streams changes directly from the database WAL, extracts row deltas (before/after states), and forwards them into Kafka partitions with absolute transactional fidelity and zero application code overhead.
 
-### 3. Core Architectural Principles
+### 3. Core Architectural Principles & Systems Philosophy
 
-* **Single Source of Truth**: The database WAL is the sole, authoritative source of state transitions; dual-writing across network boundaries is architecturally forbidden.
-* **Zero Transactional Tax**: Business transactions commit at native relational database speed without waiting for broker ACKs or distributed consensus protocols.
-* **Complete Intermediate State Capture**: Every intermediate state mutation and hard row deletion is captured linearly, eliminating the blind spots inherent in periodic table polling.
-* **At-Least-Once Delivery Resilience**: WAL replication slots maintain continuous disk watermarks, acknowledging progress only after downstream brokers confirm message durability.
-
-### 4. The Architect's Meta-Questions (Failure-First Evaluation)
-
-1. **Why is CDC superior to database polling (SELECT * WHERE updated_at > last_poll)? (Polling misses interim updates (if a status changes from Pending -> Processing -> Completed between polls), imposes CPU lock overhead, and cannot capture hard DELETE operations).**
-2. **What is the operational risk of a lingering replication slot? (If the CDC consumer stops reading, PostgreSQL retains WAL segments on disk indefinitely, eventually filling the entire host disk and bringing down the database).**
-3. **How do we handle schema migrations in CDC? (We utilize Schema Registry synchronization and forward-compatible Avro schemas so WAL parsers never crash on newly introduced database columns).**
+#### Principle 1: Transactional Log Asynchrony (Zero Write-Plane Pollution)
+* **Design Philosophy & Epistemology**:
+  Querying operational database tables to detect changes creates locking contention, pollutes buffer caches, and degrades client transactions. The philosophy is Physical Log Asynchrony: the database's internal Write-Ahead Log (WAL) is the single immutable source of physical change. The application plane mutates state; the integration plane tails the physical storage log without ever executing a SQL SELECT query.
+* **Threat Vector Defeated**: Database lock contention, index degradation, and query cache thrashing caused by application polling loops querying operational tables.
+* **Storage & State Invariant**:
+```text
+Isolation(AppWrites, ChangeCapture) == 100%
+LockTime(ChangeCapture) == 0ms on operational business tables
+```
+* **Implementation Mechanism**:
+  PostgreSQL's logical replication engine (`pgoutput`) decodes committed transaction WAL records into binary logical events. The Change Data Capture connector (Debezium) connects as a replication client, streaming committed changes directly from WAL files on disk without touching relational query engines.
+* **Non-Negotiable Trade-Off**: Replication slot storage lag risk. If the CDC engine falls behind or halts, PostgreSQL retains unconsumed WAL files on disk, risking volume exhaustion.
 
 ---
 
+#### Principle 2: Watermark Progression & Ordered LSN Delivery
+* **Design Philosophy & Epistemology**:
+  A change capture system that emits events out of chronological sequence corrupts all downstream projections. The philosophy is Strict Total Order of Committed Transactions: the Log Sequence Number (LSN) represents the immutable physical arrow of time. Changes must be published strictly in LSN order, and acknowledgments must advance monotonically.
+* **Threat Vector Defeated**: State corruption in downstream materialized views and read models caused by out-of-order event publishing from replication streams.
+* **Storage & State Invariant**:
+```text
+LSN(tx[i]) < LSN(tx[i+1]) ==> PublishOrder(tx[i]) < PublishOrder(tx[i+1])
+ConfirmedFlushLSN <= KafkaAcknowledgedLSN
+```
+* **Implementation Mechanism**:
+  The CDC connector serializes mutations per database transaction according to their physical LSN. The PostgreSQL replication slot acknowledgment (`confirmed_flush_lsn`) is updated only after the target Kafka broker confirms an `acks=all` write on all in-sync replicas.
+* **Non-Negotiable Trade-Off**: Single-threaded replication stream throughput per database slot, bounding ingestion rate to the processing speed of a single LSN sequencer.
+
+---
+
+#### Principle 3: Schema Registry Co-Evolution
+* **Design Philosophy & Epistemology**:
+  Database DDL migrations alter relational table structures instantly, but downstream consumers running older software versions cannot parse unexpected column additions or type changes. The philosophy is Synchronized Schema Governance: schema modifications captured from the database log must be validated against a central schema registry before events are forwarded to message brokers.
+* **Threat Vector Defeated**: Downstream consumer crashes and poison-pill partition blockages caused by unannounced database column renames, drops, or type alterations.
+* **Storage & State Invariant**:
+```text
+Compatibility(SchemaVersion(Event), SchemaVersion(Consumer)) == TRUE
+EventRejected if SchemaEvolutionCheck fails
+```
+* **Implementation Mechanism**:
+  The CDC pipeline intercepts DDL statements in the replication stream. New table structures are registered with the Schema Registry under BACKWARD or FULL compatibility modes. If a DDL change violates compatibility, the pipeline halts and alerts before emitting poison events to Kafka.
+* **Non-Negotiable Trade-Off**: DDL migration coupling. Database migrations must adhere strictly to expand-and-contract evolution rules to avoid halting the CDC pipeline.
+
+---
+
+#### Principle 4: Tombstone Semantics & Hard Deletion Propagation
+* **Design Philosophy & Epistemology**:
+  In distributed event streams, a deleted entity must be actively communicated, not silently forgotten. If a database row is deleted, downstream materialized views will retain stale data unless explicitly instructed to purge. The philosophy is Explicit Erasure: physical deletions in the database are transformed into Kafka tombstone events (null payload with entity key) to drive log compaction.
+* **Threat Vector Defeated**: Zombie data in downstream read models where deleted database records persist indefinitely in downstream caches and search indices.
+* **Storage & State Invariant**:
+```text
+Database DELETE(EntityKey) ==> Kafka Message(Key=EntityKey, Value=NULL, Tombstone=TRUE)
+```
+* **Implementation Mechanism**:
+  The CDC engine intercepts `DELETE` operations from the WAL and emits a final event containing the entity's primary key and a `null` payload. Kafka log compaction identifies the tombstone and permanently purges the key during partition cleaning cycles.
+* **Non-Negotiable Trade-Off**: Downstream consumers must explicitly handle `null` payloads without crashing or throwing null-pointer exceptions.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is CDC log tailing superior to database triggers that write changes to an audit table?**
+   * *Answer*: Database triggers execute synchronously within the user's transaction, adding latency and lock contention to operational writes. CDC log tailing reads committed WAL pages asynchronously on disk, adding zero latency to user transactions.
+2. **What happens if a PostgreSQL replication slot is left active while the CDC consumer is offline for 48 hours?**
+   * *Answer*: PostgreSQL holds all WAL files generated during those 48 hours to preserve the replication slot, consuming gigabytes of disk space until the disk fills up and PostgreSQL crashes. Monitoring replication slot lag is an essential operational invariant.
+3. **How does the CDC pipeline handle high-volume bulk update operations (e.g., UPDATE 1,000,000 rows)?**
+   * *Answer*: Bulk updates generate 1,000,000 discrete WAL mutation records, creating a massive spike in CDC processing lag. Production systems mitigate this by throttling bulk migrations in smaller transactional batches.
+
+---
 ## Authoritative References & Production Citations
 
 * **[Martin Kleppmann: Turning the Database Inside Out with Apache Samza / Kafka](https://www.youtube.com/watch?v=fU9hR3kiOK0)**

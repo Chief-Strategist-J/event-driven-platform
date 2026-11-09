@@ -202,21 +202,76 @@ Executing heavy analytical queries or real-time user dashboard aggregations dire
 
 An asynchronous projection worker listens to relevant domain event topics. Upon receiving an event, it extracts entity mutations, validates the monotonic version sequence, and executes an atomic UPSERT into the read-optimized projection table. The projection table is indexed specifically for target query patterns (e.g. JSONB GIN indexes, composite tenant keys). If the projection needs rebuilding, the worker replays events into a shadow table and executes an atomic rename.
 
-### 3. Core Architectural Principles
+### 3. Core Architectural Principles & Systems Philosophy
 
-* **Deterministic Stream Derivation**: Materialized views must be derived purely from the sequential replay of domain events, guaranteeing exact reproducible state.
-* **Monotonic Version Guarding**: Every projection record stores its last applied event version and rejects stale updates that would regress the view state.
-* **Zero Write-Contention Isolation**: Read projections reside in dedicated, denormalized storage schemas completely decoupled from core transactional write entities.
-* **Blue-Green Table Rebuilds**: Structural projection migrations execute against shadow tables, cutting over atomically only after catching up to the live stream.
-
-### 4. The Architect's Meta-Questions (Failure-First Evaluation)
-
-1. **What happens if an event projection worker fails halfway through updating multiple read tables? (The worker executes the projection updates within a single local transaction alongside the consumer inbox record, rolling back completely on failure).**
-2. **How do we rebuild a materialized view when schema requirements change without taking the view offline? (We run a blue-green rebuild: replay past events from offset 0 into a shadow table my_view_v2, catch up to live traffic, and swap table names atomically).**
-3. **Why not use PostgreSQL native MATERIALIZED VIEWS with REFRESH MATERIALIZED VIEW? (PostgreSQL native view refreshes are heavy, batch-driven operations that scan the entire source table; streaming materialized views update incrementally in sub-milliseconds per event).**
+#### Principle 1: Deterministic Stream Projection Replay
+* **Design Philosophy & Epistemology**:
+  A materialized view is an ephemeral, derivative cache of history, not an authoritative source of truth. If a database index corrupts or the view schema evolves, you must never patch it with manual SQL updates. The philosophy is Complete Derivability from History: any materialized view must be capable of being completely dropped and rebuilt from the raw event stream with zero loss of truth.
+* **Threat Vector Defeated**: Permanent view corruption and data loss caused by operational accidents, unversioned schema migrations, or corrupted search indices.
+* **Storage & State Invariant**:
+```text
+Replay(AllEvents(Stream)) ==> MaterializedView_State(Deterministic)
+Direct SQL mutations on MaterializedView tables strictly prohibited
+```
+* **Implementation Mechanism**:
+  View tables are updated exclusively by consumer projectors consuming Kafka event streams. Rebuild tooling spins up shadow tables (`view_shadow_v2`), streams historical events from offset 0, and executes an atomic atomic table rename (`ALTER TABLE ... RENAME`) once caught up.
+* **Non-Negotiable Trade-Off**: Historical event storage requirements on Kafka or tiered object storage (S3) to enable full replays.
 
 ---
 
+#### Principle 2: Monotonic Version Guarding (Stale-Write Rejection)
+* **Design Philosophy & Epistemology**:
+  In an asynchronous event network, duplicate and out-of-order events will arrive at the view projection. If an older event updates a newer view record, the query layer displays corrupt, backward-traveling state. The philosophy is Strict Version Monotonicity: a view row may only be updated if the incoming event's version strictly exceeds the row's currently recorded version.
+* **Threat Vector Defeated**: View state corruption where stale event retries overwrite newer state (e.g., an OrderPending event overwrites an OrderShipped view).
+* **Storage & State Invariant**:
+```text
+UpdateView(Row) permitted ONLY IF IncomingEvent.Version > Row.LastAppliedVersion
+WHERE id = $1 AND last_applied_version < $2
+```
+* **Implementation Mechanism**:
+  Every view table includes a `last_applied_version` column. Projection updates execute SQL with optimistic locking predicates: `UPDATE customer_summary SET balance = $1, last_applied_version = $2 WHERE customer_id = $3 AND last_applied_version < $2`. Stale events affect 0 rows and are safely skipped.
+* **Non-Negotiable Trade-Off**: Requires every domain event to carry a strictly increasing monotonic aggregate version number.
+
+---
+
+#### Principle 3: Zero Write-Plane Contention Isolation
+* **Design Philosophy & Epistemology**:
+  Running heavy, multi-table analytical JOIN queries against transactional write databases creates lock contention, degrades user write latency, and triggers transaction rollbacks. The philosophy is Physical Read-Write Isolation: transactional writes execute against normalized tables; analytical queries execute against completely isolated, denormalized materialized view tables.
+* **Threat Vector Defeated**: Transactional database lock exhaustion and user API latency spikes caused by heavy analytical queries locking operational tables.
+* **Storage & State Invariant**:
+```text
+TransactionalWritePlane and MaterializedViewPlane reside on isolated database connections / clusters
+Query locks on MaterializedViews have 0% impact on operational ACID transactions
+```
+* **Implementation Mechanism**:
+  Projectors stream events from Kafka and write directly to dedicated read replica databases, Elasticsearch clusters, or Redis caches. Client read APIs query the materialized view cluster exclusively, completely bypassing the write database.
+* **Non-Negotiable Trade-Off**: Read-after-write eventual consistency delay (typically 20ms - 200ms) between write transaction commit and read-view availability.
+
+---
+
+#### Principle 4: Blue-Green Shadow View Rebuilding
+* **Design Philosophy & Epistemology**:
+  Altering the schema of a 100-million-row materialized view in-place requires long-running `ALTER TABLE` locks that lock out queries and risk table corruption. The philosophy is Zero-Downtime Blue-Green Cutover: build the new schema in a parallel shadow table, catch up with live events, and switch pointers atomically.
+* **Threat Vector Defeated**: Multi-hour query downtime and table lock timeouts during schema migrations on high-traffic view tables.
+* **Storage & State Invariant**:
+```text
+ActiveView availability == 100% during migration
+Cutover time == Atomic Metadata Rename (sub-millisecond)
+```
+* **Implementation Mechanism**:
+  The migration engine creates `view_shadow`. A projection worker consumes historical events from the beginning of the stream to populate `view_shadow`. Once lag reaches zero, an atomic transaction renames `view_active` to `view_legacy` and `view_shadow` to `view_active`.
+* **Non-Negotiable Trade-Off**: Temporary 2x storage overhead during the migration while both active and shadow tables coexist.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is storing pre-computed aggregations in a materialized view superior to querying normalized tables with SQL JOINs?**
+   * *Answer*: Pre-computed materialized views shift the computational cost from read-time to write-time. Instead of 1,000 users executing expensive 10-table JOIN queries every second, the projection calculates the joined result once on event receipt, serving reads in sub-5ms O(1) lookups.
+2. **What happens if a projection worker crashes mid-way through updating a materialized view?**
+   * *Answer*: Because the update is guarded by monotonic version predicates and the Kafka offset is committed only after the database write succeeds, the recovered worker reprocesses the event, safely reapplies the idempotent update, and advances without corrupting the view.
+3. **How do you detect if a materialized view has silently drifted from primary database state?**
+   * *Answer*: A background drift detector periodically computes cryptographic checksums across random samples of primary aggregates and compares them with the corresponding materialized view records, alerting if drift is detected.
+
+---
 ## Authoritative References & Production Citations
 
 * **[Martin Kleppmann: Designing Data-Intensive Applications (Chapter 11: Stream Processing)](https://dataintensive.net/)**

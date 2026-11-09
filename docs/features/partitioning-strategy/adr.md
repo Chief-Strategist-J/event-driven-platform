@@ -169,21 +169,76 @@ Apache Kafka achieves horizontal throughput by splitting topics into partitions 
 
 The platform applies a deterministic Murmur2 hashing algorithm to the business partition key (e.g. hash(tenant_id + ':' + entity_id) % num_partitions). This guarantees two invariants: (1) All events for the same aggregate instance land on the exact same partition in linear order. (2) Events are uniformly distributed across the cluster. For high-volume hot entities, bounded pseudo-random salting is applied.
 
-### 3. Core Architectural Principles
+### 3. Core Architectural Principles & Systems Philosophy
 
-* **Deterministic Hash Sharding**: Partition routing uses deterministic Murmur2 hashing, ensuring identical entity keys always land on the exact same partition.
-* **High-Cardinality Key Selection**: Partition keys must combine tenant and entity identifiers to maximize entropy and eliminate broker skew.
-* **Salted Hot-Spot Mitigation**: Extremely hot keys that exceed single-partition throughput must be salted with bounded deterministic suffixes to distribute load.
-* **Immutable Key Assignment**: An entity's partition key must never mutate during its lifecycle, preserving total sequential ordering from creation to archival.
-
-### 4. The Architect's Meta-Questions (Failure-First Evaluation)
-
-1. **What happens to message ordering if we increase the partition count of an existing Kafka topic? (Changing partition count changes the modulus ($hash(key) \% N$); existing entity keys will hash to different partitions, destroying ordering for future messages relative to historical ones).**
-2. **Why must we hash composite keys (tenant_id + entity_id) rather than tenant_id alone? (Hashing tenant_id alone routes all events for a giant enterprise tenant to a single partition, creating a severe hot-spot bottleneck).**
-3. **How do we detect partition skew before it causes an outage? (We monitor per-partition byte rate and consumer lag metrics; significant variance across partition lag indicates key skew).**
+#### Principle 1: Deterministic Causal Key Hash Sharding
+* **Design Philosophy & Epistemology**:
+  Kafka guarantees message order within a single partition, never across partitions. If events for the same entity are scattered across random partitions, causal order is destroyed. The philosophy is Deterministic Entity-Key Affinity: all events belonging to the same causal entity must hash to the exact same partition for their entire lifecycle.
+* **Threat Vector Defeated**: Out-of-order state corruption where an OrderCancelled event is processed before an OrderPlaced event because they landed on different partitions.
+* **Storage & State Invariant**:
+```text
+Partition = Murmur2(EntityKey) % TotalPartitionCount
+All events for EntityKey mapped to identical partition index
+```
+* **Implementation Mechanism**:
+  Producers strictly specify the entity's primary business identifier (e.g., `account_id`) as the message key. Kafka's default Murmur2 partitioner hashes the key to ensure strict single-partition FIFO serialization.
+* **Non-Negotiable Trade-Off**: Throughput per entity is bounded by the processing speed of a single consumer reading that partition.
 
 ---
 
+#### Principle 2: High-Cardinality Key Selection (Hot-Spot Prevention)
+* **Design Philosophy & Epistemology**:
+  Choosing a low-cardinality partitioning key (such as `country_code` or `status`) guarantees disastrous traffic skew: 80% of events route to the 'US' partition while other partitions sit idle. The philosophy is High-Entropy Cardinality: partitioning keys must have millions of distinct, evenly distributed values to spread load uniformly across the partition cluster.
+* **Threat Vector Defeated**: Hot partition collapse where a single broker and consumer are overwhelmed with 90% of traffic while sibling partitions sit completely idle.
+* **Storage & State Invariant**:
+```text
+Cardinality(PartitionKey) >> TotalPartitionCount
+TrafficDistributionVariance across partitions <= 15%
+```
+* **Implementation Mechanism**:
+  Architecture standards mandate high-cardinality keys (e.g., UUIDv7 `order_id`, `customer_id`). Linters reject low-cardinality enums as partition keys during CI code reviews.
+* **Non-Negotiable Trade-Off**: Cross-entity aggregation queries cannot be satisfied from a single partition; cross-partition analytics require multi-partition consumers or stream-table joins.
+
+---
+
+#### Principle 3: Salted Sub-Partitioning for Mega-Tenants
+* **Design Philosophy & Epistemology**:
+  In B2B platforms, a mega-tenant (e.g., Walmart) can generate 100x more traffic than standard tenants. Routing all of Walmart's events to a single partition creates a massive processing bottleneck. The philosophy is Controlled Salting: for high-volume entities where causal ordering across distinct sub-flows is unnecessary, salt the key to distribute events across a fixed sub-pool of partitions.
+* **Threat Vector Defeated**: Unavoidable partition saturation and lag explosion caused by enterprise mega-tenants outgrowing single-partition throughput limits.
+* **Storage & State Invariant**:
+```text
+PartitionKey = TenantID || '_' || (Hash(SubEntityID) % SaltFactor)
+Events for identical SubEntityID remain strictly ordered
+```
+* **Implementation Mechanism**:
+  The producer checks if the entity exceeds high-volume thresholds. If true, it appends a deterministic salt: `tenant123_subItem456`. This distributes Walmart's events across 10 dedicated partitions while preserving order within each sub-item flow.
+* **Non-Negotiable Trade-Off**: Loss of total global order across the entire tenant's event stream; order is preserved only within each salted sub-flow.
+
+---
+
+#### Principle 4: Topic Over-Partitioning Invariant
+* **Design Philosophy & Epistemology**:
+  Expanding the partition count of an active, keyed topic alters the Murmur2 hash modulo, scattering subsequent events for existing entities to new partitions and permanently destroying causal order. The philosophy is Upfront Over-Partitioning: calculate the 3-year peak horizontal scale requirement on Day 1 and provision that partition count from inception.
+* **Threat Vector Defeated**: Permanent ordering corruption caused by increasing partition counts on live, active Kafka topics.
+* **Storage & State Invariant**:
+```text
+PartitionCount(Topic) == Fixed Constant
+InitialPartitions >= MaxAnticipatedConsumerInstances * 2
+```
+* **Implementation Mechanism**:
+  Platform provisioning templates mandate sizing topics based on peak forecast (e.g., 30 or 60 partitions). Increasing partitions later is forbidden without a formal blue/green topic migration.
+* **Non-Negotiable Trade-Off**: Slight memory and file-handle overhead on Kafka brokers for managing higher partition counts from Day 1.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is hashing on a timestamp (e.g., `YYYY-MM-DD-HH`) a catastrophic partitioning strategy?**
+   * *Answer*: Hashing on a timestamp routes 100% of all platform traffic during that hour to a single partition, completely overloading one broker while all other partitions sit 100% idle. High-entropy entity IDs must be used instead.
+2. **How does Kafka handle message ordering when a message is published without a key (key = null)?**
+   * *Answer*: When key is null, Kafka's default partitioner uses sticky round-robin partitioning, distributing batches evenly across all partitions. This maximizes throughput but provides zero entity-level ordering guarantees.
+3. **What is the maximum number of consumer pods that can parallelize work on a topic with 32 partitions?**
+   * *Answer*: Exactly 32 consumer pods. Any additional consumer pods beyond 32 will sit completely idle, as Kafka assigns each partition to at most one consumer instance within a consumer group.
+
+---
 ## Authoritative References & Production Citations
 
 * **[Martin Kleppmann: Designing Data-Intensive Applications (Chapter 6: Partitioning)](https://dataintensive.net/)**

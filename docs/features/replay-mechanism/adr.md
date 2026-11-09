@@ -196,21 +196,76 @@ When consumer code contains a bug that corrupts read models, or when a downstrea
 
 The replay coordinator receives an authorized Replay Request specifying topic, partition, and target boundary (timestamp or offset). It signals active consumers to pause forward processing, reset their partition offsets backwards via seek(), and begin replaying events. During replay, external side-effects (e.g. sending emails, debiting credit cards) are strictly suppressed using in-memory idempotency flags, and projections are written to shadow tables.
 
-### 3. Core Architectural Principles
+### 3. Core Architectural Principles & Systems Philosophy
 
-* **Deterministic Temporal Boundaries**: Replays must be bounded by explicit historical time windows or offset ranges, preventing unbounded event flooding.
-* **Downstream Side-Effect Fencing**: During a historical replay, external real-world side-effects (emails, SMS, payment calls) must be explicitly suppressed.
-* **Shadow Projection Reconstruction**: Replays intended to rebuild state must target isolated shadow tables, swapping atomically into production only after catching up.
-* **Audit-Logged Execution Authority**: Historical replays modify state and must require elevated security authorization accompanied by tamper-evident audit logs.
-
-### 4. The Architect's Meta-Questions (Failure-First Evaluation)
-
-1. **How do we prevent a historical replay from accidentally triggering thousands of real-world emails or payment charges? (Replay contexts inject a deterministic execution flag (is_replay=true); downstream notification and payment adapters inspect this flag and drop side-effects).**
-2. **What happens if new live events arrive while a historical replay is in progress? (Replay workers write to an isolated shadow table my_view_rebuild; once the replay reaches live head offset, an atomic pointer swap switches traffic to the new table).**
-3. **Why must triggering a replay require multi-signature authorization? (Replaying events alters downstream state and consumes heavy cluster compute; an unauthorized or mistaken replay can destabilize healthy production services).**
+#### Principle 1: Bounded Temporal and Offset Windowing
+* **Design Philosophy & Epistemology**:
+  Replaying an unbounded event stream from the beginning of time is a dangerous operation that can take days, overwhelm databases, and exhaust storage. The philosophy is Bounded Replay Horizons: all replay operations must specify explicit start and stop boundaries defined by ISO 8601 timestamps or discrete partition offsets.
+* **Threat Vector Defeated**: Uncontrolled historical event floods overwhelming downstream relational databases and triggering cascading platform outages during disaster recovery.
+* **Storage & State Invariant**:
+```text
+ReplayWindow == [StartOffset, EndOffset] OR [StartTimestamp, EndTimestamp]
+Processing halts automatically when EndOffset is reached
+```
+* **Implementation Mechanism**:
+  The replay harness initializes a temporary consumer with a unique consumer group (`replay-worker-<uuid>`). It uses `consumer.offsetsForTimes()` to resolve timestamps into exact offsets, seeks to the start offset, and shuts down cleanly once the end offset is acknowledged.
+* **Non-Negotiable Trade-Off**: Operational preparation: operators must determine exact failure timestamps before launching replay jobs.
 
 ---
 
+#### Principle 2: Downstream Side-Effect Suppression (Dry-Run Replays)
+* **Design Philosophy & Epistemology**:
+  Replaying historical events must reconstruct state, but must NEVER re-trigger external physical side effects (e.g., sending emails to customers, charging credit cards, or notifying third-party logistics). The philosophy is Explicit Replay Context Propagation: replayed events carry a prominent flag instructing side-effect handlers to operate in read-only mode.
+* **Threat Vector Defeated**: Catastrophic customer impact caused by historical replays re-sending 500,000 duplicate emails or double-charging credit cards.
+* **Storage & State Invariant**:
+```text
+EventHeader('x-is-replay') == 'true'
+If EventHeader('x-is-replay') == 'true' ==> SkipExternalSideEffects()
+```
+* **Implementation Mechanism**:
+  The replay harness injects `x-is-replay: true` into Kafka record headers. Consumer side-effect middleware checks this header: state updates to databases proceed normally, while outbound notifications and payment calls are short-circuited and logged as dry-runs.
+* **Non-Negotiable Trade-Off**: Requires all consumer codebases to strictly respect the `x-is-replay` header before triggering side effects.
+
+---
+
+#### Principle 3: Shadow Table State Reconstruction
+* **Design Philosophy & Epistemology**:
+  Replaying events directly into live, active production tables while live traffic is actively mutating them introduces race conditions and corrupts user sessions. The philosophy is Isolated Shadow Reconstruction: replay historical events into a separate shadow table; verify integrity; cutover atomically.
+* **Threat Vector Defeated**: Live database corruption and race conditions caused by mixing historical replay writes with concurrent real-time user mutations.
+* **Storage & State Invariant**:
+```text
+ReplayTargetTable == 'table_shadow_v2'
+LiveProductionTable remains 100% isolated until Cutover
+```
+* **Implementation Mechanism**:
+  The replay worker targets a newly provisioned shadow table. Once the replay catches up with the real-time stream, an atomic SQL transaction renames the tables (`ALTER TABLE ... RENAME`), achieving instantaneous zero-downtime cutover.
+* **Non-Negotiable Trade-Off**: Temporary 2x database disk storage requirement during shadow table reconstruction.
+
+---
+
+#### Principle 4: Multi-Signature Administrative Audit Authority
+* **Design Philosophy & Epistemology**:
+  An event replay alters downstream reality and has massive compliance and operational consequences. Allowing a single engineer to trigger a mass replay without peer review is an unacceptable security and operational risk. The philosophy is Dual-Custody Administrative Governance: replays require multi-party approval and immutable audit logging.
+* **Threat Vector Defeated**: Accidental or malicious mass event replays triggered by rogue operators or fat-finger terminal mistakes.
+* **Storage & State Invariant**:
+```text
+ReplayExecution requires Approval(Engineer_1) AND Approval(Engineer_2)
+AuditRecord permanently logged before replay starts
+```
+* **Implementation Mechanism**:
+  The replay API requires cryptographically signed approval tokens from two independent engineers. The approval, target topic, offset range, and rationale are permanently committed to the immutable audit trail before the replay worker can boot.
+* **Non-Negotiable Trade-Off**: Administrative latency during emergency production incident remediation.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is using a temporary consumer group ID mandatory when replaying events for a specific service?**
+   * *Answer*: If you reset the offsets of the active production consumer group, the active service immediately stops processing live events and begins replaying historical data, disrupting real-time production traffic. Using a temporary consumer group isolates the replay completely.
+2. **How does a consumer know where to stop replaying?**
+   * *Answer*: The replay orchestrator queries the current High Watermark offset of each partition before starting. It instructs the replay consumer to terminate processing the moment `current_offset >= high_watermark`.
+3. **What happens if a historical event schema is incompatible with current consumer code during a replay?**
+   * *Answer*: The consumer's in-flight Upcaster pipeline transforms the historical v1 schema into the current v3 schema in memory before passing it to the business logic, ensuring seamless replay across schema eras.
+
+---
 ## Authoritative References & Production Citations
 
 * **[Martin Fowler: Event Sourcing Replay Patterns](https://martinfowler.com/eaaDev/EventSourcing.html)**

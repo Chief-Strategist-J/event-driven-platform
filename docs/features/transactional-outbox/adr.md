@@ -201,21 +201,93 @@ When an application updates a database and publishes an event to a message broke
 
 The service writes its domain entity mutations and its outgoing events into a local database outbox table inside the exact same relational ACID transaction. If the transaction rolls back, both are rolled back; if it commits, both commit atomically. An asynchronous CDC tailer (Debezium reading PostgreSQL's logical replication stream) streams records from the outbox table directly into Kafka, guaranteeing at-least-once delivery with zero application latency overhead.
 
-### 3. Core Architectural Principles
+### 3. Core Architectural Principles & Systems Philosophy
 
-* **Local Database ACID Atomicity**: Domain entity state mutations and outgoing event outbox records commit within the exact same database transaction.
-* **Asynchronous WAL Change Capture**: The outbox table is relayed asynchronously to the broker via PostgreSQL logical replication / Debezium rather than poll-and-delete loops.
-* **At-Least-Once Broker Forwarding**: The outbox relay guarantees at-least-once message forwarding; message deduplication is explicitly delegated to downstream idempotent consumers.
-* **Partitioned Compaction & Purge Lifecycle**: The outbox table is partitioned by date/time, enabling zero-impact partition truncations to prevent disk bloat.
-
-### 4. The Architect's Meta-Questions (Failure-First Evaluation)
-
-1. **Why is CDC-based Outbox superior to a polling Outbox (SELECT * FROM outbox WHERE processed = false)? (Polling creates database lock contention, suffers polling latency lag, fails to capture hard deletions, and creates indexing overhead as the outbox table grows).**
-2. **How do we prevent the outbox table from growing endlessly and exhausting database disk? (We partition the outbox table by timestamp (e.g. daily partitions) and drop or truncate old partitions after CDC watermarks confirm delivery).**
-3. **How do we handle duplicate message publication from the outbox? (The outbox relay guarantees at-least-once delivery; all downstream consumers must implement the Idempotent Consumer pattern with an inbox table).**
+#### Principle 1: Locality of Invariant Enforcement (The Dual-Write Impossibility)
+* **Design Philosophy & Epistemology**:
+  Distributed consistency cannot span heterogeneous storage boundaries without heavy consensus protocols (2PC/XA). Because modern message brokers intentionally reject distributed transactions, any application thread attempting to write to a relational database and then emit to Kafka operates under an unresolvable race condition. The core philosophy is Locality of Invariant Enforcement: enforce atomic consistency exclusively within the single storage engine capable of ACID guarantees, deferring cross-network communication to asynchronous observation.
+* **Threat Vector Defeated**: Split-brain state divergence. Specifically: 1) Silent Loss: Database commits balance deduction, application dies before network send; downstream systems never receive notice. 2) Phantom Events: Application emits event to Kafka, database transaction rolls back due to constraint violation; downstream systems fulfill orders that never existed.
+* **Storage & State Invariant**:
+```text
+State(DomainEntity) AND State(OutboxRecord) IN Transaction(ACID)
+Pr(DomainEntity_Committed AND NOT OutboxRecord_Committed) == 0
+```
+* **Implementation Mechanism**:
+  The business service acquires a database connection from the pool. A single SQL transaction (BEGIN ... COMMIT) wraps both the aggregate state mutation and the append-only outbox insert. Zero network I/O to Kafka occurs inside the application request-response thread.
+* **Non-Negotiable Trade-Off**: Database write amplification. Every business event duplicates storage space inside the relational database prior to publication, increasing write IOPS and table churn.
 
 ---
 
+#### Principle 2: Temporal De-coupling & WAL-Level Event Extraction
+* **Design Philosophy & Epistemology**:
+  Application-level polling (SELECT * FROM outbox WHERE status = 'PENDING' FOR UPDATE SKIP LOCKED) is an anti-pattern. Pollers induce relational table contention, pollute buffer pools, and suffer from commit-order visibility holes (where transaction T1 with an earlier timestamp commits after transaction T2, causing pollers to skip T1 permanently). The mature philosophy embraces Storage Log Tailing: the database's internal Write-Ahead Log (WAL) is the ultimate, immutable chronological record of truth. The application mutates state; the infrastructure observes the write log.
+* **Threat Vector Defeated**: Database CPU exhaustion, lock queue starvation, and skipped-transaction visibility gaps.
+* **Storage & State Invariant**:
+```text
+LSN(tx[i]) < LSN(tx[i+1]) ==> PublishOrder(tx[i]) < PublishOrder(tx[i+1])
+LSN(ReplicationSlotFlush) <= LSN(KafkaAcknowledgedAck)
+```
+* **Implementation Mechanism**:
+  PostgreSQL logical replication using the `pgoutput` plugin decodes outbox table row commits directly from disk WAL pages into binary logical changes. Debezium / CDC tailer extracts rows, routes them by `aggregate_type` to Kafka topics, and only advances the PostgreSQL replication slot watermark (`confirmed_flush_lsn`) when Kafka confirms an `acks=all` ISR write.
+* **Non-Negotiable Trade-Off**: Disk volume starvation vulnerability. If Kafka becomes unreachable, PostgreSQL holds unconsumed WAL segments on disk. If unmonitored, WAL accumulation exhausts storage and forces the database into read-only emergency mode.
+
+---
+
+#### Principle 3: Honest Delivery Semantics (The Fallacy of Exactly-Once)
+* **Design Philosophy & Epistemology**:
+  Exactly-Once Delivery over an uncoordinated network is physically impossible (The Two Generals' Problem). The design philosophy is Honest Delivery Semantics: the producer guarantees At-Least-Once delivery, and intentionally delegates deduplication to the consumer. Striving for broker-side exactly-once across foreign storage engines produces fragile, complex distributed state machines.
+* **Threat Vector Defeated**: Message loss during transient network partitions, broker leader re-elections, or worker crash-recovery cycles.
+* **Storage & State Invariant**:
+```text
+DeliveryCount(Event[k]) >= 1 for all k in CommittedTransactions
+State(Consumer, History) == State(Consumer, History + DuplicateEvent)
+```
+* **Implementation Mechanism**:
+  The relay worker sends events with `acks=all` and exponential backoff retry. If the broker accepts the event but the network drops the ACK before reaching the relay worker, the worker retries, producing duplicate events on Kafka. Every outbox event includes an immutable, monotonic UUIDv7 `event_id` and an integer `aggregate_version` in its headers.
+* **Non-Negotiable Trade-Off**: Network and consumer CPU amplification. Every downstream consumer must implement an inbox ledger or monotonic version guard to discard duplicate deliveries.
+
+---
+
+#### Principle 4: Causal Ordering vs System Gridlock (Per-Aggregate Poison Parking)
+* **Design Philosophy & Epistemology**:
+  In an event-driven system, Per-Entity Invariants Trump Global Throughput, but Never Halt Unrelated Entities. If event k for Customer X is malformed or rejected by the broker, halting the entire outbox pipeline halts operations for 100,000 unaffected customers (total system blackout). Skipping event k and publishing k+1 for Customer X violates causal consistency (destroying Customer X's financial balance). The philosophical resolution is Per-Aggregate Poison Parking: quarantine the single failing entity while letting the remaining universe proceed.
+* **Threat Vector Defeated**: Complete system gridlock caused by poison pill messages, and out-of-order state corruption caused by naive retry-skip algorithms.
+* **Storage & State Invariant**:
+```text
+Failed(Event[A, k]) ==> Blocked(Event[A, k+n]) for all n >= 1
+Failed(Event[A, k]) does NOT block Event[B, m] for any B != A
+```
+* **Implementation Mechanism**:
+  If publishing an event fails 5 consecutive times, its status transitions to `PARKED`. The relay query enforces causal continuity via relational anti-join: `SELECT * FROM outbox o WHERE o.status = 'PENDING' AND NOT EXISTS (SELECT 1 FROM outbox p WHERE p.aggregate_id = o.aggregate_id AND p.status = 'PARKED') ORDER BY o.aggregate_version ASC LIMIT 50`.
+* **Non-Negotiable Trade-Off**: Operational complexity. Parked aggregates require human intervention or automated dead-letter repair workflows to unblock the quarantined entity.
+
+---
+
+#### Principle 5: Disposable Temporal Epochs (Zero-Lock Table Lifecycle)
+* **Design Philosophy & Epistemology**:
+  High-throughput event systems inevitably drown in their own historical waste if data lifecycle is an afterthought. Executing `DELETE FROM outbox WHERE status = 'PUBLISHED'` on a high-concurrency table generates massive PostgreSQL dead-tuple bloat, triggers aggressive table-locking autovacuum runs, and eventually brings transaction throughput to zero. The philosophy is Destruction via Partition Dropping: treat physical storage as disposable temporal epochs.
+* **Threat Vector Defeated**: Database performance degradation, transaction wraparound vacuum stalls, and index fragmentation caused by relational dead tuples.
+* **Storage & State Invariant**:
+```text
+OutboxTable == Union(DailyPartitions)
+Cost(Drop(ExpiredPartition)) == O(1) instantaneous metadata operation
+```
+* **Implementation Mechanism**:
+  The `outbox` table is declaratively partitioned by `created_at` (daily partitions). A scheduled background reaper verifies that all events in partition `P_{d-7}` have `status = 'PUBLISHED'` and that the CDC replication slot LSN has passed the partition boundary. The reaper executes `DROP TABLE outbox_y2026m11d02;`, reclaiming disk blocks immediately with zero lock contention.
+* **Non-Negotiable Trade-Off**: Partition management overhead and static query requirements. Partition keys must be included in primary keys and unique constraints (`(created_at, id)`).
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is Change Data Capture (CDC) via WAL tailing philosophically superior to poller queries (`SELECT ... FOR UPDATE SKIP LOCKED`)?**
+   * *Answer*: Poller queries place read-locks on transaction tables, compete with user-facing write traffic, and fail to see uncommitted transactions with earlier timestamps that commit late (commit-order hole). CDC reads the physical binary transaction log asynchronously without querying the relational engine, separating the transactional write plane from the event streaming plane.
+2. **What occurs if the broker is unavailable for 6 hours? Does the system fail fast or absorb the shock?**
+   * *Answer*: The system absorbs the shock. Because domain mutations and outbox records commit locally inside PostgreSQL, client writes continue uninterrupted at line rate. The outbox table accumulates records safely. The only limiting factor is PostgreSQL disk space for WAL retention and outbox rows.
+3. **If event k for Account #123 fails due to a schema incompatibility, why must event k+1 for Account #123 be strictly blocked from publishing?**
+   * *Answer*: If event k is AccountCreated and event k+1 is AccountDebited, publishing k+1 while k is stuck will cause downstream consumers to reject or corrupt the account state. In an aggregate stream, causal order is absolute: version k+1 cannot exist in reality without version k.
+4. **Why is it a catastrophic design flaw to publish events directly from an application thread without the outbox table?**
+   * *Answer*: It violates the Two Generals' theorem. Either the application commits to the database first and risks dying before network transmission, or it publishes to the broker first and risks database rollback. In both scenarios, the system enters an unrecoverable, undetected split-brain state.
+
+---
 ## Authoritative References & Production Citations
 
 * **[Chris Richardson: Microservices Pattern: Transactional Outbox](https://microservices.io/patterns/data/transactional-outbox.html)**

@@ -254,21 +254,76 @@ In SaaS architectures, multiple corporate customers share common compute and bro
 
 Every incoming event envelope, API payload, and database query mandates a non-empty tenant_id. The infrastructure layer validates tenant authentication tokens at ingress. In PostgreSQL, tables enforce Row-Level Security (RLS) or composite tenant primary keys (tenant_id, id). In Kafka, consumers enforce per-tenant rate-limiting tokens, preventing any single tenant from consuming more than their allocated share of worker threads.
 
-### 3. Core Architectural Principles
+### 3. Core Architectural Principles & Systems Philosophy
 
-* **Mandatory Tenant Context Ubiquity**: Every event envelope, database table, cache key, and log message must strictly mandate a validated tenant_id.
-* **Storage-Level Partition Isolation**: Multi-tenant data storage must enforce row-level security (RLS) or tenant-composite primary keys at the database kernel level.
-* **Fair Resource Rate Limiting**: Worker pools enforce per-tenant token-bucket rate limits, ensuring high-throughput tenants cannot starve neighbors.
-* **Cryptographic Tenant Key Segregation**: Sensitive tenant payloads are encrypted with unique per-tenant keys, guaranteeing cryptographic isolation even on shared disks.
-
-### 4. The Architect's Meta-Questions (Failure-First Evaluation)
-
-1. **Why not use a separate Kafka topic and database per tenant? (Per-tenant topics and databases cause massive resource overhead; brokers cannot handle 10,000+ separate topics efficiently; shared topics with logical isolation provide optimal scalability).**
-2. **How do we prevent developer error from causing cross-tenant data leakage? (PostgreSQL Row-Level Security policies automatically append WHERE tenant_id = current_setting('app.current_tenant') to all queries at the database engine level).**
-3. **What happens if Tenant A attempts to publish an event with Tenant B's ID in the payload? (The authorization gate compares the JWT tenant claim against the payload tenant_id; any divergence triggers an immediate HTTP 403 Forbidden and an audit security alert).**
+#### Principle 1: Cryptographic and Contextual Tenant Fencing
+* **Design Philosophy & Epistemology**:
+  In a multi-tenant cloud platform, cross-tenant data leakage is a fatal architectural breach. Assuming that application developers will remember to append `WHERE tenant_id = ?` to every query is a recipe for disaster. The philosophy is Defense in Depth Fencing: the tenant boundary must be stamped into message headers, enforced at consumer ingress, and hardened at the database engine layer.
+* **Threat Vector Defeated**: Catastrophic cross-tenant data contamination and compliance violations caused by application logic errors applying Tenant A's mutations to Tenant B.
+* **Storage & State Invariant**:
+```text
+Event.TenantID == ExecutionContext.TenantID == DatabaseRow.TenantID
+Cross-tenant access attempt ==> Immediate Exception + Security Alert
+```
+* **Implementation Mechanism**:
+  Consumer middleware extracts `tenant_id` from message headers, binds it to the execution context, and sets PostgreSQL session variables (`SET LOCAL app.current_tenant = $1`). PostgreSQL Row-Level Security (RLS) policies automatically restrict all SQL queries to the active tenant at the storage kernel layer.
+* **Non-Negotiable Trade-Off**: Connection pooling complexity: connections must reset tenant session variables before being returned to the pool to prevent context leakage.
 
 ---
 
+#### Principle 2: Fair-Share Token-Bucket Rate Limiting (Noisy-Neighbor Defense)
+* **Design Philosophy & Epistemology**:
+  A single rogue tenant generating 50,000 events/sec must never be permitted to saturate the event platform and starve 999 other tenants. The philosophy is Proportional Fair-Share Ingestion: allocate event bandwidth per tenant using distributed token-bucket rate limiters.
+* **Threat Vector Defeated**: Platform-wide denial of service and starvation of healthy tenants caused by a single tenant's runaway batch job or traffic spike.
+* **Storage & State Invariant**:
+```text
+TenantRate(t) <= MaxTenantBurstRate for all tenants
+PlatformCapacity >= Sum(GuaranteedTenantAllocations)
+```
+* **Implementation Mechanism**:
+  Ingress gateways enforce Redis-backed distributed token buckets per `tenant_id`. If a tenant exceeds their burst limit, their events are throttled with HTTP 429 or routed to a dedicated low-priority tenant queue, leaving primary partitions clear.
+* **Non-Negotiable Trade-Off**: Redis lookup latency on message ingress and operational complexity of tuning per-tier tenant quotas.
+
+---
+
+#### Principle 3: Cryptographic Tenant Key Segregation
+* **Design Philosophy & Epistemology**:
+  Logical isolation (tenant columns in shared tables) does not protect against catastrophic SQL injection vulnerabilities or rogue database administrators. The philosophy is Cryptographic Segregation: encrypt each tenant's sensitive payload data with a dedicated, tenant-specific Data Encryption Key (DEK).
+* **Threat Vector Defeated**: Mass data exfiltration across all tenants resulting from SQL injection flaws or compromised database backups.
+* **Storage & State Invariant**:
+```text
+Ciphertext(Tenant_A) decryptable ONLY with Key(Tenant_A)
+Key(Tenant_A) != Key(Tenant_B)
+```
+* **Implementation Mechanism**:
+  Payloads are encrypted using AES-256-GCM using per-tenant keys managed in AWS KMS / HashiCorp Vault. Even if an attacker dumps the entire PostgreSQL database, Tenant A's key cannot decrypt Tenant B's data.
+* **Non-Negotiable Trade-Off**: Key management overhead: managing thousands of individual cryptographic keys and handling cache invalidation.
+
+---
+
+#### Principle 4: Dedicated vs Shared Resource Allocation Policies
+* **Design Philosophy & Epistemology**:
+  Enterprise customers with strict compliance mandates cannot share physical Kafka topics or database tables with smaller tenants. The philosophy is Tiered Multi-Tenancy Architecture: support a hybrid topology where standard tenants share multi-tenant partitioned topics, while high-tier enterprise tenants receive dedicated topics and compute pools.
+* **Threat Vector Defeated**: Inability to sign enterprise contracts requiring physical data segregation and dedicated compliance boundaries.
+* **Storage & State Invariant**:
+```text
+StandardTier: Shared Topics with Tenant Fencing
+EnterpriseTier: Dedicated Topics (e.g., 'orders.tenant_enterprise123')
+```
+* **Implementation Mechanism**:
+  The event routing layer inspects the tenant tier in the event metadata. Standard tenants route to partitioned shared topics; enterprise tenants route to dynamically provisioned dedicated topics with isolated consumer groups.
+* **Non-Negotiable Trade-Off**: Infrastructure sprawl and higher operational maintenance costs for managing dedicated topic fleets.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is PostgreSQL Row-Level Security (RLS) vastly superior to relying on ORM-level tenant filtering?**
+   * *Answer*: ORM filtering relies on developer discipline: if an engineer forgets a `.Where("tenant_id = ?")` clause, all tenants' data is exposed. RLS enforces the filter inside the PostgreSQL kernel; any query without the matching tenant context returns zero rows, making accidental data leakage physically impossible.
+2. **How does a consumer prevent a single tenant from monopolizing consumer worker threads?**
+   * *Answer*: Consumers use keyed dispatchers that limit the maximum concurrent worker threads assigned to any single `tenant_id`, guaranteeing that other tenants always have available threads in the pool.
+3. **What happens if a tenant requests immediate deletion of all their historical data under a compliance audit?**
+   * *Answer*: Under Cryptographic Tenant Key Segregation, deleting the tenant's master key in the KMS immediately renders all historical events and database records for that tenant unrecoverable, fulfilling compliance erasure requirements instantaneously.
+
+---
 ## Authoritative References & Production Citations
 
 * **[AWS Architecture Center: SaaS Multi-Tenant Architecture Principles](https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/multi-tenancy.html)**

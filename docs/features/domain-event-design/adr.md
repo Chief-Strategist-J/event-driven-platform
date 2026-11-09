@@ -107,21 +107,77 @@ In distributed architectures, services that communicate via database sharing or 
 
 Domain events represent immutable historical facts emitted by aggregate roots. Every event payload adheres to a standardized envelope (CloudEvents v1.0.2) containing event_id (UUIDv7), tenant_id, correlation_id, causation_id, timestamp, and a strictly versioned payload schema. Aggregate roots record events during state mutation and emit them exclusively through the transactional outbox.
 
-### 3. Core Architectural Principles
+### 3. Core Architectural Principles & Systems Philosophy
 
-* **Past-Tense Immutable Factuality**: Domain events describe state transitions that have already completed; they are immutable and cannot be vetoed or rolled back.
-* **Minimal Bounded Context Coupling**: Event contracts expose only the state necessary for downstream collaboration, preventing internal domain leaks.
-* **Strict Causality & Provenance**: Every event must mandate correlation_id (business flow), causation_id (direct trigger), and idempotency_key.
-* **Monotonic Aggregate Sequencing**: Events emitted by an aggregate root must increment the aggregate version sequentially to enable deterministic projection order.
-
-### 4. The Architect's Meta-Questions (Failure-First Evaluation)
-
-1. **What is the difference between Event Notification and Event-Carried State Transfer? (Notification passes minimal IDs requiring consumers to call back for data; Event-Carried State Transfer passes full entity snapshots, enabling consumers to act completely autonomously).**
-2. **Why must domain events be named in the past tense (OrderPlaced, never PlaceOrder)? (A command is a request that can be rejected; an event is an immutable historical fact that has already happened and cannot be undone).**
-3. **How do we prevent domain models from leaking internal implementation details into external events? (We define isolated Public Event Contracts that decouple external wire formats from internal domain entities).**
+#### Principle 1: Past-Tense Historical Facthood
+* **Design Philosophy & Epistemology**:
+  Language dictates thought. An event is not a command, a request, or a speculative suggestion; it is a declaration of an incontrovertible historical fact that has already occurred in reality. The philosophy is Past-Tense Immutability: events are named with passive, past-tense verbs (OrderPlaced, PaymentCaptured). You cannot cancel an event; you can only record a subsequent event (OrderCancelled).
+* **Threat Vector Defeated**: Semantic confusion where consumers treat events as requests that can be rejected, leading to inconsistent distributed state.
+* **Storage & State Invariant**:
+```text
+EventName ends with PastTenseVerb (e.g., EntityActioned)
+Event cannot be rejected by consumer; consumer must adapt its model to reality
+```
+* **Implementation Mechanism**:
+  Platform domain models require event naming conventions enforced by schema linters in CI. Events contain timestamps, entity IDs, and the exact state delta resulting from the completed transaction.
+* **Non-Negotiable Trade-Off**: Requires compensation logic in domain workflows rather than simple synchronous error rollbacks.
 
 ---
 
+#### Principle 2: Self-Contained Domain Payloads (Event-Carried State Transfer)
+* **Design Philosophy & Epistemology**:
+  An event that contains only an ID (`OrderCreated: {id: 123}`) forces every downstream consumer to make a synchronous RPC query back to the originating service to fetch details. Under high load, this triggers catastrophic 'Thundering Herd' RPC storms that crash the core database. The philosophy is Self-Sufficiency: events carry sufficient domain state for downstream consumers to perform their functions without calling back.
+* **Threat Vector Defeated**: Thundering herd query storms and tight operational coupling where an event burst overloads the producer's read database with RPC lookups.
+* **Storage & State Invariant**:
+```text
+Payload contains core entity state snapshot required for 90% of downstream projection logic
+CallbackRPCQueries == 0 for standard workflows
+```
+* **Implementation Mechanism**:
+  Domain event schemas include entity attributes (e.g., customer details, line items, prices) alongside identity fields, enabling downstream consumers to build materialized views autonomously.
+* **Non-Negotiable Trade-Off**: Larger message payload size and potential distribution of sensitive data requiring field-level encryption.
+
+---
+
+#### Principle 3: Schema Decoupling & Semantic Versioning
+* **Design Philosophy & Epistemology**:
+  Producers and consumers deploy on independent schedules. If a producer modifies an event schema without backward compatibility, downstream consumers crash simultaneously. The philosophy is Expand and Contract: event schemas evolve through additive, non-breaking modifications; fields are never deleted or repurposed in-place.
+* **Threat Vector Defeated**: Platform-wide consumer deserialization failures caused by uncoordinated producer schema modifications.
+* **Storage & State Invariant**:
+```text
+Schema(Event[v2]) is Backward Compatible with Schema(Event[v1])
+Required fields can never be added without defaults; existing fields can never be removed in minor versions
+```
+* **Implementation Mechanism**:
+  Schemas are versioned according to Semantic Versioning and validated in CI against the Schema Registry using BACKWARD compatibility modes before PR merges are permitted.
+* **Non-Negotiable Trade-Off**: Long-term accumulation of deprecated fields in schemas requiring structured deprecation lifecycles.
+
+---
+
+#### Principle 4: Explicit Aggregate Boundary Identity
+* **Design Philosophy & Epistemology**:
+  Events originating from a domain aggregate must clearly identify the sovereign aggregate root that produced them. Without explicit aggregate identifiers and versions, downstream systems cannot detect out-of-order deliveries or enforce single-writer consistency. The philosophy is Aggregate Sovereignty: every event is anchored to its originating aggregate root ID and monotonic version number.
+* **Threat Vector Defeated**: Out-of-order state corruption and concurrent update race conditions in downstream read models.
+* **Storage & State Invariant**:
+```text
+Event.Headers.AggregateID != NULL
+Event.Headers.AggregateType != NULL
+Event.Headers.AggregateVersion == PreviousVersion + 1
+```
+* **Implementation Mechanism**:
+  Platform event envelopes mandate standard metadata headers: `aggregate_id`, `aggregate_type`, `aggregate_version`, `tenant_id`, and `occurred_at`. These headers are populated directly by the domain repository layer during event generation.
+* **Non-Negotiable Trade-Off**: Strict requirement that domain services be organized around Domain-Driven Design (DDD) aggregate boundaries.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **What is the architectural difference between a Domain Event and an Integration Event?**
+   * *Answer*: A Domain Event reflects fine-grained domain state changes within a single bounded context (e.g., OrderLineAdded). An Integration Event is a curated, stabilized external contract emitted across organizational boundaries for external consumption (e.g., OrderPlaced).
+2. **Why should floating-point numbers be strictly prohibited in financial domain events?**
+   * *Answer*: Floating-point numbers (IEEE 754) suffer from binary rounding errors during serialization across different programming languages (e.g., Go vs Java vs JavaScript), leading to cents drift in financial calculations. Financial events must use integer minor units (cents) or fixed-precision string decimals.
+3. **When is Event Notification (thin event with ID only) preferred over Event-Carried State Transfer?**
+   * *Answer*: Event Notification is preferred when the payload is massive (e.g., gigabyte video files, massive datasets) or contains highly sensitive classified data that cannot be broadcast onto shared pub/sub buses.
+
+---
 ## Authoritative References & Production Citations
 
 * **[Eric Evans: Domain-Driven Design: Tackling Complexity in the Heart of Software](https://www.oreilly.com/library/view/domain-driven-design-tackling/0321125215/)**
