@@ -4,7 +4,7 @@
 
 ---
 
-## 🧭 Visual Learning Progression
+## Visual Learning Progression
 
 ```mermaid
 flowchart TD
@@ -39,11 +39,11 @@ flowchart TD
 
 ---
 
-## 🎯 Prioritized Curriculum & Deep-Dive Reference
+## Prioritized Curriculum & Deep-Dive Reference
 
 ---
 
-### 🟢 Priority 0: Architectural Foundations, Contracts & Runtime Prerequisites
+### Priority 0: Architectural Foundations, Contracts & Runtime Prerequisites
 
 Understand the foundational platform rules, delivery semantics, error reporting standards, and local multi-service container environment before writing or modifying services.
 
@@ -74,7 +74,7 @@ Understand the foundational platform rules, delivery semantics, error reporting 
 
 ---
 
-### 🟡 Priority 1: Reliable Event Production & Change Data Capture (CDC)
+### Priority 1: Reliable Event Production & Change Data Capture (CDC)
 
 Solve the dual-write problem: ensuring business database transactions and broker publishing succeed or fail together atomically.
 
@@ -98,7 +98,7 @@ Solve the dual-write problem: ensuring business database transactions and broker
 
 ---
 
-### 🟡 Priority 2: Schema Governance & Safe Evolution
+### Priority 2: Schema Governance & Safe Evolution
 
 Ensure that distributed microservices can update schema contracts over time without breaking in-flight consumers or producing deserialization failures.
 
@@ -122,7 +122,7 @@ Ensure that distributed microservices can update schema contracts over time with
 
 ---
 
-### 🟠 Priority 3: Consumer Architecture & In-Order Processing
+### Priority 3: Consumer Architecture & In-Order Processing
 
 Learn how distributed workers consume Kafka topics reliably, prevent duplicate processing, and maintain strict chronological order per aggregate.
 
@@ -149,7 +149,7 @@ Learn how distributed workers consume Kafka topics reliably, prevent duplicate p
 
 ---
 
-### 🟠 Priority 4: Error Handling, Dead Letters & Historical Replay
+### Priority 4: Error Handling, Dead Letters & Historical Replay
 
 Build resilient, self-healing systems that isolate poison messages and recover from transient failures without operator intervention.
 
@@ -172,7 +172,7 @@ Build resilient, self-healing systems that isolate poison messages and recover f
 
 ---
 
-### 🔵 Priority 5: CQRS & Materialized Read Projections
+### Priority 5: CQRS & Materialized Read Projections
 
 Master asynchronous query view projection, cache rebuilding, and eventual consistency lag mitigation.
 
@@ -196,7 +196,7 @@ Master asynchronous query view projection, cache rebuilding, and eventual consis
 
 ---
 
-### 🟣 Priority 6: Multi-Tenancy, Security & Governance
+### Priority 6: Multi-Tenancy, Security & Governance
 
 Enforce enterprise-grade security, data privacy, and strict tenant boundaries on shared event streams.
 
@@ -222,7 +222,7 @@ Enforce enterprise-grade security, data privacy, and strict tenant boundaries on
 
 ---
 
-### 🔴 Priority 7: High-Throughput Flow Control, Distributed Telemetry & SRE
+### Priority 7: High-Throughput Flow Control, Distributed Telemetry & SRE
 
 Learn how to maintain SLA visibility and prevent cascading failures under heavy load.
 
@@ -243,7 +243,7 @@ Learn how to maintain SLA visibility and prevent cascading failures under heavy 
 
 ---
 
-## 🛠️ Step-by-Step Practical Exercises
+## Step-by-Step Practical Exercises
 
 To internalize these concepts, run through these hands-on steps:
 

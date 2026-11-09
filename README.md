@@ -4,11 +4,11 @@
 ---
 
 > [!TIP]
-> 📖 **Comprehensive Learning Roadmap**: For an in-depth, categorized study guide linking all 26 feature specifications, failure cases, business logic docs, and migrations, see the dedicated **[Learning Roadmap & Architecture Guide](docs/LEARNING_ROADMAP.md)**.
+>  **Comprehensive Learning Roadmap**: For an in-depth, categorized study guide linking all 26 feature specifications, failure cases, business logic docs, and migrations, see the dedicated **[Learning Roadmap & Architecture Guide](docs/LEARNING_ROADMAP.md)**.
 
 ---
 
-## 🎯 Master Learning Roadmap (Prioritized from Zero to Advanced)
+## Master Learning Roadmap (Prioritized from Zero to Advanced)
 
 If you want to master event-driven architecture, distributed systems patterns, and everything implemented across this repository, follow this structured, battle-tested learning path.
 
@@ -30,7 +30,7 @@ flowchart TD
 
 ### Phase Breakdown & Feature Guide
 
-#### 🟢 Priority 0: Architectural Foundations & System Invariants
+#### Priority 0: Architectural Foundations & System Invariants
 Start here to understand the foundational rules, consistency guarantees, and local development harness before touching operational code.
 
 * **What to Learn:**
@@ -49,7 +49,7 @@ Start here to understand the foundational rules, consistency guarantees, and loc
 
 ---
 
-#### 🟡 Priority 1: Reliable Event Ingestion, Outbox & CDC
+#### Priority 1: Reliable Event Ingestion, Outbox & CDC
 Understand how to solve the classic "dual-write" problem without distributed 2PC transactions.
 
 * **What to Learn:**
@@ -69,7 +69,7 @@ Understand how to solve the classic "dual-write" problem without distributed 2PC
 
 ---
 
-#### 🟡 Priority 2: Schema Governance & Safe Evolution
+#### Priority 2: Schema Governance & Safe Evolution
 Learn how upstream producers and downstream consumers evolve independently without breaking deserialization.
 
 * **What to Learn:**
@@ -87,7 +87,7 @@ Learn how upstream producers and downstream consumers evolve independently witho
 
 ---
 
-#### 🟠 Priority 3: Consumer Architecture & In-Order Processing
+#### Priority 3: Consumer Architecture & In-Order Processing
 Learn how distributed consumers reliably ingest partitions, scale across instances, and guarantee exactly-once business processing.
 
 * **What to Learn:**
@@ -109,7 +109,7 @@ Learn how distributed consumers reliably ingest partitions, scale across instanc
 
 ---
 
-#### 🟠 Priority 4: Error Handling, Dead Letters & Historical Replay
+#### Priority 4: Error Handling, Dead Letters & Historical Replay
 Learn how to handle transient network outages, poison pills, and cold data replays without blocking production partitions.
 
 * **What to Learn:**
@@ -127,7 +127,7 @@ Learn how to handle transient network outages, poison pills, and cold data repla
 
 ---
 
-#### 🔵 Priority 5: CQRS & Materialized Read Projections
+#### Priority 5: CQRS & Materialized Read Projections
 Learn how to separate transactional write models from query-optimized read models.
 
 * **What to Learn:**
@@ -145,7 +145,7 @@ Learn how to separate transactional write models from query-optimized read model
 
 ---
 
-#### 🟣 Priority 6: Multi-Tenancy, Security & Governance
+#### Priority 6: Multi-Tenancy, Security & Governance
 Learn how enterprise systems protect sensitive data and isolate multiple tenants across shared infrastructure.
 
 * **What to Learn:**
@@ -166,7 +166,7 @@ Learn how enterprise systems protect sensitive data and isolate multiple tenants
 
 ---
 
-#### 🔴 Priority 7: Durability, High-Throughput & SRE Operations
+#### Priority 7: Durability, High-Throughput & SRE Operations
 Learn how to maintain, trace, and monitor high-throughput streaming systems under extreme load.
 
 * **What to Learn:**
@@ -185,7 +185,7 @@ Learn how to maintain, trace, and monitor high-throughput streaming systems unde
 
 ---
 
-## 📚 Complete Architectural Decision Records (ADR) Catalog
+## Complete Architectural Decision Records (ADR) Catalog
 
 Every major architectural choice in this repository is recorded with its context, options considered, consequences, and invariants:
 
@@ -223,7 +223,7 @@ Every major architectural choice in this repository is recorded with its context
 
 ---
 
-## 🚀 Quickstart: Running the Entire Platform
+## Quickstart: Running the Entire Platform
 
 Requires Docker with Compose v2. The complete stack starts Postgres (logical WAL), Kafka (single-node KRaft), Apicurio Schema Registry, Debezium/Kafka Connect, runs automated SQL schema migrations, and launches the core service.
 
@@ -276,7 +276,7 @@ docker compose -f deploy/docker/compose/docker-compose.all.yml down -v
 
 ---
 
-## 📂 Source Code & Architectural Directory Structure
+## Source Code & Architectural Directory Structure
 
 ```text
 .
@@ -306,7 +306,7 @@ docker compose -f deploy/docker/compose/docker-compose.all.yml down -v
 
 ---
 
-## 📖 Specifications & Contract References
+## Specifications & Contract References
 * [OpenAPI Specification v1](src/api/contracts/openapi/v1.yaml)
 * [System Threat Model & Hardening](docs/06-threat-model.md)
 * [System Capacity & Resource Sizing Model](docs/05-capacity-model.md)
