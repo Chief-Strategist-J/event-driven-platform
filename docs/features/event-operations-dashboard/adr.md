@@ -28,6 +28,44 @@ Operators and on-call engineers require a centralized, production-grade observab
 - **Positive**: Strict decoupling of metric aggregation from operational actions; fail-closed triage recommendations; complete audit trail for incident analysis.
 - **Trade-off**: Requires periodic hop status reporting and metadata synchronization from running services.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+Operating event-driven platforms blind to consumer lag, partition skew, and worker thread pool saturation leads to sudden, catastrophic outages. Because streaming systems decouple publishers from consumers, publishers report 100% success while consumers silently fall hours behind, violating customer SLAs without generating a single HTTP error code.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The dashboard subsystem scrapes Prometheus metrics from the chassis admin port (:8081/metrics). It evaluates the Four Golden Signals across three distributed tiers: (1) Broker Tier (partition ISR, under-replicated partitions), (2) Pipeline Tier (consumer lag offsets, commit rates, processing duration), and (3) Infrastructure Tier (DB connection pools, memory buffers). Real-time alerts trigger on lag derivative slopes rather than static thresholds.
+
+### 3. Core Architectural Principles
+
+* **Four Golden Signals Focus**: Monitoring prioritizes Latency, Traffic, Errors, and Saturation over vanity counters to gauge actual user-perceived platform health.
+* **Leading Indicator Alerting**: Alerts trigger on leading signals (consumer lag acceleration, queue depth) before downstream error rates spike.
+* **Multi-Tenant Observability**: Metrics allow slicing by tenant ID to isolate noisy-neighbor resource hogging and SLA violations immediately.
+* **Zero-Contention Metrics Collection**: Telemetry counters use lock-free atomic primitives, ensuring instrumentation never degrades critical path event processing.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is consumer lag slope more critical than absolute lag count? (A consumer with 10,000 lag that is actively processing down is healthy; a consumer with 1,000 lag that is falling behind by 100 messages/sec is in active failure).**
+2. **How do we observe multi-tenant resource consumption without exploding metric cardinality? (Tenant metrics are categorized by tier or hashed into bounded label buckets, preventing Prometheus memory exhaustion).**
+3. **Why must monitoring endpoints run on an isolated admin port (:8081)? (If the public HTTP server (:8080) saturates or deadlocks under load, operators must still access health and metrics endpoints on an isolated port).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Google Site Reliability Engineering: Monitoring Distributed Systems](https://sre.google/sre-book/monitoring-distributed-systems/)**
+  - *Architectural Rationale & Implementation Grounding*: The industry-standard treatise defining the Four Golden Signals and symptom-based alerting strategies.
+* **[Prometheus Metric Exposition Format and Best Practices](https://prometheus.io/docs/practices/instrumentation/)**
+  - *Architectural Rationale & Implementation Grounding*: Official standard for structuring counters, gauges, and histograms for high-throughput distributed systems.
+* **[Brendan Gregg: The USE Method (Utilization, Saturation, and Errors)](https://www.brendangregg.com/usemethod.html)**
+  - *Architectural Rationale & Implementation Grounding*: Methodology for analyzing system and resource performance bottlenecks across CPU, memory, network, and storage.
+* **[Confluent: Monitoring Apache Kafka Consumer Lag](https://www.confluent.io/blog/monitor-kafka-consumer-lag-without-impacting-performance/)**
+  - *Architectural Rationale & Implementation Grounding*: Technical guide on calculating, monitoring, and alerting on consumer lag using offset commit watermarks.
+
 ## Amendment 2026-11-07: Triage localization for healthy flows
 
 ### Problem observed

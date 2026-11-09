@@ -95,6 +95,44 @@ We selected **Option 3: Hexagonal Event Envelope (`EventEnvelope[T any]`) with S
 * Wire overhead of metadata attributes (~200-250 bytes per event).
 * Strict deserialization rejects events from non-compliant external producers (requires an anti-corruption layer).
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+In distributed architectures, services that communicate via database sharing or direct CRUD RPCs become tightly coupled. When service A dictates the database schema or internal entity models of service B, neither service can deploy independently. Domain Events decouple systems by communicating what happened in domain terms rather than how data is stored.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+Domain events represent immutable historical facts emitted by aggregate roots. Every event payload adheres to a standardized envelope (CloudEvents v1.0.2) containing event_id (UUIDv7), tenant_id, correlation_id, causation_id, timestamp, and a strictly versioned payload schema. Aggregate roots record events during state mutation and emit them exclusively through the transactional outbox.
+
+### 3. Core Architectural Principles
+
+* **Past-Tense Immutable Factuality**: Domain events describe state transitions that have already completed; they are immutable and cannot be vetoed or rolled back.
+* **Minimal Bounded Context Coupling**: Event contracts expose only the state necessary for downstream collaboration, preventing internal domain leaks.
+* **Strict Causality & Provenance**: Every event must mandate correlation_id (business flow), causation_id (direct trigger), and idempotency_key.
+* **Monotonic Aggregate Sequencing**: Events emitted by an aggregate root must increment the aggregate version sequentially to enable deterministic projection order.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **What is the difference between Event Notification and Event-Carried State Transfer? (Notification passes minimal IDs requiring consumers to call back for data; Event-Carried State Transfer passes full entity snapshots, enabling consumers to act completely autonomously).**
+2. **Why must domain events be named in the past tense (OrderPlaced, never PlaceOrder)? (A command is a request that can be rejected; an event is an immutable historical fact that has already happened and cannot be undone).**
+3. **How do we prevent domain models from leaking internal implementation details into external events? (We define isolated Public Event Contracts that decouple external wire formats from internal domain entities).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Eric Evans: Domain-Driven Design: Tackling Complexity in the Heart of Software](https://www.oreilly.com/library/view/domain-driven-design-tackling/0321125215/)**
+  - *Architectural Rationale & Implementation Grounding*: The seminal work establishing Domain Events, Aggregate Roots, Bounded Contexts, and ubiquitous language.
+* **[CNCF CloudEvents Specification v1.0.2](https://github.com/cloudevents/spec)**
+  - *Architectural Rationale & Implementation Grounding*: Industry-standard specification for describing event data in common, interoperable formats across cloud ecosystems.
+* **[Vaughn Vernon: Implementing Domain-Driven Design (The Red Book)](https://kalele.io/books/implementing-domain-driven-design/)**
+  - *Architectural Rationale & Implementation Grounding*: In-depth guide on domain event modeling, event-driven architecture integration, and event storming methodology.
+* **[Martin Fowler: What do you mean by Event-Driven?](https://martinfowler.com/articles/201701-event-driven.html)**
+  - *Architectural Rationale & Implementation Grounding*: Essential taxonomy clarifying Event Notification, Event-Carried State Transfer, Event Sourcing, and CQRS.
+
 ## Amendment 2026-11-07: Transaction-group persistence in envelope build
 
 ### Problem observed

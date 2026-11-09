@@ -122,6 +122,44 @@ The database schema introduces four dedicated tables supporting the schema evolu
 - **Extended Migration Windows**: Dual-publishing and consumer attestations require disciplined 30-day tracking.
   - *Mitigation*: Automated telemetry tracking (`C-TEL`) alerts teams with lagging migrations.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+In distributed microservices, services deploy on independent cadences. If producer teams deploy a new schema that breaks backward compatibility, downstream consumer services deployed days or weeks earlier immediately crash with unmarshaling exceptions. Reverting releases across dozens of autonomous microservices is practically impossible without zero-downtime schema evolution.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The platform enforces strict Backward Compatibility as the default evolution rule. Under backward compatibility: (1) New fields added to a schema must declare default values. (2) Existing fields cannot be removed or have their data types altered. The Schema Registry validates these rules via CI/CD before any schema can be registered. Downstream consumers built with schema v1.0 safely read events emitted by producers using schema v1.1.
+
+### 3. Core Architectural Principles
+
+* **Strict Backward Compatibility Mandate**: New schema versions must be readable by services running older code, allowing independent microservice deployments.
+* **Mandatory Default Values**: Any newly introduced field must declare a default value; omitting defaults breaks backward compatibility.
+* **Disallowed In-Place Field Renaming**: Field names cannot be altered in-place; renames must execute via expand-and-contract across multiple minor releases.
+* **Automated Pre-Merge CI Validation**: Schema changes must be validated against previous registered versions in CI pipelines, rejecting breaking changes before merge.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **What is the difference between Backward and Forward compatibility? (Backward: New consumers can read data written by old producers. Forward: Old consumers can read data written by new producers. Full: Both guarantees hold simultaneously).**
+2. **Why is field renaming forbidden in schema evolution? (A renamed field looks like a deletion of the old field and an addition of a new field, violating backward compatibility; renames require a two-phase expand-and-contract deployment).**
+3. **How do we safely decommission an obsolete field? (Phase 1: Mark field as optional with default. Phase 2: Migrate all producers and consumers to stop using it. Phase 3: Remove in a major schema version bump with a new topic).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Martin Kleppmann: Designing Data-Intensive Applications (Chapter 4: Encoding and Evolution)](https://dataintensive.net/)**
+  - *Architectural Rationale & Implementation Grounding*: The definitive chapter analyzing binary encoding formats (Avro, Protocol Buffers, Thrift) and compatibility rules.
+* **[Confluent Schema Registry: Rules of Schema Evolution](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html)**
+  - *Architectural Rationale & Implementation Grounding*: Exhaustive documentation on schema compatibility modes (BACKWARD, FORWARD, FULL) and evolution rules.
+* **[Apache Avro Specification: Schema Resolution Rules](https://avro.apache.org/docs/current/spec.html#Schema+Resolution)**
+  - *Architectural Rationale & Implementation Grounding*: Formal specification detailing how a reader schema resolves differences against an incoming writer schema.
+* **[Thoughtworks Technology Radar: Expand and Contract Pattern](https://www.thoughtworks.com/radar/techniques/expand-and-contract)**
+  - *Architectural Rationale & Implementation Grounding*: Architectural pattern for making breaking changes to interfaces and databases in an evolutionary, zero-downtime manner.
+
 ## Amendment 2026-11-07: Compatibility enforcement at registration, and migration 0028 context
 
 ### Problem observed

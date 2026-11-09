@@ -184,6 +184,43 @@ Automated test suite located at `src/features/replay-mechanism/tests/`:
 * `TestServiceCreateReplayRun`: Verifies run record initialization and audit trail creation.
 * `TestServiceEvaluateEffect_SuppressExternalInRebuild`: Verifies end-to-end effect gateway ledger logging.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+When consumer code contains a bug that corrupts read models, or when a downstream database suffers catastrophic data loss, traditional systems must restore from slow backups and lose interim transactions. Because event logs are immutable and durable, event-driven architectures can rebuild corrupted state by seeking consumers backwards and replaying historical events.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The replay coordinator receives an authorized Replay Request specifying topic, partition, and target boundary (timestamp or offset). It signals active consumers to pause forward processing, reset their partition offsets backwards via seek(), and begin replaying events. During replay, external side-effects (e.g. sending emails, debiting credit cards) are strictly suppressed using in-memory idempotency flags, and projections are written to shadow tables.
+
+### 3. Core Architectural Principles
+
+* **Deterministic Temporal Boundaries**: Replays must be bounded by explicit historical time windows or offset ranges, preventing unbounded event flooding.
+* **Downstream Side-Effect Fencing**: During a historical replay, external real-world side-effects (emails, SMS, payment calls) must be explicitly suppressed.
+* **Shadow Projection Reconstruction**: Replays intended to rebuild state must target isolated shadow tables, swapping atomically into production only after catching up.
+* **Audit-Logged Execution Authority**: Historical replays modify state and must require elevated security authorization accompanied by tamper-evident audit logs.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **How do we prevent a historical replay from accidentally triggering thousands of real-world emails or payment charges? (Replay contexts inject a deterministic execution flag (is_replay=true); downstream notification and payment adapters inspect this flag and drop side-effects).**
+2. **What happens if new live events arrive while a historical replay is in progress? (Replay workers write to an isolated shadow table my_view_rebuild; once the replay reaches live head offset, an atomic pointer swap switches traffic to the new table).**
+3. **Why must triggering a replay require multi-signature authorization? (Replaying events alters downstream state and consumes heavy cluster compute; an unauthorized or mistaken replay can destabilize healthy production services).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Martin Fowler: Event Sourcing Replay Patterns](https://martinfowler.com/eaaDev/EventSourcing.html)**
+  - *Architectural Rationale & Implementation Grounding*: The foundational article explaining how to reconstruct past application states by replaying log events from genesis.
+* **[Apache Kafka Offset Seek & Reprocessing Architecture](https://kafka.apache.org/documentation/#basic_ops_consumer_lag)**
+  - *Architectural Rationale & Implementation Grounding*: Official documentation on using Kafka's seek APIs to reset consumer position for disaster recovery and historical replay.
+* **[Uber Engineering: CADENCE / Temporal Workflow Replay Architecture](https://temporal.io/how-it-works)**
+  - *Architectural Rationale & Implementation Grounding*: Production mechanics of deterministic event history replaying to reconstruct in-memory state machines without side-effect re-execution.
+* **[Confluent: Event Sourcing, Replay, and Stream Processing Design Patterns](https://www.confluent.io/blog/event-sourcing-vs-event-driven-architecture/)**
+  - *Architectural Rationale & Implementation Grounding*: Deep comparison between traditional database snapshots and dynamic log-driven state reconstruction.
 
 ## Amendment 2026-11-07: Advance state gate, run-id validation, effect-log persistence
 

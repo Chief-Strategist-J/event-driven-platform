@@ -221,6 +221,44 @@ To satisfy **05-db-writing-rules.md Section 8**, database constraint violations 
   - Version gaps (`ActionHoldGap`) block partition processing unless delegated to non-blocking retry topics.
   - Inbox table requires periodic partition archiving (`PurgeIntervalHours = 48`) to prevent storage bloat.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+Distributed message delivery in systems like Apache Kafka is strictly at-least-once. Network timeouts, consumer group rebalances, and producer retries routinely deliver duplicate copies of the same event. If a consumer naively applies mutations upon every arrival, financial accounts are debited twice, duplicate orders are shipped, and system state is permanently corrupted.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The service implements a Two-Layer Defense: Layer 1 (Transport Identity) inserts the event_id into a dedicated consumer_inbox table inside the same local database transaction as the business mutation (ON CONFLICT DO NOTHING); if 0 rows are affected, it is a duplicate and immediately skipped. Layer 2 (Aggregate Version Guard) checks the aggregate's last_version: v = last+1 applies; v <= last drops as stale; v > last+1 holds as a gap. If an event shares the current version but has a divergent payload hash, it is quarantined as a split-brain poison pill.
+
+### 3. Core Architectural Principles
+
+* **Two-Layer Defense Architecture**: Deduplication enforces both transport identity checks (inbox dedupe) and business aggregate monotonic version fencing.
+* **Single Local Atomic Transaction**: Inbox recording, aggregate projection mutation, and offset advancement must execute inside one atomic database transaction.
+* **Strict Version Continuity**: Incremental delta mutations require strict next-version alignment ($N+1$); out-of-order gap events are held to prevent corrupted projections.
+* **Split-Brain Content Fencing**: Events sharing an aggregate version but bearing divergent cryptographic hashes indicate split-brain upstream state and are immediately quarantined.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is checking an in-memory cache (like Redis) insufficient for consumer deduplication? (If Redis crashes or suffers a network partition, the consumer loses its dedupe state and double-applies mutations; inbox deduplication MUST share the atomic ACID transaction of the state mutation).**
+2. **How do we prevent the consumer_inbox table from growing infinitely and consuming all disk space? (We implement a background compaction job that purges inbox records older than our message retention window (e.g. 48 hours) using index-partitioned truncations).**
+3. **Why must we treat DELTA events differently from STATE events? (STATE events carry full snapshots and can apply 'strictly newer wins' (v > last); DELTA events represent incremental mathematical mutations (+10) and require strict next-version sequencing (v == last+1)).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Pat Helland: Idempotence Is Not a Free Lunch (ACM Queue 2012)](https://queue.acm.org/detail.cfm?id=2187821)**
+  - *Architectural Rationale & Implementation Grounding*: Deep architectural dive into side-effects, message redelivery mechanics, and building robust idempotent software services.
+* **[Gregor Hohpe: Idempotent Receiver Pattern](https://www.enterpriseintegrationpatterns.com/patterns/messaging/IdempotentReceiver.html)**
+  - *Architectural Rationale & Implementation Grounding*: Authoritative pattern on designing receivers capable of safely processing duplicate messages without unintended side-effects.
+* **[Apache Kafka KIP-98: Exactly Once Delivery and Transactional Messaging](https://cwiki.apache.org/confluence/display/KAFKA/KIP-98)**
+  - *Architectural Rationale & Implementation Grounding*: Seminal Kafka enhancement specification detailing idempotent producers, transactional coordinators, and consumer read-committed modes.
+* **[Martin Kleppmann: Designing Data-Intensive Applications (Chapter 11: Idempotence)](https://dataintensive.net/)**
+  - *Architectural Rationale & Implementation Grounding*: Definitive analysis of deduplication mechanisms, unique constraint guards, and distributed transaction atomicity.
+
 ## Amendment 2026-11-07: Inbox event validation (eventId UUID, semanticClass enum)
 
 ### Problem observed

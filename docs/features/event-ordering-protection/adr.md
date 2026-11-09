@@ -276,6 +276,43 @@ Producer Span [traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7
 6. **Multi-Version Drain**: Aggregate at $V=1$ with held $V=3, V=4, V=5$. Arrival of $V=2$ sequentially applies $V=2 \to V=3 \to V=4 \to V=5$, emptying held store.
 7. **Epoch Fencing Enforcement**: Consumer with stale `owner_epoch` receives conflict error when attempting to evaluate or drain sequences.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+In business operations, order of execution is sacred: an account cannot be debited before it is credited; an order cannot be shipped before it is paid. In distributed systems with multiple partitions, concurrent workers, and network retries, messages arrive out-of-order. Applying events out-of-order results in negative balances, missing customer records, and permanent state corruption.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The platform enforces a two-stage ordering gate: (1) Publisher Routing Gate hashes aggregate entity keys (e.g. order_id) using Murmur2 to ensure all events for that entity land on the exact same partition. (2) Consumer Sequence Gate verifies the incoming aggregate version against local state: v = last_version + 1 is applied; v <= last_version is dropped as stale; v > last_version + 1 is held as a Gap, halting processing on that key to protect consistency.
+
+### 3. Core Architectural Principles
+
+* **Partition-Key Linearizability**: All domain events for a specific aggregate instance must share an identical partition key to guarantee total order within that log.
+* **Strict Version Gating**: Consumers must validate sequential version increments ($N+1$), immediately holding gaps ($N+2$) to prevent corrupted projection state.
+* **Producer Idempotence Invariance**: Producers must mandate in-flight deduplication and sequence tracking to prevent network retries from scrambling message order.
+* **Isolated Salted Hot-Spot Mitigation**: Ultra-high throughput keys must use bounded deterministic salting while preserving sequential ordering within sub-key streams.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why can't we achieve total global ordering across all events in Kafka? (Global total ordering requires routing all traffic through a single partition on a single broker, destroying horizontal scalability; we order per entity partition key).**
+2. **What happens if an event with version 3 arrives when we are on version 1 (Version Gap)? (The consumer holds that aggregate key and signals HTTP 409 Conflict; processing on that entity halts until version 2 is resolved, preventing corrupted state).**
+3. **Why is producer retries = MAX dangerous for ordering without idempotence? (If message 1 fails and retries while message 2 succeeds, message 2 commits before message 1; enabling enable.idempotence=true guarantees in-flight ordering).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Leslie Lamport: Time, Clocks, and the Ordering of Events in a Distributed System (ACM 1978)](https://lamport.azurewebsites.net/pubs/time-clocks.pdf)**
+  - *Architectural Rationale & Implementation Grounding*: The fundamental computer science paper establishing logical clocks, total ordering, and causal relationships in distributed environments.
+* **[Martin Kleppmann: Designing Data-Intensive Applications (Chapter 11: Stream Processing)](https://dataintensive.net/)**
+  - *Architectural Rationale & Implementation Grounding*: In-depth analysis of log-based messaging systems, partition-level ordering guarantees, and out-of-order mitigation.
+* **[Apache Kafka Partitioning Architecture & Murmur2 Hash Function](https://kafka.apache.org/documentation/#intro_concepts_and_architecture)**
+  - *Architectural Rationale & Implementation Grounding*: Technical reference on Kafka's deterministic partition key hashing and intra-partition append guarantees.
+* **[Confluent: Guarantees, Redundancy, and Scale in Apache Kafka](https://www.confluent.io/blog/kafka-message-delivery-guarantees/)**
+  - *Architectural Rationale & Implementation Grounding*: Architectural analysis of combining max.in.flight.requests.per.connection=1 with idempotent producers for strict ordering.
 
 ## Amendment 2026-11-07 (second pass): tenant scope required
 

@@ -70,6 +70,43 @@ We selected **Option 3: Hybrid Architecture with ConnectRPC Reads, Outbox-Backed
 * Increased architectural complexity (requires outbox pollers, deduplication tables, and saga coordinator ledgers).
 * Eventual consistency requires UI/UX paradigms that accommodate asynchronous completion (e.g., polling, WebSockets, optimistic UI).
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+Synchronous HTTP/RPC communication between microservices creates tightly coupled dependency chains (distributed monoliths). If service A calls B, which calls C, which calls D, the system's availability is the mathematical product of all four services ($99.9\%^4 = 99.6\%$), and latency cascades linearly. An outage in service D cascades upstream, halting the entire platform.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+Services communicate exclusively via asynchronous event streams managed by partitioned commit logs. Producers publish events without awaiting downstream consumer execution. Subscribers independently pull events at their own processing pace. Temporal decoupling ensures that even if subscriber services are offline for hours during deployments or crashes, zero messages are lost and producers operate at full performance.
+
+### 3. Core Architectural Principles
+
+* **Smart Endpoints, Dumb Pipes**: Message brokers act as simple, durable log transports; business orchestration and routing logic reside exclusively within service endpoints.
+* **Temporal and Spatial Independence**: Producers emit events without awareness of subscriber counts, locations, or operational uptime status.
+* **Event-Carried State Autonomy**: Event schemas provide sufficient data for consumers to execute business logic without calling back synchronously to producer APIs.
+* **Universal At-Least-Once Assumption**: All messaging channels assume duplicated and out-of-order delivery; idempotent consumption is mandatory across all listeners.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **How do we handle workflows that require a synchronous response for the end user? (The frontend uses asynchronous command submission with polling, Server-Sent Events (SSE), or WebSockets to await eventual completion notification).**
+2. **What happens if an asynchronous event stream experiences an unexpected partition rebalance? (Consumers employ cooperative sticky partitioning and idempotent inboxes, guaranteeing no duplicate mutations or data loss occur).**
+3. **Why must we avoid RPC-over-Messaging anti-patterns? (Using queues merely to simulate synchronous request/response couples callers temporally and destroys the fundamental scalability benefits of event streaming).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Gregor Hohpe & Bobby Woolf: Enterprise Integration Patterns](https://www.enterpriseintegrationpatterns.com/)**
+  - *Architectural Rationale & Implementation Grounding*: The canonical work establishing asynchronous messaging patterns, channel architectures, and message translation models.
+* **[Martin Fowler: What do you mean by Event-Driven?](https://martinfowler.com/articles/201701-event-driven.html)**
+  - *Architectural Rationale & Implementation Grounding*: Essential taxonomy clarifying Event Notification, Event-Carried State Transfer, Event Sourcing, and CQRS.
+* **[Sam Newman: Building Microservices: Designing Fine-Grained Systems](https://samnewman.io/books/building_microservices_2nd_edition/)**
+  - *Architectural Rationale & Implementation Grounding*: Authoritative patterns on asynchronous event-driven collaboration, service boundaries, and choreography vs orchestration.
+* **[Jay Kreps: Questioning the Lambda Architecture](https://www.oreilly.com/radar/questioning-the-lambda-architecture/)**
+  - *Architectural Rationale & Implementation Grounding*: Seminal essay advocating for unified event-log stream architectures over fragile hybrid batch/stream systems.
 
 ## Amendment 2026-11-07: Command dispatch now persists to the transactional outbox
 

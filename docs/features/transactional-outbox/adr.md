@@ -189,6 +189,44 @@ stateDiagram-v2
 | **F4.11** | Retention purge deletes pending | Silent data loss | Purge query strictly filters `WHERE status = 'PUBLISHED'` | Purge count vs published count |
 | **F9.1** | Silent pipeline stoppage | Undetected loss | Synthetic canary emitted every ~30s (`EmitCanaryHeartbeat`) | Canary consumer latency SLO |
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+When an application updates a database and publishes an event to a message broker, it faces the distributed dual-write problem. If the database commits but the broker connection times out, downstream systems miss the event forever. If the broker write succeeds but the database rolls back, downstream systems process phantom data. Two-Phase Commit (2PC) is slow, fragile, and unsupported by modern cloud message brokers.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The service writes its domain entity mutations and its outgoing events into a local database outbox table inside the exact same relational ACID transaction. If the transaction rolls back, both are rolled back; if it commits, both commit atomically. An asynchronous CDC tailer (Debezium reading PostgreSQL's logical replication stream) streams records from the outbox table directly into Kafka, guaranteeing at-least-once delivery with zero application latency overhead.
+
+### 3. Core Architectural Principles
+
+* **Local Database ACID Atomicity**: Domain entity state mutations and outgoing event outbox records commit within the exact same database transaction.
+* **Asynchronous WAL Change Capture**: The outbox table is relayed asynchronously to the broker via PostgreSQL logical replication / Debezium rather than poll-and-delete loops.
+* **At-Least-Once Broker Forwarding**: The outbox relay guarantees at-least-once message forwarding; message deduplication is explicitly delegated to downstream idempotent consumers.
+* **Partitioned Compaction & Purge Lifecycle**: The outbox table is partitioned by date/time, enabling zero-impact partition truncations to prevent disk bloat.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is CDC-based Outbox superior to a polling Outbox (SELECT * FROM outbox WHERE processed = false)? (Polling creates database lock contention, suffers polling latency lag, fails to capture hard deletions, and creates indexing overhead as the outbox table grows).**
+2. **How do we prevent the outbox table from growing endlessly and exhausting database disk? (We partition the outbox table by timestamp (e.g. daily partitions) and drop or truncate old partitions after CDC watermarks confirm delivery).**
+3. **How do we handle duplicate message publication from the outbox? (The outbox relay guarantees at-least-once delivery; all downstream consumers must implement the Idempotent Consumer pattern with an inbox table).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Chris Richardson: Microservices Pattern: Transactional Outbox](https://microservices.io/patterns/data/transactional-outbox.html)**
+  - *Architectural Rationale & Implementation Grounding*: The canonical architectural pattern defining how to publish events reliably without dual-write inconsistency.
+* **[Gunnar Morling: Reliable Event Sourcing with the Transactional Outbox Pattern (Devoxx)](https://www.youtube.com/watch?v=hsw_Zpfdffw)**
+  - *Architectural Rationale & Implementation Grounding*: Detailed lecture by Debezium project lead on WAL-based outbox routing, CDC connectors, and production failure modes.
+* **[Debezium Outbox Event Router SMT Documentation](https://debezium.io/documentation/reference/stable/transformations/outbox-event-router.html)**
+  - *Architectural Rationale & Implementation Grounding*: Standard Single Message Transformation (SMT) for routing outbox table mutations directly to partitioned Kafka topics.
+* **[Martin Kleppmann: Transactions - Myths, Truths, and What's Next](https://www.youtube.com/watch?v=5ZjhNTM8XU8)**
+  - *Architectural Rationale & Implementation Grounding*: Authoritative Strange Loop lecture on distributed consistency, dual-write impossibility, and log-centric architecture.
+
 ## Amendment 2026-11-07: Duplicate-externalId conflict mapping and Kafka relay headers
 
 ### Problem observed

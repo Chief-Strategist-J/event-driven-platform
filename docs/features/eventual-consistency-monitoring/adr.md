@@ -240,6 +240,43 @@ Before deployment, the implementation must pass 100% of the following verificati
 7. **Repeat Healing Prevention**: Injected persistent failure aborts after 2 heal attempts and opens P1 incident.
 8. **Negative Latency Invariance**: Host clock backwards skew produces `UNKNOWN` freshness status rather than negative lag.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+In asynchronous, event-driven architectures, read models (materialized views, search indexes, analytics caches) lag behind the primary transactional database by design. However, if a network partition, slow database query, or consumer deadlock causes lag to grow unboundedly, users view hours-old data, customer support takes erroneous actions, and downstream consistency contracts break silently without error logs.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The monitoring subsystem calculates real-time Eventual Consistency Scores ($C_{\text{score}}$) by combining two metrics: (1) Broker Offset Lag ($L_{\text{offset}} = O_{\text{log\_end}} - O_{\text{committed}}$) and (2) Wall-Clock Latency Gap ($T_{\text{lag}} = T_{\text{now}} - T_{\text{event\_timestamp}}$). If $T_{\text{lag}}$ breaches service SLOs (e.g. > 5 seconds), the engine triggers an alert and updates an operational health registry. Downstream query gateways can inspect this registry to gracefully flag read models as stale.
+
+### 3. Core Architectural Principles
+
+* **Continuous Convergence Tracking**: Read models must continuously expose their replication latency relative to the primary event stream as a core health metric.
+* **SLO-Driven Degradation Fencing**: When projection lag violates defined SLA boundaries, upstream query routers must flag read views as degraded or fallback to strong consistency.
+* **Synthetic Latency Heartbeats**: Probes must inject periodic synthetic events into the stream to measure live end-to-end propagation time across the entire cluster.
+* **Automated Drift Healing**: Reconciliation scanners must automatically trigger targeted projection recalculations for aggregates that fail divergence checksums.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is measuring wall-clock event timestamp lag better than just checking offset counts? (A consumer processing 10 large video events might have an offset lag of 10 but be 45 minutes behind; timestamp delta measures true user-experienced staleness).**
+2. **How do we handle clock drift across distributed producer nodes? (Producers synchronize with NTP, and the engine evaluates relative monotonic broker ingestion timestamps alongside client timestamps).**
+3. **What should a read API do when its materialized view is determined to be critically stale? (It should return HTTP 200 with a Warning: 199 - Stale Data header, or route critical reads directly to the transactional primary database).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Werner Vogels: Eventually Consistent - Revisited (ACM Communications 2009)](https://cacm.acm.org/magazines/2009/12/55743-eventually-consistent/fulltext)**
+  - *Architectural Rationale & Implementation Grounding*: Seminal paper by Amazon CTO Werner Vogels defining consistency models, convergence guarantees, and modern trade-offs.
+* **[Pat Helland: Life beyond Distributed Transactions: an Apostate's Opinion (2007)](https://queue.acm.org/detail.cfm?id=3025012)**
+  - *Architectural Rationale & Implementation Grounding*: Foundational treatise arguing against two-phase commit (2PC) in favor of eventual consistency and idempotent entity partitioning.
+* **[Apache Kafka KIP-430: Exposing Consumer Group Lag Metrics via Admin API](https://cwiki.apache.org/confluence/display/KAFKA/KIP-430)**
+  - *Architectural Rationale & Implementation Grounding*: Kafka architectural improvement standardizing programmatic offset lag calculation and consumer group monitoring.
+* **[Google SRE Book: Service Level Objectives (SLOs)](https://sre.google/sre-book/service-level-objectives/)**
+  - *Architectural Rationale & Implementation Grounding*: Authoritative guidelines on establishing, measuring, and alerting on latency-based and freshness-based SLOs.
 
 ## Amendment 2026-11-07: Heal on unknown incident returns 404; canary probe no longer fakes MATCH
 

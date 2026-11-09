@@ -190,6 +190,44 @@ sequenceDiagram
 | `event_versioning_upcast_failures_total` | `0` | $> 0$ | Trigger immediate page; dispatch RB-02 hotfix for defective upcaster |
 | `event_versioning_trace_carrier_missing_total` | `0` | $> 0$ | Page producer on broken W3C traceparent injection |
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+Enterprise business models change constantly; database columns are added, calculations are modified, and workflows branch. In distributed event systems, historical events cannot be modified once committed. If an application modifies an event format without explicit versioning strategies, older consumers crash, and historical event replays fail completely.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The platform enforces Semantic Versioning for event types. Non-breaking changes (adding optional fields with defaults) increment minor versions (OrderPlaced v1.1). Breaking changes (type shifts, semantic alterations) mint a new major version or new event type (OrderPlacedV2). Consumer pipelines implement in-flight Upcasters: when an event from 2024 (v1.0) is consumed, the upcaster deterministically transforms it into the current domain representation (v1.2) in memory before handing it to business logic.
+
+### 3. Core Architectural Principles
+
+* **Monotonic Version Progression**: Event schema versions must advance sequentially; retrospective alterations to historically registered versions are strictly prohibited.
+* **Rigid Compatibility Guarantees**: Evolution must declare Backward, Forward, or Full compatibility rules to support independent microservice deployment cadences.
+* **Boundary Upcasting Normalization**: Historical events are normalized to the current canonical domain model at the infrastructure adapter layer, keeping business services clean.
+* **Permanent Field Deprecation Cycle**: Fields cannot be removed in minor releases; they must be deprecated, made optional, and phased out across major version milestones.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is upcasting superior to maintaining separate consumer code paths for every historical version? (Maintaining v1, v2, and v3 handlers in business code creates massive cyclomatic complexity; upcasters normalize legacy events at the ingress boundary).**
+2. **Why must newly added fields always declare a default value? (If an older producer emits a payload without the field, a newer consumer reading the event will fail or inject null pointers unless a default is formally declared).**
+3. **When should we create a new event type instead of a new version? (When the business meaning changes fundamentally: e.g. CustomerAddressChanged vs CustomerRelocated; schema versioning handles data shapes, event types handle domain semantics).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Greg Young: Versioning in an Event Sourced System](https://leanpub.com/esversioning)**
+  - *Architectural Rationale & Implementation Grounding*: The authoritative book on schema migration strategies, upcasting, event adapters, and versioning patterns in event stores.
+* **[Martin Fowler: Parallel Change (Expand and Contract Pattern)](https://martinfowler.com/bliki/ParallelChange.html)**
+  - *Architectural Rationale & Implementation Grounding*: Evolutionary architecture pattern for introducing non-breaking changes across distributed, independently deployed services.
+* **[Confluent: Schema Evolution and Compatibility Modes](https://docs.confluent.io/platform/current/schema-registry/fundamentals/schema-evolution.html)**
+  - *Architectural Rationale & Implementation Grounding*: Detailed reference on BACKWARD, FORWARD, FULL, and NONE compatibility transitions in streaming pipelines.
+* **[Vaughn Vernon: Implementing Domain-Driven Design (Chapter 8: Domain Events)](https://kalele.io/books/implementing-domain-driven-design/)**
+  - *Architectural Rationale & Implementation Grounding*: Best practices on event contract longevity, schema version tracking, and aggregate version mapping.
+
 ## Amendment 2026-11-07: Upcaster registration route and built-in identity transformer
 
 ### Problem observed

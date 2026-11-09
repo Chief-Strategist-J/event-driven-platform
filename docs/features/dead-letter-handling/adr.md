@@ -221,6 +221,44 @@ sequenceDiagram
 2. **Parked Buffer Storage**:
    - Bounded by hard cap: 10,000 events or 100MB per aggregate key. Exceeding cap pauses partition to prevent memory exhaustion (**F5.3**).
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+In event-driven architectures, malformed payloads, schema validation errors, or non-retryable business rule violations (poison pills) block consumer partitions. Because Kafka preserves strict order, a single failing message halts consumption of all subsequent valid messages in that partition. Without isolated Dead Letter Queuing (DLQ), the entire consumer pipeline grinds to a halt.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+When an event exceeds max retry attempts or throws a terminal non-retryable exception, the consumer intercepts it, constructs a DLQ envelope capturing diagnostic metadata (stack trace, error code, original partition/offset, timestamp), and publishes it to a dedicated DLQ topic. A formal state machine tracks redrives (Quarantined -> Redriving -> Resolved / Discarded) to prevent infinite poison pill loops.
+
+### 3. Core Architectural Principles
+
+* **Non-Blocking Poison Pill Isolation**: Unprocessable or malformed events must be quarantined immediately to a Dead Letter Queue (DLQ) to prevent total pipeline blockage.
+* **Context-Preserving Diagnostics**: Quarantined records must capture comprehensive diagnostic metadata (stack trace, error code, original topic, partition, offset, timestamp, and failure count).
+* **Deterministic Redrive State Machine**: Redriving events from a DLQ must execute through a formal state machine (Quarantined -> Redriving -> Resolved / Discarded), preventing infinite re-processing loops.
+* **Fenced Redrive Execution**: Redrive actions must verify that aggregate version constraints remain valid; outdated events that would overwrite newer projections must be safely discarded.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why shouldn't a consumer simply log errors and skip poison pill messages? (Skipping silently destroys financial and operational data without auditability or recovery mechanisms; DLQ quarantines data safely for inspection).**
+2. **What happens if an event in the DLQ is redriven after downstream state has moved forward? (Redrive handlers must pass through Idempotent Consumer Version Guards; if the redriven event is older than current aggregate version, it is safely acknowledged and discarded).**
+3. **How do we prevent DLQ redrives from triggering another cascading failure? (Redrives are executed with strict rate limiting, manual approval checkpoints, and circuit breaker surveillance).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Gregor Hohpe & Bobby Woolf: Enterprise Integration Patterns - Dead Letter Channel](https://www.enterpriseintegrationpatterns.com/patterns/messaging/DeadLetterChannel.html)**
+  - *Architectural Rationale & Implementation Grounding*: Foundational design pattern for routing corrupted and unprocessable messages away from primary execution channels.
+* **[Uber Engineering: Reliable Reprocessing and Dead Letter Queues with Apache Kafka](https://www.uber.com/blog/reliable-reprocessing-and-dead-letter-queues-with-apache-kafka/)**
+  - *Architectural Rationale & Implementation Grounding*: Production case study detailing multi-tiered retry and dead-letter queue architectures operating at massive scale.
+* **[AWS Architecture Blog: Resilient Message Processing with Dead-Letter Queues](https://aws.amazon.com/blogs/compute/resilient-message-processing-with-amazon-sqs-and-dead-letter-queues/)**
+  - *Architectural Rationale & Implementation Grounding*: Best practices on isolating, monitoring, and redriving failed asynchronous payloads without cascading downstream impact.
+* **[Confluent: Error Handling and Dead Letter Queue Patterns in Kafka](https://www.confluent.io/blog/error-handling-patterns-in-kafka/)**
+  - *Architectural Rationale & Implementation Grounding*: Comprehensive guide on distinguishing transient vs fatal errors and orchestrating non-blocking quarantine topics.
+
 ## Amendment 2026-11-07: Quarantine ingest hardening (headers, UUIDs, wrapped errors)
 
 ### Problem observed

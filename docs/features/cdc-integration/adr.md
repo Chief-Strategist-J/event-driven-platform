@@ -163,6 +163,43 @@ The CDC feature exposes 4 REST operations under `/api/v1/cdc`:
 * **Tier 3 (PostgreSQL Adapter)**: Verifies relational persistence, check constraints, and optimistic locking against live PostgreSQL.
 * **Tier 4 (Canary Reconciliation)**: Simulates synthetic end-to-end event injection and verifies 5000ms SLA evaluation.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+Writing to a database and publishing to a message broker in the same application call (the 'Dual-Write Problem') is an anti-pattern. If the database commit succeeds but the network crashes before the broker publishes, data is lost; if the broker write succeeds but the database rolls back, phantom data enters downstream systems. Distributed 2-Phase Commit (2PC) is notoriously slow, fragile, and unsupported by modern cloud brokers.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The application writes exclusively to its local PostgreSQL tables inside a standard ACID transaction. PostgreSQL's internal Write-Ahead Log (WAL) records the committed rows. A CDC daemon (Debezium via pgoutput logical decoding) streams changes directly from the database WAL, extracts row deltas (before/after states), and forwards them into Kafka partitions with absolute transactional fidelity and zero application code overhead.
+
+### 3. Core Architectural Principles
+
+* **Single Source of Truth**: The database WAL is the sole, authoritative source of state transitions; dual-writing across network boundaries is architecturally forbidden.
+* **Zero Transactional Tax**: Business transactions commit at native relational database speed without waiting for broker ACKs or distributed consensus protocols.
+* **Complete Intermediate State Capture**: Every intermediate state mutation and hard row deletion is captured linearly, eliminating the blind spots inherent in periodic table polling.
+* **At-Least-Once Delivery Resilience**: WAL replication slots maintain continuous disk watermarks, acknowledging progress only after downstream brokers confirm message durability.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is CDC superior to database polling (SELECT * WHERE updated_at > last_poll)? (Polling misses interim updates (if a status changes from Pending -> Processing -> Completed between polls), imposes CPU lock overhead, and cannot capture hard DELETE operations).**
+2. **What is the operational risk of a lingering replication slot? (If the CDC consumer stops reading, PostgreSQL retains WAL segments on disk indefinitely, eventually filling the entire host disk and bringing down the database).**
+3. **How do we handle schema migrations in CDC? (We utilize Schema Registry synchronization and forward-compatible Avro schemas so WAL parsers never crash on newly introduced database columns).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Martin Kleppmann: Turning the Database Inside Out with Apache Samza / Kafka](https://www.youtube.com/watch?v=fU9hR3kiOK0)**
+  - *Architectural Rationale & Implementation Grounding*: Foundational lecture articulating the paradigm shift from point-to-point writes to unified log-centric change data capture.
+* **[Debezium Architecture & Operational Semantics](https://debezium.io/documentation/reference/stable/architecture.html)**
+  - *Architectural Rationale & Implementation Grounding*: Comprehensive architectural documentation on PostgreSQL logical decoding, WAL streaming, and change event modeling.
+* **[PostgreSQL Official Documentation: Logical Decoding & Replication Slots](https://www.postgresql.org/docs/current/logicaldecoding.html)**
+  - *Architectural Rationale & Implementation Grounding*: Core architectural reference on output plugins, WAL stream reading, and fail-safe slot lifecycle management.
+* **[Pat Helland: Immutability Changes Everything (CIDR 2015)](https://www.cidrdb.org/cidr2015/Papers/CIDR15_Paper16.pdf)**
+  - *Architectural Rationale & Implementation Grounding*: Seminal paper demonstrating why append-only immutable logs and change streams are the true foundation of distributed state.
 
 ## Amendment 2026-11-07: Connector lookup route, error mapping, and signal correlation defaults
 

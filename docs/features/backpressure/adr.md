@@ -199,6 +199,43 @@ All business rules and invariants are verified by automated tests in `src/featur
 * `TestRuleMustNeverShed_StrictOnly`: Verifies that `O-STRICT` records are never dropped or sampled.
 * `TestMachineTransition_Lifecycle`: Verifies deterministic state transitions and rejects illegal jumps.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+In asynchronous distributed architectures, downstream consumers (databases, third-party APIs, legacy backends) process messages slower than upstream message brokers can deliver them. Without dynamic backpressure, memory buffers expand unboundedly until the JVM/Go runtime suffers catastrophic Out-Of-Memory (OOM) crashes, causing cascading system outages.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+Consumers monitor internal ring buffer saturation, worker pool concurrency, and downstream latency. When internal queue depth crosses high-water thresholds (e.g. 80%), the consumer halts Kafka polling by calling pause() on assigned partitions. When buffers drain below low-water marks (e.g. 30%), resume() is called. If saturated workers receive synchronous HTTP ingress, they immediately return HTTP 429 Too Many Requests or HTTP 503 with Retry-After headers.
+
+### 3. Core Architectural Principles
+
+* **Reactive Flow Control**: Consumers dictate the rate of data ingress based on real-time processing capacity, pulling work rather than passively absorbing unthrottled broker pushes.
+* **Bounded Memory Guarantees**: All internal channels and worker buffers enforce rigid capacity caps; unbound allocations are strictly prohibited across all service boundaries.
+* **Fail-Fast Cascading Protection**: When buffers saturate, non-essential background workloads and shedable traffic are rejected immediately to preserve core transaction throughput.
+* **Dynamic Circuit Tripping**: Downstream latency degradation automatically triggers circuit breakers, giving struggling external dependencies time to recover without retry storms.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **What happens to unconsumed messages when a consumer crashes under backpressure? (Because offsets are only committed post-execution, unacknowledged messages remain safely in the Kafka log for replay after recovery).**
+2. **Why not simply use an unbounded memory queue to smooth out traffic spikes? (An unbounded queue converts an ephemeral network spike into fatal memory exhaustion; bounded queues force deliberate trade-offs between backpressure, shedding, or autoscaling).**
+3. **How do we prevent consumer pause() from triggering a Kafka consumer group rebalance? (Heartbeat threads run independently of the message processing loop, maintaining liveness with the broker while polling is deliberately paused).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[The Reactive Streams Specification v1.0.4](https://www.reactive-streams.org/)**
+  - *Architectural Rationale & Implementation Grounding*: Universal standard providing a standard for asynchronous stream processing with non-blocking backpressure.
+* **[Michael T. Nygard: Release It! Design and Deploy Production-Ready Software](https://pragprog.com/titles/mnee2/release-it-second-edition/)**
+  - *Architectural Rationale & Implementation Grounding*: Definitive architectural treatise on Circuit Breaker, Bulkhead, and Backpressure patterns for enterprise resilience.
+* **[Apache Kafka Consumer Flow Control (Pause & Resume Semantics)](https://kafka.apache.org/documentation/#consumerapi)**
+  - *Architectural Rationale & Implementation Grounding*: Official documentation on using Kafka consumer pause() and resume() APIs to throttle batch polling during heavy processing loads.
+* **[Netflix Tech Blog: Performance Under Load - Backpressure in Reactive Systems](https://netflixtechblog.com/)**
+  - *Architectural Rationale & Implementation Grounding*: Production case study detailing how Netflix protects backend microservices using adaptive concurrency limits.
 
 ## Amendment 2026-11-07: Error classification, correlationId validation, and concurrency-limit restoration
 

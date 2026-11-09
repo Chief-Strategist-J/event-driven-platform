@@ -38,6 +38,43 @@ Enterprise distributed systems require immutable, non-repudiable audit logging a
 - **Positive**: Cryptographic non-repudiation, tamper detection, compliance with SOC2/PCI-DSS/GDPR, independent sharded throughput, zero JSON re-serialization verification bugs.
 - **Negative**: Increased storage requirements for verbatim raw bytes, strict ingest-time secret linting, operational overhead of periodic checkpoint signing.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+Conventional application logs (stdout, text files, Elastic/Splunk) are volatile, non-atomic with database writes, and trivially editable by database administrators or compromised root accounts. Without a cryptographically verifiable, append-only ledger, an enterprise cannot legally prove non-repudiation during a financial audit or forensic investigation.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+Each shard maintains an independent, strictly monotonic sequence number ($S_k = S_{k-1} + 1$). The engine normalizes incoming payloads into deterministic, byte-exact JSON and stores them as raw BYTEA. An HMAC-SHA256 digest is computed across the previous digest, sequence number, and canonical bytes: record_hash_k = HMAC(record_hash_{k-1} || sequence_k || canonical_payload_k). Database triggers reject UPDATE and DELETE, while background sealers periodically sign checkpoint roots using KMS/HSM and archive them to external WORM storage.
+
+### 3. Core Architectural Principles
+
+* **Cryptographic Hash Chaining & Merkle Linkage**: Every audit entry is cryptographically linked to its predecessor. Mutating, deleting, or reordering any row invalidates all subsequent hashes across the shard.
+* **Canonical Byte Immutability**: Hashes are computed strictly over verbatim stored byte arrays, eliminating JSON serializer whitespace and key-order nondeterminism that causes false-positive verification failures.
+* **Database-Level Mutation Prohibition**: PostgreSQL triggers and role permissions enforce append-only semantics at the storage engine layer; corrections are strictly recorded as compensating entries.
+* **External Checkpoint Anchoring**: Periodic shard hash checkpoints are signed by KMS hardware security modules and exported to immutable S3 Object Lock (WORM) storage, bounding truncation blast radiuses.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **If an attacker gains superuser access to the PostgreSQL database today, can they alter historical audit records without detection? (Our design ensures any alteration breaks the subsequent cryptographic hash chain and fails external WORM checkpoint verification).**
+2. **How do we comply with GDPR 'Right to be Forgotten' when our audit ledger is cryptographically immutable? (We tokenize PII into surrogate keys; GDPR erasure shreds the encryption key for that surrogate without altering stored raw bytes or breaking the hash chain).**
+3. **Why not use an external blockchain or distributed ledger? (Blockchains introduce severe write latency (seconds to minutes) and external dependency overhead; a sharded, KMS-signed local hash chain provides identical tamper-evidence at sub-millisecond local database speeds).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[RFC 3161: Internet X.509 Public Key Infrastructure Time-Stamp Protocol (TSP)](https://www.rfc-editor.org/rfc/rfc3161)**
+  - *Architectural Rationale & Implementation Grounding*: Establishes authoritative standards for cryptographically proving data existed at a given timestamp without subsequent alteration.
+* **[NIST Special Publication 800-92: Guide to Computer Security Log Management](https://csrc.nist.gov/publications/detail/sp/800-92/final)**
+  - *Architectural Rationale & Implementation Grounding*: Federal standard detailing tamper-evident logging architecture, integrity verification models, and long-term secure archival.
+* **[Bela Gipp et al.: Decentralized Trusted Timestamping using Merkle Trees](https://www.gipp.com/wp-content/papercite-cache/pdf/gipp2015a.pdf)**
+  - *Architectural Rationale & Implementation Grounding*: Seminal research paper on verifiable integrity trees, tamper-evident data structures, and continuous checkpoint anchoring.
+* **[PCI-DSS v4.0 Requirement 10: Log and Monitor All Access to System Components and Cardholder Data](https://www.pcisecuritystandards.org/)**
+  - *Architectural Rationale & Implementation Grounding*: Mandates non-repudiation, time synchronization, and tamper-resistance for all financial audit trails.
 
 ## Amendment 2026-11-07: Database error mapping and typed handler errors
 

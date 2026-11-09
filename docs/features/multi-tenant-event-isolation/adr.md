@@ -242,6 +242,43 @@ erDiagram
    - Tier 4: Concurrent interleaved worker lanes guaranteeing zero ambient bleed (`tenant_concurrency_interleaving_test.go`).
 3. **OpenAPI 3.1 Parity**: 37 routes synchronized and verified across HTTP routers and OpenAPI definitions.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+In SaaS architectures, multiple corporate customers share common compute and broker infrastructure. Without strict multi-tenant isolation, a bug in query filtering or consumer logic can leak confidential financial records from Tenant A to Tenant B. Furthermore, a high-volume burst from a large tenant can starve broker partitions, causing noisy-neighbor outages for all other tenants.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+Every incoming event envelope, API payload, and database query mandates a non-empty tenant_id. The infrastructure layer validates tenant authentication tokens at ingress. In PostgreSQL, tables enforce Row-Level Security (RLS) or composite tenant primary keys (tenant_id, id). In Kafka, consumers enforce per-tenant rate-limiting tokens, preventing any single tenant from consuming more than their allocated share of worker threads.
+
+### 3. Core Architectural Principles
+
+* **Mandatory Tenant Context Ubiquity**: Every event envelope, database table, cache key, and log message must strictly mandate a validated tenant_id.
+* **Storage-Level Partition Isolation**: Multi-tenant data storage must enforce row-level security (RLS) or tenant-composite primary keys at the database kernel level.
+* **Fair Resource Rate Limiting**: Worker pools enforce per-tenant token-bucket rate limits, ensuring high-throughput tenants cannot starve neighbors.
+* **Cryptographic Tenant Key Segregation**: Sensitive tenant payloads are encrypted with unique per-tenant keys, guaranteeing cryptographic isolation even on shared disks.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why not use a separate Kafka topic and database per tenant? (Per-tenant topics and databases cause massive resource overhead; brokers cannot handle 10,000+ separate topics efficiently; shared topics with logical isolation provide optimal scalability).**
+2. **How do we prevent developer error from causing cross-tenant data leakage? (PostgreSQL Row-Level Security policies automatically append WHERE tenant_id = current_setting('app.current_tenant') to all queries at the database engine level).**
+3. **What happens if Tenant A attempts to publish an event with Tenant B's ID in the payload? (The authorization gate compares the JWT tenant claim against the payload tenant_id; any divergence triggers an immediate HTTP 403 Forbidden and an audit security alert).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[AWS Architecture Center: SaaS Multi-Tenant Architecture Principles](https://docs.aws.amazon.com/wellarchitected/latest/saas-lens/multi-tenancy.html)**
+  - *Architectural Rationale & Implementation Grounding*: Best practices for multi-tenant isolation, noisy-neighbor mitigation, and security boundary partitioning.
+* **[OWASP Multi-Tenancy Security Checklist](https://owasp.org/www-project-top-ten/)**
+  - *Architectural Rationale & Implementation Grounding*: Security framework focusing on tenant data isolation, cross-tenant injection prevention, and authorization context validation.
+* **[PostgreSQL Documentation: Row Level Security (RLS) Policies](https://www.postgresql.org/docs/current/ddl-rowsecurity.html)**
+  - *Architectural Rationale & Implementation Grounding*: Authoritative reference on implementing kernel-enforced tenant isolation directly inside relational database tables.
+* **[Google Cloud: Multi-Tenant Architecture on Google Cloud](https://cloud.google.com/architecture/saas-multitenant-architecture)**
+  - *Architectural Rationale & Implementation Grounding*: Architectural blueprint detailing tenant segregation across compute, messaging, and storage tiers.
 
 ## Amendment 2026-11-07: Correct status codes for tenant registration and lifecycle
 

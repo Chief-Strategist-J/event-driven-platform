@@ -122,7 +122,43 @@ sequenceDiagram
     Worker->>Kafka: Resume Partition Ingestion
 ```
 
+---
 
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+When a consumer encounters a transient failure (e.g. a downstream database deadlock or temporary network timeout), retrying immediately in-place blocks the Kafka partition. Because partitions are sequential, halting on message 100 blocks messages 101 to 10,000 behind it. If the dependency takes 30 seconds to recover, the entire partition grinds to a halt.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The platform implements Non-Blocking Multi-Tiered Retry Topics. When a transient error occurs, the consumer publishes the failed message to a delayed retry topic (e.g. orders.retry.10s) with an incremented retry_count header, and commits the original partition offset immediately. Separate background worker pools consume from retry topics using exponential backoff with randomized jitter. If attempts exceed the maximum threshold, the message escalates to the DLQ.
+
+### 3. Core Architectural Principles
+
+* **Non-Blocking Escalation**: Transient failures must be routed to dedicated delayed retry topics, preventing head-of-line blocking on the primary partition.
+* **Exponential Jitter Backoff**: Retry intervals must scale exponentially with randomized jitter to eliminate thundering herd storms on recovering systems.
+* **Strict Attempt Cap Escalation**: Retries enforce a strict maximum attempt count (e.g. 3 attempts); exhausted messages automatically escalate to the DLQ.
+* **Context Envelope Preservation**: Retried messages preserve all original headers, trace contexts, and causation IDs to maintain end-to-end observability.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why must we add randomized jitter to retry delays? (Without jitter, 5,000 messages that failed simultaneously will all retry at the exact same second, creating a massive thundering herd that re-crashes the recovering database).**
+2. **What is the trade-off of using non-blocking retry topics? (Non-blocking retries sacrifice strict global ordering across that partition for high throughput; messages 101–110 proceed while message 100 is retried in the background).**
+3. **How do we distinguish between transient retryable errors and permanent non-retryable errors? (Transient errors: network timeouts, DB deadlocks, 503 HTTP responses; Permanent errors: schema validation failures, corrupted JSON, 400 Bad Request — permanent errors skip retry and go directly to DLQ).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Uber Engineering: Resilient Message Processing with Kafka Retry Topics](https://www.uber.com/blog/reliable-reprocessing-and-dead-letter-queues-with-apache-kafka/)**
+  - *Architectural Rationale & Implementation Grounding*: Seminal engineering post introducing multi-tiered non-blocking retry topics with exponential backoff in streaming architectures.
+* **[Spring Kafka Documentation: Non-Blocking Retries and DLT Configuration](https://docs.spring.io/spring-kafka/reference/kafka/annotation-error-handling.html)**
+  - *Architectural Rationale & Implementation Grounding*: Production-tested architectural framework for configuring topic-based delayed retries without partition head-of-line blocking.
+* **[AWS Architecture: Exponential Backoff and Jitter](https://aws.amazon.com/blogs/architecture/exponential-backoff-and-jitter/)**
+  - *Architectural Rationale & Implementation Grounding*: Mathematical analysis demonstrating how adding randomized jitter eliminates cascading failure and thundering herd retry storms.
+* **[Confluent: Error Handling Strategies in Event-Driven Systems](https://www.confluent.io/blog/error-handling-patterns-in-kafka/)**
+  - *Architectural Rationale & Implementation Grounding*: Comprehensive guide on distinguishing transient vs fatal errors and orchestrating non-blocking quarantine topics.
 
 ## Amendment 2026-11-07 (second pass): tenant scope required
 

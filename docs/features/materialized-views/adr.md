@@ -190,6 +190,44 @@ flowchart TD
 * **Failure Catalog**: Complete 18-scenario forensic catalog is maintained in [Materialized Views Failure Cases](file:///home/btpl-lap-22/live/System-Architect/event-driven-platform/docs/features/materialized-views/failure-cases.md).
 * **CI Verification Gate**: Every commit verifies version monotonicity guards, state machine transitions, and zero inline comments.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+Executing heavy analytical queries or real-time user dashboard aggregations directly against normalized transactional write tables causes table locks, CPU spikes, and query timeouts. Materialized views solve this by pre-computing and persisting denormalized read models in real time as domain events stream past.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+An asynchronous projection worker listens to relevant domain event topics. Upon receiving an event, it extracts entity mutations, validates the monotonic version sequence, and executes an atomic UPSERT into the read-optimized projection table. The projection table is indexed specifically for target query patterns (e.g. JSONB GIN indexes, composite tenant keys). If the projection needs rebuilding, the worker replays events into a shadow table and executes an atomic rename.
+
+### 3. Core Architectural Principles
+
+* **Deterministic Stream Derivation**: Materialized views must be derived purely from the sequential replay of domain events, guaranteeing exact reproducible state.
+* **Monotonic Version Guarding**: Every projection record stores its last applied event version and rejects stale updates that would regress the view state.
+* **Zero Write-Contention Isolation**: Read projections reside in dedicated, denormalized storage schemas completely decoupled from core transactional write entities.
+* **Blue-Green Table Rebuilds**: Structural projection migrations execute against shadow tables, cutting over atomically only after catching up to the live stream.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **What happens if an event projection worker fails halfway through updating multiple read tables? (The worker executes the projection updates within a single local transaction alongside the consumer inbox record, rolling back completely on failure).**
+2. **How do we rebuild a materialized view when schema requirements change without taking the view offline? (We run a blue-green rebuild: replay past events from offset 0 into a shadow table my_view_v2, catch up to live traffic, and swap table names atomically).**
+3. **Why not use PostgreSQL native MATERIALIZED VIEWS with REFRESH MATERIALIZED VIEW? (PostgreSQL native view refreshes are heavy, batch-driven operations that scan the entire source table; streaming materialized views update incrementally in sub-milliseconds per event).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Martin Kleppmann: Designing Data-Intensive Applications (Chapter 11: Stream Processing)](https://dataintensive.net/)**
+  - *Architectural Rationale & Implementation Grounding*: Comprehensive coverage of derived data systems, materialized view maintenance, and stream-table duality.
+* **[Jay Kreps: The Log: What every software engineer should know about real-time data's unifying abstraction](https://engineering.linkedin.com/distributed-systems/log-what-every-software-engineer-should-know-about-real-time-datas-unifying)**
+  - *Architectural Rationale & Implementation Grounding*: Seminal LinkedIn engineering blog establishing the log as the universal source of truth and views as derived caches.
+* **[PostgreSQL Official Documentation: Materialized Views and Concurrent Refresh](https://www.postgresql.org/docs/current/rules-materializedviews.html)**
+  - *Architectural Rationale & Implementation Grounding*: Technical guide on relational materialized views, indexing strategies, and concurrent atomic refresh mechanisms.
+* **[Confluent: Real-Time Stream-Table Duality in Event-Driven Systems](https://www.confluent.io/blog/kafka-streams-tables-part-1-event-streams-as-the-source-of-truth/)**
+  - *Architectural Rationale & Implementation Grounding*: Deep architectural dive into duality between changelog streams and materialized state tables.
+
 ## Amendment 2026-11-07: Duplicate-view 409, unknown-view 404, and per-tenant rebuild uniqueness
 
 ### Problem observed

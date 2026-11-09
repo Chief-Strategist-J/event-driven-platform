@@ -119,6 +119,43 @@ sequenceDiagram
 ### Negative & Mitigations
 * **Write Amplification**: Every batch updates `consumer_stored_offset`. *Mitigation*: Piggybacked directly onto existing business database transactions.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+Kafka consumers track their position in the commit log using Offsets. If a consumer commits offsets automatically on a background timer (auto-commit), it will commit offsets for messages that are still in-memory; when the consumer crashes, those messages are lost forever. Conversely, failing to commit offsets causes consumers to re-read thousands of already-processed messages upon restart.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The platform enforces strict Post-Processing Offset Commits. After a consumer processes an event and successfully commits the database mutation, it records the new offset in the local database and asynchronously commits it to Kafka's internal __consumer_offsets topic. Commits must be strictly monotonically increasing; backward commits are rejected as corrupted rebalances unless an authorized replay action is active.
+
+### 3. Core Architectural Principles
+
+* **Post-Effect Offset Commits**: Partition offsets are committed only AFTER the business transaction has safely committed to the database, ensuring zero data loss.
+* **Strictly Monotonic Progression**: Offset progression must strictly increase ($O_{\text{new}} > O_{\text{current}}$); backward mutations fail as corrupted commits.
+* **Epoch-Fenced Rebalance Protection**: Offset commits must validate consumer generation epochs, preventing stale partition owners from overwriting commits of newly assigned consumers.
+* **Dual-Store Transaction Synchronization**: Offsets are anchored atomically inside the local transactional database alongside the event effect, and mirrored to Kafka for lag tracking.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **Why is auto-commit (enable.auto.commit=true) banned in high-reliability financial systems? (Auto-commit runs on an arbitrary timer independent of business logic completion, guaranteeing silent data loss during worker crashes).**
+2. **What happens during a consumer group rebalance if an offset commit is delayed? (The consumer group coordinator uses Generation Epochs to reject stale commits from zombie consumers, preventing split-brain state overwrites).**
+3. **Why do we store offsets in both PostgreSQL and Kafka? (Storing offsets in PostgreSQL allows atomic commit with the business mutation; syncing to Kafka allows standard cluster monitoring tools to track consumer lag accurately).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Apache Kafka Offsets Topic Architecture & Consumer Internals](https://kafka.apache.org/documentation/#impl_offsettracking)**
+  - *Architectural Rationale & Implementation Grounding*: Technical reference detailing how Kafka manages partition commit logs in the internal `__consumer_offsets` topic.
+* **[Kafka KIP-62: Allow Consumer to Commit Specific Offset Ranges](https://cwiki.apache.org/confluence/display/KAFKA/KIP-62)**
+  - *Architectural Rationale & Implementation Grounding*: Apache Kafka improvement proposal addressing precision offset management, manual commit control, and rebalance coordination.
+* **[Gunnar Morling: Exactly-Once Processing in Kafka with Debezium and Outbox](https://debezium.io/blog/2019/02/19/reliable-microservices-data-exchange-with-the-outbox-pattern/)**
+  - *Architectural Rationale & Implementation Grounding*: Architectural analysis of coordinating database state with streaming offsets to achieve end-to-end consistency.
+* **[Martin Kleppmann: Stream Processing - Offsets, Checkpoints and Replay](https://dataintensive.net/)**
+  - *Architectural Rationale & Implementation Grounding*: Deep conceptual breakdown of log watermarking, checkpointing strategies, and fault recovery.
 
 ## Amendment 2026-11-07: Rewind invariants, input validation and lag route
 

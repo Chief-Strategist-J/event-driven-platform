@@ -157,6 +157,43 @@ The Partitioning Strategy feature exposes 5 REST operations under `/api/v1/parti
 * **Tier 3 (Murmur2 Affinity)**: Tests hash determinism, 31-bit positive bitmasking, and demonstrates key remapping risks under partition expansion.
 * **Tier 4 (PostgreSQL Integration)**: Tests persistence, check constraints, optimistic locking, and immutability triggers against live PostgreSQL.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+Apache Kafka achieves horizontal throughput by splitting topics into partitions that run concurrently across different brokers. However, if events are partitioned randomly, total ordering for an entity is destroyed. Conversely, if all events share a single key or key distribution is heavily skewed, a single partition becomes a bottleneck (hot-spot), starving that broker while other nodes sit idle.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The platform applies a deterministic Murmur2 hashing algorithm to the business partition key (e.g. hash(tenant_id + ':' + entity_id) % num_partitions). This guarantees two invariants: (1) All events for the same aggregate instance land on the exact same partition in linear order. (2) Events are uniformly distributed across the cluster. For high-volume hot entities, bounded pseudo-random salting is applied.
+
+### 3. Core Architectural Principles
+
+* **Deterministic Hash Sharding**: Partition routing uses deterministic Murmur2 hashing, ensuring identical entity keys always land on the exact same partition.
+* **High-Cardinality Key Selection**: Partition keys must combine tenant and entity identifiers to maximize entropy and eliminate broker skew.
+* **Salted Hot-Spot Mitigation**: Extremely hot keys that exceed single-partition throughput must be salted with bounded deterministic suffixes to distribute load.
+* **Immutable Key Assignment**: An entity's partition key must never mutate during its lifecycle, preserving total sequential ordering from creation to archival.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **What happens to message ordering if we increase the partition count of an existing Kafka topic? (Changing partition count changes the modulus ($hash(key) \% N$); existing entity keys will hash to different partitions, destroying ordering for future messages relative to historical ones).**
+2. **Why must we hash composite keys (tenant_id + entity_id) rather than tenant_id alone? (Hashing tenant_id alone routes all events for a giant enterprise tenant to a single partition, creating a severe hot-spot bottleneck).**
+3. **How do we detect partition skew before it causes an outage? (We monitor per-partition byte rate and consumer lag metrics; significant variance across partition lag indicates key skew).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Martin Kleppmann: Designing Data-Intensive Applications (Chapter 6: Partitioning)](https://dataintensive.net/)**
+  - *Architectural Rationale & Implementation Grounding*: Definitive theoretical and practical guide on key-range partitioning, hash-based routing, rebalancing, and hot-spot mitigation.
+* **[Austin Appleby: MurmurHash3 Algorithm Specification](https://github.com/aappleby/smhasher)**
+  - *Architectural Rationale & Implementation Grounding*: The industry-standard non-cryptographic hash function used by Apache Kafka and Cassandra for uniform partition distribution.
+* **[Confluent: How to Choose the Number of Topics and Partitions in Your Kafka Cluster](https://www.confluent.io/blog/how-choose-number-topics-partitions-kafka-cluster/)**
+  - *Architectural Rationale & Implementation Grounding*: Engineering guidelines on balancing partition parallelism against broker memory, end-to-end latency, and rebalance overhead.
+* **[Kafka Documentation: DefaultPartitioner Implementation Details](https://kafka.apache.org/documentation/#producerapi)**
+  - *Architectural Rationale & Implementation Grounding*: Official code documentation explaining hash-to-partition mapping, null-key sticky batching, and custom partitioner contracts.
 
 ## Amendment 2026-11-07: Duplicate handling and per-tenant uniqueness (migration 0028)
 

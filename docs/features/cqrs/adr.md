@@ -144,6 +144,43 @@ The database schema introduces three relational tables supporting CQRS infrastru
 - **Eventual Consistency Latency**: Non-tokened queries may reflect slight staleness ($< 200\text{ms}$).
   - *Mitigation*: Freshness SLOs are continuously monitored and alerted via WP-14.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+In complex enterprise domains, the data model required to enforce transactional business invariants (normalized, ACID-locked, consistency-first) is in direct conflict with the data model required for high-throughput reads (denormalized, aggregated, pre-calculated). Forcing both into a single relational schema results in lock contention, slow multi-table JOINs, and an inability to scale reads independently.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+The system splits execution into Commands (state changes) and Queries (data retrieval). Commands mutate domain aggregates in transactional write tables, generating immutable domain events. Asynchronous projection workers consume these events and update read-optimized materialized tables (e.g. denormalized PostgreSQL, Elasticsearch). Queries read exclusively from projections with zero locks on write entities.
+
+### 3. Core Architectural Principles
+
+* **Strict Model Segregation**: Command and Query models must remain physically or logically segregated; query operations must never mutate domain aggregate state.
+* **Asynchronous Projection Materialization**: Read models are derived asynchronously from emitted domain events, decoupling query performance from write transaction latency.
+* **Idempotent Projection Rebuilds**: Projection workers must be completely idempotent, enabling complete historical rebuilds of read views by simply replaying past events.
+* **Independent Operational Scaling**: Read replicas and query databases scale independently based on query volume without contending for locks on core write engines.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **How does the UI handle eventual consistency when a user submits a command and queries immediately? (The UI uses optimistic UI updates, or polls using the returned Command Transaction ID, or awaits SSE/WebSocket notification of projection completion).**
+2. **What happens if projection workers fail or lag? (Write operations continue at full speed; read models lag safely without data loss, catching up automatically upon worker restart).**
+3. **When is CQRS an architectural anti-pattern? (In standard CRUD applications where reads and writes match 1:1; CQRS is justified only when write contention, complex business validation, or asymmetric read/write ratios demand segregation).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Greg Young: CQRS Documents & Architectural Description](https://cqrs.files.wordpress.com/2010/11/cqrs_documents.pdf)**
+  - *Architectural Rationale & Implementation Grounding*: The original foundational paper defining Command Query Responsibility Segregation, boundary invariants, and projection models.
+* **[Martin Fowler: Command Query Responsibility Segregation](https://martinfowler.com/bliki/CQRS.html)**
+  - *Architectural Rationale & Implementation Grounding*: Architectural breakdown of CQRS benefits, trade-offs, and critical anti-patterns when applied to non-collaborative domains.
+* **[Chris Richardson: Microservices Patterns: With examples in Java and Go](https://www.manning.com/books/microservices-patterns)**
+  - *Architectural Rationale & Implementation Grounding*: Comprehensive industry guide detailing CQRS event handler projections, database synchronization, and compensating workflows.
+* **[Udi Dahan: Clarified CQRS](https://udidahan.com/2009/12/09/clarified-cqrs/)**
+  - *Architectural Rationale & Implementation Grounding*: Influential architectural essay dismantling common misconceptions regarding CQRS, two-way commands, and read-side complexity.
 
 ## Amendment 2026-11-07: Consistency-token error semantics and signing-key response
 

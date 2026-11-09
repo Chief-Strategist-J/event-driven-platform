@@ -209,6 +209,44 @@ sequenceDiagram
 * **Partition Idle Period on Pod Crash**: Static members that crash hard (OOM/Kernel panic) leave partitions unconsumed until `session.timeout.ms` (45–120s) expires. *Mitigation*: Monitored via Prometheus alerts triggering manual rebalance CLI or container restarts.
 * **Storage Overhead of Stored Offsets**: Maintaining offsets in the application database incurs write load. *Mitigation*: Offsets are piggybacked onto the existing business transaction, eliminating extra round-trips.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+A single consumer instance cannot process millions of events per second without scaling out horizontally. However, blindly launching parallel consumers across shared topics results in race conditions, corrupted out-of-order mutations, and duplicate processing. Consumer Groups solve this by dynamically partitioning topics among active group members.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+Kafka brokers designate a Group Coordinator. Consumers join via JoinGroup and SyncGroup heartbeats. The coordinator assigns each partition exclusively to a single consumer instance in the group. If an instance crashes or scales up, the group executes a cooperative rebalance. To prevent zombie instances from corrupting state during long pauses, broker protocols issue unique Generation IDs that fence off stale worker commits.
+
+### 3. Core Architectural Principles
+
+* **Cooperative Sticky Rebalancing**: Rebalances must minimize partition shuffling, allowing healthy consumer instances to continue processing assigned partitions uninterrupted.
+* **Fenced Generation Epochs**: Offset commits must validate generation epochs, ensuring zombie workers delayed by garbage collection pauses cannot overwrite state.
+* **Isolated Heartbeat Liveness**: Liveness protocols must decouple from business execution time, preventing slow message handlers from triggering false-positive evictions.
+* **Partition-Level Concurrency Isolation**: A partition represents a single thread of sequential truth; concurrent worker pools within an instance must never interleave identical partition keys.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **What causes a 'Stop-the-World' rebalance and how do we prevent it? (Eager rebalances revoke all partitions from all consumers during a membership change; we configure Cooperative Sticky Assignors so only migrating partitions pause).**
+2. **How does consumer group scale relate to partition count? (If a topic has 16 partitions, running 24 consumers in the same group leaves 8 consumers completely idle; parallelism is strictly bounded by partition count).**
+3. **Why must heartbeating run on a separate thread from business logic? (If long-running processing blocks the main loop past max.poll.interval.ms, the coordinator assumes the consumer is dead and evicts it, causing endless rebalance loops).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[Kafka KIP-848: The Next Generation Consumer Rebalance Protocol](https://cwiki.apache.org/confluence/display/KAFKA/KIP-848)**
+  - *Architectural Rationale & Implementation Grounding*: Apache Kafka architectural improvement proposal revolutionizing rebalance mechanics via broker-side coordination.
+* **[Neha Narkhede, Gwen Shapira, Todd Palino: Kafka: The Definitive Guide](https://www.oreilly.com/library/view/kafka-the-definitive/9781491936153/)**
+  - *Architectural Rationale & Implementation Grounding*: The canonical industry text on Kafka consumer group internals, coordinator heartbeats, and partition assignment strategies.
+* **[Apache Kafka Protocol Specification: Group Membership & Coordination APIs](https://kafka.apache.org/protocol.html)**
+  - *Architectural Rationale & Implementation Grounding*: Low-level wire protocol specification detailing JoinGroup, SyncGroup, Heartbeat, and OffsetCommit frame formats.
+* **[Confluent: Cooperative Sticky Assignor in Apache Kafka](https://www.confluent.io/blog/cooperative-rebalancing-in-kafka-streams-consumer-ksqldb/)**
+  - *Architectural Rationale & Implementation Grounding*: Deep technical dive into avoiding stop-the-world rebalances via incremental partition migration.
+
 ## Amendment 2026-11-07: Tenant scoping on list and typed error mapping
 
 ### Problem observed

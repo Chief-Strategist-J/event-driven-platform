@@ -99,6 +99,44 @@ We selected **Option 3: Unified OpenTelemetry Architecture (OTel Collector + Tem
 ### Negative / Trade-offs
 * **Workstation Memory Overhead**: The full suite consumes ~1.2 GB additional memory. Developers needing minimal footprints can set `COMPOSE_PROFILES="" ./scripts/run/run.sh`.
 
+---
+
+## Deep Failure-First Architectural Principles
+
+### 1. Existential Purpose & The Catastrophe Prevented
+
+In monolithic applications, a single stack trace identifies the root cause of a failure. In distributed event-driven systems, a single business transaction spans multiple microservices, background Kafka topics, outbox queues, and asynchronous workers. Without distributed tracing, diagnosing latency spikes or intermittent dropouts across async boundaries is statistically impossible.
+
+### 2. Internal Algorithmic Mechanics & State Invariants
+
+Every request entering the platform is assigned a globally unique Trace ID and Parent Span ID via W3C TraceContext standards. When the service publishes an event or writes to the outbox, the OpenTelemetry context is injected into message headers (traceparent, tracestate). Downstream consumers extract this context from headers, linking asynchronous child spans to the original caller span with complete causal fidelity.
+
+### 3. Core Architectural Principles
+
+* **Universal Boundary Context Propagation**: Every asynchronous hop (HTTP, Kafka, outbox tables, worker pools) must carry and propagate W3C TraceContext headers.
+* **Single Root Span Causality**: All asynchronous downstream operations must bind as child spans under the singular root Trace ID established at ingress.
+* **Deterministic Sampling Control**: Sampling rates are governed at the platform ingress, ensuring consistent end-to-end trace collection without telemetry storage bloat.
+* **Non-Blocking Telemetry Export**: Tracing instrumentation must execute on isolated memory queues, guaranteeing observability collection never adds latency to core business logic.
+
+### 4. The Architect's Meta-Questions (Failure-First Evaluation)
+
+1. **How do we trace transactions that are deferred in an outbox table or retry topic? (The outbox table and retry envelopes store the serialized W3C traceparent string, allowing workers to resume context hours or days later).**
+2. **How do we prevent tracing overhead from degrading high-throughput messaging pipelines? (We employ head-based and tail-based probabilistic sampling, and trace span recording uses non-blocking lock-free memory ring buffers).**
+3. **What happens if an external client provides a malformed or malicious traceparent header? (The ingress middleware validates formatting per W3C specification; invalid trace headers are discarded and a fresh root span is generated).**
+
+---
+
+## Authoritative References & Production Citations
+
+* **[W3C Trace Context Specification (W3C Recommendation 2021)](https://www.w3.org/TR/trace-context/)**
+  - *Architectural Rationale & Implementation Grounding*: Universal standard for distributed context propagation across heterogeneous transport layers and cloud platforms.
+* **[OpenTelemetry Semantic Conventions for Messaging Systems](https://opentelemetry.io/docs/specs/semconv/messaging/)**
+  - *Architectural Rationale & Implementation Grounding*: Formal specification of span attributes, context injection rules, and naming standards for Kafka and pub/sub systems.
+* **[Benjamin Sigelman et al.: Dapper, a Large-Scale Distributed Systems Tracing Infrastructure (Google 2010)](https://research.google/pubs/pub36356/)**
+  - *Architectural Rationale & Implementation Grounding*: The seminal paper introducing modern distributed tracing concepts, context stitching, and sampling trade-offs.
+* **[Brendan Gregg: Systems Performance: Enterprise and the Cloud](https://www.brendangregg.com/systems-performance-2nd-edition-book.html)**
+  - *Architectural Rationale & Implementation Grounding*: Foundational text on profiling latency, distributed bottlenecks, and measuring request lifecycles through tracing instrumentation.
+
 ## Amendment 2026-11-07: Coverage report validation and no silent error drops
 
 ### Problem observed
