@@ -1,3 +1,4 @@
+```
 TRANSACTIONAL OUTBOX — PRODUCTION DECISION TREE (v3)
 Legend : [C] Certain   [L] Likely   [G] Guessing
 Severity: LOSS (event gone) | CORRUPT (wrong downstream state) | OUTAGE (writes stop) | DEGRADE (latency/cost)
@@ -563,3 +564,4 @@ Every failure node reads:  Scenario → Impact → Handling → Detection
     ├── Rehearse major version upgrade (L4)
     ├── Stop metrics pipeline; verify absence alerts fire
     └── Run a bulk import during peak; verify canary latency stays within SLO
+```
