@@ -4,8 +4,27 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.60.3
+          args: --timeout=5m
+      - name: Institutional Policies Check
+        run: python3 scripts/lint/check-institutional-rules.py
+
   test:
     runs-on: ubuntu-latest
+    needs: lint
     services:
       postgres:
         image: postgres:16
